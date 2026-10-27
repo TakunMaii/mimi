@@ -71,16 +71,6 @@ pub(crate) enum LirInstruction {
         destination: ValueId,
         value: ValueId,
     },
-    And {
-        destination: ValueId,
-        lhs: ValueId,
-        rhs: ValueId,
-    },
-    Or {
-        destination: ValueId,
-        lhs: ValueId,
-        rhs: ValueId,
-    },
     Compare {
         destination: ValueId,
         lhs: ValueId,
@@ -180,16 +170,6 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                         MirInstruction::Not { result, value } => LirInstruction::Not {
                             destination: *result,
                             value: *value,
-                        },
-                        MirInstruction::And { result, lhs, rhs } => LirInstruction::And {
-                            destination: *result,
-                            lhs: *lhs,
-                            rhs: *rhs,
-                        },
-                        MirInstruction::Or { result, lhs, rhs } => LirInstruction::Or {
-                            destination: *result,
-                            lhs: *lhs,
-                            rhs: *rhs,
                         },
                         MirInstruction::Compare {
                             result,

@@ -64,16 +64,6 @@ pub(crate) enum MirInstruction {
         result: ValueId,
         value: ValueId,
     },
-    And {
-        result: ValueId,
-        lhs: ValueId,
-        rhs: ValueId,
-    },
-    Or {
-        result: ValueId,
-        lhs: ValueId,
-        rhs: ValueId,
-    },
     Compare {
         result: ValueId,
         lhs: ValueId,
