@@ -53,6 +53,29 @@ fn lowers_dynamic_if_else_to_mir_blocks_and_phi() {
 }
 
 #[test]
+fn builds_and_runs_dynamic_if_else_expression() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_dynamic_if_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_dynamic_if_codegen_{}", std::process::id()));
+    std::fs::write(&source, "choose :: fn (condition : bool) i32 { value := if condition { 7 } else { 3 } value } main :: fn () i32 { choose(true) }").unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(7));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn emits_host_assembly_for_integer_function() {
     let ast = parse(tokenize(
         "add :: fn (x : i32, y : i32) i32 { x + y }".chars(),

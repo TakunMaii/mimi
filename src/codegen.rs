@@ -141,25 +141,353 @@ fn encode_module(
 }
 
 fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
-    if function.blocks.len() > 1 {
-        return Err("multi-block LIR code generation is not implemented yet".into());
+    if function.blocks.is_empty() {
+        return Err("function has no basic blocks".into());
     }
-    let block = &function.blocks[0];
     let mut size = 0;
-    let has_calls = block
-        .instructions
+    let has_calls = function
+        .blocks
         .iter()
+        .flat_map(|block| &block.instructions)
         .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            size += match instruction {
+                LirInstruction::LoadImmediate { value, .. } => {
+                    let mut chunks = 0;
+                    for shift in 0..4 {
+                        if ((*value as u64 >> (shift * 16)) & 0xffff) != 0 {
+                            chunks += 1;
+                        }
+                    }
+                    if chunks == 0 { 1 } else { chunks }
+                }
+                LirInstruction::LoadAddress { .. } => 2,
+                LirInstruction::Add { .. }
+                | LirInstruction::Sub { .. }
+                | LirInstruction::Mul { .. }
+                | LirInstruction::Div { .. }
+                | LirInstruction::Neg { .. } => 1,
+                LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
+                LirInstruction::Phi { .. } => 0,
+                LirInstruction::Call { args, result, .. } => {
+                    args.iter()
+                        .enumerate()
+                        .filter(|(index, argument)| argument.0 != *index as u32)
+                        .count()
+                        + 1
+                        + usize::from(result.is_some_and(|value| value.0 != 0))
+                }
+            } * 4;
+        }
+        size += match block.terminator {
+            MirTerminator::Return(value) => {
+                usize::from(value.is_some_and(|value| value.0 != 0)) * 4
+                    + if function.name == "main" {
+                        8 + usize::from(value.is_none()) * 4
+                    } else {
+                        4 + usize::from(has_calls) * 4
+                    }
+            }
+            MirTerminator::Jump(target) => 4 + phi_copies(function, block.id, target).len() * 4,
+            MirTerminator::Branch {
+                then_block,
+                else_block,
+                ..
+            } => {
+                12 + (phi_copies(function, block.id, then_block).len()
+                    + phi_copies(function, block.id, else_block).len())
+                    * 4
+            }
+            MirTerminator::Unreachable => {
+                return Err("unreachable terminator reached ARM64 backend".into());
+            }
+        };
+    }
+    if has_calls && function.name != "main" {
+        size += 4;
+    }
+    Ok(size)
+}
+
+fn phi_copies(
+    function: &LirFunction,
+    from: crate::mir::BlockId,
+    to: crate::mir::BlockId,
+) -> Vec<(ValueId, ValueId)> {
+    function
+        .blocks
+        .iter()
+        .find(|block| block.id == to)
+        .into_iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            LirInstruction::Phi {
+                destination,
+                incoming,
+            } => incoming
+                .iter()
+                .find(|(block, _)| *block == from)
+                .map(|(_, source)| (*destination, *source)),
+            _ => None,
+        })
+        .filter(|(destination, source)| destination != source)
+        .collect()
+}
+
+fn emit_phi_copies(
+    function: &LirFunction,
+    from: crate::mir::BlockId,
+    to: crate::mir::BlockId,
+    bytes: &mut Vec<u8>,
+) {
+    for (destination, source) in phi_copies(function, from, to) {
+        push_word(bytes, 0xaa00_03e0 | (source.0 << 16) | destination.0);
+    }
+}
+
+fn encode_function(
+    function: &LirFunction,
+    bytes: &mut Vec<u8>,
+    offsets: &std::collections::HashMap<String, u64>,
+    relocations: &mut Vec<Relocation>,
+) -> Result<(), String> {
+    if function.params.len() > 8 {
+        return Err("ARM64 backend currently supports at most 8 integer parameters".into());
+    }
+    if function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .flat_map(instruction_registers)
+        .any(|register| register.0 > 15)
+    {
+        return Err("ARM64 prototype backend supports virtual registers x0 through x15".into());
+    }
+    let has_calls = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
+    if has_calls && function.name != "main" {
+        push_word(bytes, 0xa9bf_7bfd);
+    }
+    let mut block_offsets = std::collections::HashMap::new();
+    let has_calls = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
+    let mut cursor = bytes.len() + usize::from(has_calls && function.name != "main") * 4;
+    for block in &function.blocks {
+        block_offsets.insert(block.id, cursor);
+        cursor += block_encoded_size(function, block)?;
+    }
+    let mut branches = Vec::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            let word = match instruction {
+                LirInstruction::LoadImmediate { register, value } => {
+                    encode_immediate(register.0, *value as u64, bytes)?;
+                    continue;
+                }
+                LirInstruction::LoadAddress { symbol, .. } => {
+                    let register = match instruction {
+                        LirInstruction::LoadAddress { register, .. } => *register,
+                        _ => unreachable!(),
+                    };
+                    let page = bytes.len() as u32;
+                    push_word(bytes, 0x9000_0000 | register.0);
+                    let low = bytes.len() as u32;
+                    push_word(bytes, 0x9100_0000 | (register.0 << 5) | register.0);
+                    relocations.push(Relocation {
+                        offset: page,
+                        symbol: symbol.clone(),
+                        kind: RelocationKind::Page21,
+                    });
+                    relocations.push(Relocation {
+                        offset: low,
+                        symbol: symbol.clone(),
+                        kind: RelocationKind::PageOff12,
+                    });
+                    continue;
+                }
+                LirInstruction::Add {
+                    destination,
+                    lhs,
+                    rhs,
+                } => 0x8b00_0000 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+                LirInstruction::Sub {
+                    destination,
+                    lhs,
+                    rhs,
+                } => 0xcb00_0000 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+                LirInstruction::Mul {
+                    destination,
+                    lhs,
+                    rhs,
+                } => 0x9b00_7c00 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+                LirInstruction::Div {
+                    destination,
+                    lhs,
+                    rhs,
+                } => 0x9ac0_0c00 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+                LirInstruction::Neg { destination, value } => {
+                    push_word(bytes, 0xcb00_03e0 | (value.0 << 16) | destination.0);
+                    continue;
+                }
+                LirInstruction::Rem {
+                    destination,
+                    lhs,
+                    rhs,
+                } => {
+                    push_word(bytes, 0x9ac0_0c10 | (rhs.0 << 16) | (lhs.0 << 5));
+                    push_word(
+                        bytes,
+                        0x9b00_8000 | (rhs.0 << 16) | (lhs.0 << 10) | (16 << 5) | destination.0,
+                    );
+                    continue;
+                }
+                LirInstruction::Compare {
+                    destination,
+                    lhs,
+                    rhs,
+                    kind,
+                } => {
+                    push_word(bytes, 0xeb00_001f | (rhs.0 << 16) | (lhs.0 << 5));
+                    let condition = match kind {
+                        CompareKind::Equal => 0,
+                        CompareKind::NotEqual => 1,
+                        CompareKind::GreaterEqual => 10,
+                        CompareKind::Less => 11,
+                        CompareKind::Greater => 12,
+                        CompareKind::LessEqual => 13,
+                    };
+                    push_word(
+                        bytes,
+                        0x9a9f_07e0 | (((condition ^ 1) as u32) << 12) | destination.0,
+                    );
+                    continue;
+                }
+                LirInstruction::Call { result, name, args } => {
+                    for (index, argument) in args.iter().enumerate() {
+                        if argument.0 != index as u32 {
+                            push_word(bytes, 0xaa00_03e0 | (argument.0 << 16) | index as u32);
+                        }
+                    }
+                    let call_address = bytes.len() as u64;
+                    let target_name = format!("_{name}");
+                    if let Some(target) = offsets.get(&target_name) {
+                        let delta = (*target as i64 - call_address as i64) / 4;
+                        if !(-(1 << 25)..(1 << 25)).contains(&delta) {
+                            return Err(format!(
+                                "call target '{name}' is out of ARM64 branch range"
+                            ));
+                        }
+                        push_word(bytes, 0x9400_0000 | (delta as u32 & 0x03ff_ffff));
+                    } else {
+                        relocations.push(Relocation {
+                            offset: call_address as u32,
+                            symbol: target_name,
+                            kind: RelocationKind::Branch26,
+                        });
+                        push_word(bytes, 0x9400_0000);
+                    }
+                    if let Some(result) = result
+                        && result.0 != 0
+                    {
+                        push_word(bytes, 0xaa00_03e0 | (result.0 << 16));
+                    }
+                    continue;
+                }
+                LirInstruction::Phi { .. } => {
+                    continue;
+                }
+            };
+            push_word(bytes, word);
+        }
+        match block.terminator {
+            MirTerminator::Jump(target) => {
+                emit_phi_copies(function, block.id, target, bytes);
+                let at = bytes.len();
+                push_word(bytes, 0x1400_0000);
+                branches.push((at, block_offsets[&target], false));
+            }
+            MirTerminator::Branch {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                let conditional_at = bytes.len();
+                push_word(bytes, 0x3400_0000 | condition.0);
+                emit_phi_copies(function, block.id, then_block, bytes);
+                let at = bytes.len();
+                push_word(bytes, 0x1400_0000);
+                branches.push((at, block_offsets[&then_block], false));
+                let else_stub = bytes.len();
+                branches.push((conditional_at, else_stub, true));
+                emit_phi_copies(function, block.id, else_block, bytes);
+                let at = bytes.len();
+                push_word(bytes, 0x1400_0000);
+                branches.push((at, block_offsets[&else_block], false));
+            }
+            MirTerminator::Return(result) => {
+                if let Some(value) = result {
+                    if value.0 != 0 {
+                        push_word(bytes, 0xaa00_03e0 | (value.0 << 16));
+                    }
+                }
+                if function.name == "main" {
+                    if result.is_none() {
+                        encode_immediate(0, 0, bytes)?;
+                    }
+                    encode_immediate(16, 1, bytes)?;
+                    push_word(bytes, 0xd400_1001);
+                } else {
+                    if has_calls {
+                        push_word(bytes, 0xa8c1_7bfd);
+                    }
+                    push_word(bytes, 0xd65f_03c0);
+                }
+            }
+            MirTerminator::Unreachable => {
+                return Err("unreachable terminator reached ARM64 backend".into());
+            }
+        }
+    }
+    for (at, target, conditional) in branches {
+        let delta = (target as i64 - at as i64) / 4;
+        if conditional {
+            if !(-(1 << 18)..(1 << 18)).contains(&delta) {
+                return Err("conditional branch exceeds ARM64 range".into());
+            }
+            let register = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) & 31;
+            bytes[at..at + 4].copy_from_slice(
+                &(0x3400_0000 | (((delta as u32) & 0x7ffff) << 5) | register).to_le_bytes(),
+            );
+        } else {
+            if !(-(1 << 25)..(1 << 25)).contains(&delta) {
+                return Err("branch exceeds ARM64 range".into());
+            }
+            bytes[at..at + 4]
+                .copy_from_slice(&(0x1400_0000 | ((delta as u32) & 0x03ff_ffff)).to_le_bytes());
+        }
+    }
+    Ok(())
+}
+
+fn block_encoded_size(
+    function: &LirFunction,
+    block: &crate::lir::LirBlock,
+) -> Result<usize, String> {
+    let mut size = 0;
     for instruction in &block.instructions {
         size += match instruction {
             LirInstruction::LoadImmediate { value, .. } => {
-                let mut chunks = 0;
-                for shift in 0..4 {
-                    if ((*value as u64 >> (shift * 16)) & 0xffff) != 0 {
-                        chunks += 1;
-                    }
-                }
-                if chunks == 0 { 1 } else { chunks }
+                let n = (0..4)
+                    .filter(|shift| ((*value as u64 >> (shift * 16)) & 0xffff) != 0)
+                    .count();
+                n.max(1)
             }
             LirInstruction::LoadAddress { .. } => 2,
             LirInstruction::Add { .. }
@@ -172,193 +500,43 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
             LirInstruction::Call { args, result, .. } => {
                 args.iter()
                     .enumerate()
-                    .filter(|(index, argument)| argument.0 != *index as u32)
+                    .filter(|(i, a)| a.0 != *i as u32)
                     .count()
                     + 1
-                    + usize::from(result.is_some_and(|value| value.0 != 0))
+                    + usize::from(result.is_some_and(|v| v.0 != 0))
             }
         } * 4;
     }
-    if matches!(block.terminator, MirTerminator::Return(Some(value)) if value.0 != 0) {
-        size += 4;
-    }
-    if has_calls && function.name != "main" {
-        size += 4;
-    }
-    size += if function.name == "main" {
-        8 + usize::from(matches!(block.terminator, MirTerminator::Return(None))) * 4
-    } else {
-        4 + usize::from(has_calls) * 4
+    size += match block.terminator {
+        MirTerminator::Return(value) => {
+            usize::from(value.is_some_and(|v| v.0 != 0)) * 4
+                + if function.name == "main" {
+                    8 + usize::from(value.is_none()) * 4
+                } else {
+                    4 + usize::from(
+                        function
+                            .blocks
+                            .iter()
+                            .flat_map(|b| &b.instructions)
+                            .any(|i| matches!(i, LirInstruction::Call { .. })),
+                    ) * 4
+                }
+        }
+        MirTerminator::Jump(target) => 4 + phi_copies(function, block.id, target).len() * 4,
+        MirTerminator::Branch {
+            then_block,
+            else_block,
+            ..
+        } => {
+            12 + (phi_copies(function, block.id, then_block).len()
+                + phi_copies(function, block.id, else_block).len())
+                * 4
+        }
+        MirTerminator::Unreachable => {
+            return Err("unreachable terminator reached ARM64 backend".into());
+        }
     };
     Ok(size)
-}
-
-fn encode_function(
-    function: &LirFunction,
-    bytes: &mut Vec<u8>,
-    offsets: &std::collections::HashMap<String, u64>,
-    relocations: &mut Vec<Relocation>,
-) -> Result<(), String> {
-    if function.params.len() > 8 {
-        return Err("ARM64 backend currently supports at most 8 integer parameters".into());
-    }
-    let block = &function.blocks[0];
-    if block
-        .instructions
-        .iter()
-        .flat_map(instruction_registers)
-        .any(|register| register.0 > 15)
-    {
-        return Err("ARM64 prototype backend supports virtual registers x0 through x15".into());
-    }
-    let has_calls = block
-        .instructions
-        .iter()
-        .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
-    if has_calls && function.name != "main" {
-        push_word(bytes, 0xa9bf_7bfd);
-    }
-    for instruction in &block.instructions {
-        let word = match instruction {
-            LirInstruction::LoadImmediate { register, value } => {
-                encode_immediate(register.0, *value as u64, bytes)?;
-                continue;
-            }
-            LirInstruction::LoadAddress { symbol, .. } => {
-                let register = match instruction {
-                    LirInstruction::LoadAddress { register, .. } => *register,
-                    _ => unreachable!(),
-                };
-                let page = bytes.len() as u32;
-                push_word(bytes, 0x9000_0000 | register.0);
-                let low = bytes.len() as u32;
-                push_word(bytes, 0x9100_0000 | (register.0 << 5) | register.0);
-                relocations.push(Relocation {
-                    offset: page,
-                    symbol: symbol.clone(),
-                    kind: RelocationKind::Page21,
-                });
-                relocations.push(Relocation {
-                    offset: low,
-                    symbol: symbol.clone(),
-                    kind: RelocationKind::PageOff12,
-                });
-                continue;
-            }
-            LirInstruction::Add {
-                destination,
-                lhs,
-                rhs,
-            } => 0x8b00_0000 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
-            LirInstruction::Sub {
-                destination,
-                lhs,
-                rhs,
-            } => 0xcb00_0000 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
-            LirInstruction::Mul {
-                destination,
-                lhs,
-                rhs,
-            } => 0x9b00_7c00 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
-            LirInstruction::Div {
-                destination,
-                lhs,
-                rhs,
-            } => 0x9ac0_0c00 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
-            LirInstruction::Neg { destination, value } => {
-                push_word(bytes, 0xcb00_03e0 | (value.0 << 16) | destination.0);
-                continue;
-            }
-            LirInstruction::Rem {
-                destination,
-                lhs,
-                rhs,
-            } => {
-                push_word(bytes, 0x9ac0_0c10 | (rhs.0 << 16) | (lhs.0 << 5));
-                push_word(
-                    bytes,
-                    0x9b00_8000 | (rhs.0 << 16) | (lhs.0 << 10) | (16 << 5) | destination.0,
-                );
-                continue;
-            }
-            LirInstruction::Compare {
-                destination,
-                lhs,
-                rhs,
-                kind,
-            } => {
-                push_word(bytes, 0xeb00_001f | (rhs.0 << 16) | (lhs.0 << 5));
-                let condition = match kind {
-                    CompareKind::Equal => 0,
-                    CompareKind::NotEqual => 1,
-                    CompareKind::GreaterEqual => 10,
-                    CompareKind::Less => 11,
-                    CompareKind::Greater => 12,
-                    CompareKind::LessEqual => 13,
-                };
-                push_word(
-                    bytes,
-                    0x9a9f_07e0 | (((condition ^ 1) as u32) << 12) | destination.0,
-                );
-                continue;
-            }
-            LirInstruction::Call { result, name, args } => {
-                for (index, argument) in args.iter().enumerate() {
-                    if argument.0 != index as u32 {
-                        push_word(bytes, 0xaa00_03e0 | (argument.0 << 16) | index as u32);
-                    }
-                }
-                let call_address = bytes.len() as u64;
-                let target_name = format!("_{name}");
-                if let Some(target) = offsets.get(&target_name) {
-                    let delta = (*target as i64 - call_address as i64) / 4;
-                    if !(-(1 << 25)..(1 << 25)).contains(&delta) {
-                        return Err(format!("call target '{name}' is out of ARM64 branch range"));
-                    }
-                    push_word(bytes, 0x9400_0000 | (delta as u32 & 0x03ff_ffff));
-                } else {
-                    relocations.push(Relocation {
-                        offset: call_address as u32,
-                        symbol: target_name,
-                        kind: RelocationKind::Branch26,
-                    });
-                    push_word(bytes, 0x9400_0000);
-                }
-                if let Some(result) = result
-                    && result.0 != 0
-                {
-                    push_word(bytes, 0xaa00_03e0 | (result.0 << 16));
-                }
-                continue;
-            }
-            LirInstruction::Phi { .. } => {
-                return Err("phi nodes require multi-block code generation".into());
-            }
-        };
-        push_word(bytes, word);
-    }
-    let result = match block.terminator {
-        MirTerminator::Return(value) => value,
-        _ => return Err("ARM64 backend currently requires a single return block".into()),
-    };
-    if let Some(value) = result {
-        if value.0 != 0 {
-            push_word(bytes, 0xaa00_03e0 | (value.0 << 16)); // mov x0, xn
-        }
-    }
-    if function.name == "main" {
-        if result.is_none() {
-            encode_immediate(0, 0, bytes)?;
-        }
-        encode_immediate(16, 1, bytes)?;
-        push_word(bytes, 0xd400_1001); // svc #0x80
-    } else {
-        if has_calls {
-            push_word(bytes, 0xa8c1_7bfd);
-        }
-        push_word(bytes, 0xd65f_03c0); // ret
-    }
-    Ok(())
 }
 
 fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
