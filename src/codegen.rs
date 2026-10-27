@@ -167,7 +167,10 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 | LirInstruction::Sub { .. }
                 | LirInstruction::Mul { .. }
                 | LirInstruction::Div { .. }
-                | LirInstruction::Neg { .. } => 1,
+                | LirInstruction::Neg { .. }
+                | LirInstruction::And { .. }
+                | LirInstruction::Or { .. } => 1,
+                LirInstruction::Not { .. } => 2,
                 LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
                 LirInstruction::Phi { .. } => 0,
                 LirInstruction::Call { args, result, .. } => {
@@ -332,6 +335,21 @@ fn encode_function(
                     lhs,
                     rhs,
                 } => 0x9ac0_0c00 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+                LirInstruction::And {
+                    destination,
+                    lhs,
+                    rhs,
+                } => 0x8a00_0000 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+                LirInstruction::Or {
+                    destination,
+                    lhs,
+                    rhs,
+                } => 0xaa00_0000 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+                LirInstruction::Not { destination, value } => {
+                    push_word(bytes, 0xf100_001f | (value.0 << 5));
+                    push_word(bytes, 0x9a9f_17e0 | destination.0);
+                    continue;
+                }
                 LirInstruction::Neg { destination, value } => {
                     push_word(bytes, 0xcb00_03e0 | (value.0 << 16) | destination.0);
                     continue;
@@ -494,7 +512,10 @@ fn block_encoded_size(
             | LirInstruction::Sub { .. }
             | LirInstruction::Mul { .. }
             | LirInstruction::Div { .. }
-            | LirInstruction::Neg { .. } => 1,
+            | LirInstruction::Neg { .. }
+            | LirInstruction::And { .. }
+            | LirInstruction::Or { .. } => 1,
+            LirInstruction::Not { .. } => 2,
             LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
             LirInstruction::Phi { .. } => 0,
             LirInstruction::Call { args, result, .. } => {
@@ -563,6 +584,16 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
             lhs,
             rhs,
         } => vec![*destination, *lhs, *rhs],
+        LirInstruction::And {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::Or {
+            destination,
+            lhs,
+            rhs,
+        } => vec![*destination, *lhs, *rhs],
         LirInstruction::Rem {
             destination,
             lhs,
@@ -577,6 +608,7 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
             vec![*destination, *lhs, *rhs]
         }
         LirInstruction::Neg { destination, value } => vec![*destination, *value],
+        LirInstruction::Not { destination, value } => vec![*destination, *value],
         LirInstruction::Call { result, args, .. } => {
             result.iter().copied().chain(args.iter().copied()).collect()
         }
@@ -817,6 +849,32 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
             }
             LirInstruction::Neg { destination, value } => {
                 assembly.push_str(&format!("    neg x{}, x{}\n", destination.0, value.0));
+            }
+            LirInstruction::Not { destination, value } => {
+                assembly.push_str(&format!(
+                    "    cmp x{}, #0\n    cset x{}, eq\n",
+                    value.0, destination.0
+                ));
+            }
+            LirInstruction::And {
+                destination,
+                lhs,
+                rhs,
+            } => {
+                assembly.push_str(&format!(
+                    "    and x{}, x{}, x{}\n",
+                    destination.0, lhs.0, rhs.0
+                ));
+            }
+            LirInstruction::Or {
+                destination,
+                lhs,
+                rhs,
+            } => {
+                assembly.push_str(&format!(
+                    "    orr x{}, x{}, x{}\n",
+                    destination.0, lhs.0, rhs.0
+                ));
             }
             LirInstruction::Rem {
                 destination,

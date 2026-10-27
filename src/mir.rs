@@ -60,6 +60,20 @@ pub(crate) enum MirInstruction {
         result: ValueId,
         value: ValueId,
     },
+    Not {
+        result: ValueId,
+        value: ValueId,
+    },
+    And {
+        result: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    Or {
+        result: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
     Compare {
         result: ValueId,
         lhs: ValueId,
@@ -235,6 +249,14 @@ impl Builder {
                 self.emit(MirInstruction::Neg { result, value });
                 Some(result)
             }
+            Expression::Not(value) => {
+                let value = self.expression(value)?;
+                let result = self.value();
+                self.emit(MirInstruction::Not { result, value });
+                Some(result)
+            }
+            Expression::And(lhs, rhs) => self.logical(lhs, rhs, true),
+            Expression::Or(lhs, rhs) => self.logical(lhs, rhs, false),
             Expression::Equal(lhs, rhs)
             | Expression::NotEqual(lhs, rhs)
             | Expression::LessThan(lhs, rhs)
@@ -313,6 +335,18 @@ impl Builder {
             _ => MirInstruction::Rem { result, lhs, rhs },
         };
         self.emit(instruction);
+        Some(result)
+    }
+
+    fn logical(&mut self, lhs: &Expression, rhs: &Expression, and: bool) -> Option<ValueId> {
+        let lhs = self.expression(lhs)?;
+        let rhs = self.expression(rhs)?;
+        let result = self.value();
+        self.emit(if and {
+            MirInstruction::And { result, lhs, rhs }
+        } else {
+            MirInstruction::Or { result, lhs, rhs }
+        });
         Some(result)
     }
 }

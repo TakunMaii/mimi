@@ -76,6 +76,32 @@ fn builds_and_runs_dynamic_if_else_expression() {
 }
 
 #[test]
+fn builds_and_runs_logical_boolean_expressions() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_logic_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_logic_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { result := if !false && (true || false) { 9 } else { 2 } result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(9));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn emits_host_assembly_for_integer_function() {
     let ast = parse(tokenize(
         "add :: fn (x : i32, y : i32) i32 { x + y }".chars(),
