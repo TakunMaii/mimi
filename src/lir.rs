@@ -1,0 +1,119 @@
+use crate::mir::{MirFunction, MirInstruction, MirModule, MirTerminator, ValueId};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TargetArch {
+    Aarch64,
+    X86_64,
+}
+
+pub(crate) trait Target {
+    fn arch(&self) -> TargetArch;
+    fn pointer_bits(&self) -> u16;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct HostTarget;
+
+impl Target for HostTarget {
+    fn arch(&self) -> TargetArch {
+        if cfg!(target_arch = "aarch64") {
+            TargetArch::Aarch64
+        } else {
+            TargetArch::X86_64
+        }
+    }
+
+    fn pointer_bits(&self) -> u16 {
+        usize::BITS as u16
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum LirInstruction {
+    LoadImmediate {
+        register: ValueId,
+        value: i128,
+    },
+    Add {
+        destination: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    Sub {
+        destination: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    Mul {
+        destination: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    Div {
+        destination: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LirFunction {
+    pub(crate) name: String,
+    pub(crate) instructions: Vec<LirInstruction>,
+    pub(crate) terminator: MirTerminator,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LirModule {
+    pub(crate) target: TargetArch,
+    pub(crate) functions: Vec<LirFunction>,
+}
+
+pub(crate) fn lower_mir<T: Target>(module: &MirModule, target: &T) -> LirModule {
+    LirModule {
+        target: target.arch(),
+        functions: module.functions.iter().map(lower_function).collect(),
+    }
+}
+
+fn lower_function(function: &MirFunction) -> LirFunction {
+    let mut instructions = Vec::new();
+    for instruction in &function.blocks[0].instructions {
+        instructions.push(match instruction {
+            MirInstruction::ConstInt { result, value } => LirInstruction::LoadImmediate {
+                register: *result,
+                value: *value,
+            },
+            MirInstruction::Add { result, lhs, rhs } => LirInstruction::Add {
+                destination: *result,
+                lhs: *lhs,
+                rhs: *rhs,
+            },
+            MirInstruction::Sub { result, lhs, rhs } => LirInstruction::Sub {
+                destination: *result,
+                lhs: *lhs,
+                rhs: *rhs,
+            },
+            MirInstruction::Mul { result, lhs, rhs } => LirInstruction::Mul {
+                destination: *result,
+                lhs: *lhs,
+                rhs: *rhs,
+            },
+            MirInstruction::Div { result, lhs, rhs } => LirInstruction::Div {
+                destination: *result,
+                lhs: *lhs,
+                rhs: *rhs,
+            },
+            MirInstruction::ConstBool { result, value } => LirInstruction::LoadImmediate {
+                register: *result,
+                value: i128::from(*value),
+            },
+            MirInstruction::Call { .. } => continue,
+        });
+    }
+    LirFunction {
+        name: function.name.clone(),
+        instructions,
+        terminator: function.blocks[0].terminator.clone(),
+    }
+}

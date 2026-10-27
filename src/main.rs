@@ -1,4 +1,7 @@
+mod hir;
 mod lexer;
+mod lir;
+mod mir;
 mod parser;
 mod type_checker;
 
@@ -11,3 +14,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests/type_checker/mod.rs"]
 mod type_checker_tests;
+
+#[cfg(test)]
+#[path = "../tests/ir/mod.rs"]
+mod ir_tests;
