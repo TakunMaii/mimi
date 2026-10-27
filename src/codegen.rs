@@ -156,8 +156,15 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
         .iter()
         .flat_map(|block| &block.instructions)
         .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
+    let saved_registers = callee_saved_registers(function);
     let frame_size = stack_frame_size(function);
+    let save_frame = saves_frame_pointer(has_calls);
     size += function.params.len().saturating_sub(8) * 4;
+    size += saved_registers
+        .iter()
+        .enumerate()
+        .map(|(index, _)| stack_access_words(saved_register_offset(function, index)) * 4)
+        .sum::<usize>();
     for block in &function.blocks {
         for instruction in &block.instructions {
             size += match instruction {
@@ -193,7 +200,14 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                     + if function.name == "main" {
                         8 + usize::from(value.is_none()) * 4
                     } else {
-                        (1 + usize::from(has_calls || frame_size != 0)
+                        (1 + usize::from(save_frame)
+                            + saved_registers
+                                .iter()
+                                .enumerate()
+                                .map(|(index, _)| {
+                                    stack_access_words(saved_register_offset(function, index))
+                                })
+                                .sum::<usize>()
                             + stack_adjust_words(frame_size))
                             * 4
                     }
@@ -213,7 +227,7 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
             }
         };
     }
-    if function.name != "main" && (has_calls || frame_size != 0) {
+    if save_frame {
         size += 4;
     }
     size += stack_adjust_words(frame_size) * 4;
@@ -221,7 +235,53 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
 }
 
 fn stack_frame_size(function: &LirFunction) -> u32 {
-    function.slot_count.saturating_mul(8).next_multiple_of(16)
+    function
+        .slot_count
+        .saturating_add(callee_saved_registers(function).len() as u32)
+        .saturating_mul(8)
+        .next_multiple_of(16)
+}
+
+fn callee_saved_registers(function: &LirFunction) -> Vec<u32> {
+    if function.name == "main" {
+        return Vec::new();
+    }
+    let mut registers = function
+        .params
+        .iter()
+        .map(|value| value.0)
+        .chain(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .flat_map(instruction_registers)
+                .map(|value| value.0),
+        )
+        .filter(|register| (19..=28).contains(register))
+        .collect::<Vec<_>>();
+    registers.sort_unstable();
+    registers.dedup();
+    registers
+}
+
+fn saves_frame_pointer(has_calls: bool) -> bool {
+    has_calls
+}
+
+fn saved_register_offset(function: &LirFunction, index: usize) -> u32 {
+    function
+        .slot_count
+        .saturating_mul(8)
+        .saturating_add((index as u32).saturating_mul(8))
+}
+
+fn stack_access_words(offset: u32) -> usize {
+    if offset <= 32760 {
+        1
+    } else {
+        slot_address_words(crate::mir::SlotId(offset)) + 1
+    }
 }
 
 fn stack_adjust_words(size: u32) -> usize {
@@ -309,26 +369,21 @@ fn encode_function(
     if function.params.len() > 16 {
         return Err("ARM64 backend currently supports at most 16 integer parameters".into());
     }
-    if function
-        .blocks
-        .iter()
-        .flat_map(|block| &block.instructions)
-        .flat_map(instruction_registers)
-        .any(|register| register.0 > 15)
-    {
-        return Err("ARM64 prototype backend supports virtual registers x0 through x15".into());
-    }
     let has_calls = function
         .blocks
         .iter()
         .flat_map(|block| &block.instructions)
         .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
+    let saved_registers = callee_saved_registers(function);
     let frame_size = stack_frame_size(function);
-    let save_frame = function.name != "main" && (has_calls || frame_size != 0);
+    let save_frame = saves_frame_pointer(has_calls);
     if save_frame {
         push_word(bytes, 0xa9bf_7bfd);
     }
     encode_stack_adjust(bytes, frame_size, true)?;
+    for (index, register) in saved_registers.iter().enumerate() {
+        encode_stack_store(bytes, *register, saved_register_offset(function, index));
+    }
     for (index, parameter) in function.params.iter().enumerate().skip(8) {
         let offset = frame_size + u32::from(save_frame) * 16 + (index as u32 - 8) * 8;
         if offset > 32760 {
@@ -553,6 +608,9 @@ fn encode_function(
                     encode_immediate(16, 1, bytes)?;
                     push_word(bytes, 0xd400_1001);
                 } else {
+                    for (index, register) in saved_registers.iter().enumerate() {
+                        encode_stack_load(bytes, *register, saved_register_offset(function, index));
+                    }
                     encode_stack_adjust(bytes, frame_size, false)?;
                     if save_frame {
                         push_word(bytes, 0xa8c1_7bfd);
@@ -624,11 +682,21 @@ fn block_encoded_size(
                 .flat_map(|block| &block.instructions)
                 .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
             let frame_size = stack_frame_size(function);
+            let saved_registers = callee_saved_registers(function);
+            let save_frame = saves_frame_pointer(has_calls);
             usize::from(value.is_some_and(|v| v.0 != 0)) * 4
                 + if function.name == "main" {
                     8 + usize::from(value.is_none()) * 4
                 } else {
-                    (1 + usize::from(has_calls || frame_size != 0) + stack_adjust_words(frame_size))
+                    (1 + usize::from(save_frame)
+                        + saved_registers
+                            .iter()
+                            .enumerate()
+                            .map(|(index, _)| {
+                                stack_access_words(saved_register_offset(function, index))
+                            })
+                            .sum::<usize>()
+                        + stack_adjust_words(frame_size))
                         * 4
                 }
         }
@@ -722,6 +790,24 @@ fn encode_stack_adjust(bytes: &mut Vec<u8>, size: u32, subtract: bool) -> Result
         remaining -= immediate;
     }
     Ok(())
+}
+
+fn encode_stack_load(bytes: &mut Vec<u8>, register: u32, offset: u32) {
+    if offset <= 32760 {
+        push_word(bytes, 0xf940_03e0 | ((offset / 8) << 10) | register);
+    } else {
+        encode_slot_address(bytes, 16, offset);
+        push_word(bytes, 0xf940_0000 | (16 << 5) | register);
+    }
+}
+
+fn encode_stack_store(bytes: &mut Vec<u8>, register: u32, offset: u32) {
+    if offset <= 32760 {
+        push_word(bytes, 0xf900_03e0 | ((offset / 8) << 10) | register);
+    } else {
+        encode_slot_address(bytes, 16, offset);
+        push_word(bytes, 0xf900_0000 | (16 << 5) | register);
+    }
 }
 
 fn encode_slot_address(bytes: &mut Vec<u8>, destination: u32, offset: u32) {
@@ -983,12 +1069,17 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
         .iter()
         .flat_map(|block| &block.instructions)
         .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
-    if has_calls {
+    let saved_registers = callee_saved_registers(function);
+    let save_frame = saves_frame_pointer(has_calls);
+    if save_frame {
         assembly.push_str("    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
     }
     emit_stack_adjust(assembly, frame_size, true);
+    for (index, register) in saved_registers.iter().enumerate() {
+        emit_stack_store(assembly, *register, saved_register_offset(function, index));
+    }
     for (index, parameter) in function.params.iter().enumerate().skip(8) {
-        let offset = frame_size + u32::from(has_calls) * 16 + (index as u32 - 8) * 8;
+        let offset = frame_size + u32::from(save_frame) * 16 + (index as u32 - 8) * 8;
         emit_stack_load(assembly, parameter.0, offset);
     }
 
@@ -1147,8 +1238,11 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                 {
                     assembly.push_str(&format!("    mov x0, x{}\n", value.0));
                 }
+                for (index, register) in saved_registers.iter().enumerate() {
+                    emit_stack_load(assembly, *register, saved_register_offset(function, index));
+                }
                 emit_stack_adjust(assembly, frame_size, false);
-                if has_calls {
+                if save_frame {
                     assembly.push_str("    ldp x29, x30, [sp], #16\n");
                 }
                 assembly.push_str("    ret\n");

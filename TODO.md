@@ -38,7 +38,7 @@ and focused regression coverage; it does not imply support on every target.
 - [ ] Implement instance and static methods in HIR/MIR, including automatic receivers.
 - [x] Allocate virtual registers with liveness and preserve values live across calls.
 - [x] Pass ARM64 integer arguments beyond x0-x7 on the stack (up to 16 total).
-- [ ] Allocate and preserve callee-saved registers.
+- [x] Allocate and preserve ARM64 callee-saved registers.
 - [ ] Complete package symbol visibility and cross-package linking behavior.
 
 ## Targets and Tooling

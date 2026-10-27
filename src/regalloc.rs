@@ -68,8 +68,11 @@ pub(crate) fn allocate_registers(function: &LirFunction) -> Result<LirFunction, 
             .filter_map(|neighbor| colors.get(neighbor).copied())
             .collect::<HashSet<_>>();
         let color = (0..16)
+            .chain(19..=28)
             .find(|color| !used.contains(color))
-            .ok_or_else(|| "ARM64 register pressure exceeds 16 general registers".to_string())?;
+            .ok_or_else(|| {
+                "ARM64 register pressure exceeds 26 allocatable registers".to_string()
+            })?;
         colors.insert(value, color);
     }
 

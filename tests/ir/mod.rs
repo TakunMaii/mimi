@@ -580,6 +580,68 @@ fn emits_host_assembly_for_calls_and_control_flow() {
 }
 
 #[test]
+fn preserves_callee_saved_registers_under_register_pressure() {
+    if !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let mut expression = "20".to_string();
+    for value in (1..20).rev() {
+        expression = format!("{value} + ({expression})");
+    }
+    let source_text =
+        format!("pressure :: fn () i32 {{ {expression} }} main :: fn () i32 {{ pressure() }}");
+    let ast = parse(tokenize(source_text.chars()));
+    let hir = hir::lower_ast(&ast);
+    let mir = mir::lower_hir(&hir);
+    let lir = lir::lower_mir(&mir, &lir::HostTarget);
+    let assembly = codegen::emit_assembly(&lir).unwrap();
+    assert!(assembly.contains("str x19, [sp, #"));
+    assert!(assembly.contains("ldr x19, [sp, #"));
+
+    let assembly_path = std::env::temp_dir().join(format!(
+        "mimi_callee_saved_assembly_{}.s",
+        std::process::id()
+    ));
+    let object_path = std::env::temp_dir().join(format!(
+        "mimi_callee_saved_assembly_{}.o",
+        std::process::id()
+    ));
+    std::fs::write(&assembly_path, assembly).unwrap();
+    let status = std::process::Command::new("cc")
+        .arg("-c")
+        .arg(&assembly_path)
+        .arg("-o")
+        .arg(&object_path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    std::fs::remove_file(assembly_path).unwrap();
+    std::fs::remove_file(object_path).unwrap();
+
+    if cfg!(target_os = "macos") {
+        let source = std::env::temp_dir().join(format!(
+            "mimi_callee_saved_source_{}.mi",
+            std::process::id()
+        ));
+        let executable =
+            std::env::temp_dir().join(format!("mimi_callee_saved_codegen_{}", std::process::id()));
+        std::fs::write(&source, source_text).unwrap();
+        build_file(
+            source.to_str().unwrap(),
+            executable.to_str().unwrap(),
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let status = std::process::Command::new(&executable).status().unwrap();
+        assert_eq!(status.code(), Some(210));
+        std::fs::remove_file(source).unwrap();
+        std::fs::remove_file(executable).unwrap();
+    }
+}
+
+#[test]
 fn builds_and_runs_a_minimal_host_executable() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
