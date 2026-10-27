@@ -39,6 +39,10 @@ pub(crate) enum Expression {
     And(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
     Block(Vec<ASTNode>),
+    Call {
+        name: String,
+        arguments: Vec<Expression>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -75,6 +79,13 @@ pub(crate) enum ASTNode {
         value: Expression,
     },
     Expression(Expression),
+    FunctionDefinition {
+        name: String,
+        parameters: Vec<(String, DataType)>,
+        return_type: DataType,
+        body: Expression,
+    },
+    Return(Option<Expression>),
 }
 
 pub(crate) fn parse(tokens: Vec<Token>) -> Vec<ASTNode> {
@@ -101,7 +112,13 @@ where
         Some(Token::Equal) => (0, None),
         Some(Token::Colon) => match tokens.next() {
             Some(Token::Equal) => (1, None),
-            Some(Token::Colon) => (2, None),
+            Some(Token::Colon) => {
+                if matches!(tokens.peek(), Some(Token::Fn)) {
+                    tokens.next();
+                    return parse_function(name, tokens);
+                }
+                (2, None)
+            }
             Some(Token::Identifier(type_name)) => {
                 let data_type = parse_data_type(&type_name);
                 match tokens.next() {
@@ -129,6 +146,55 @@ where
             data_type,
             value,
         },
+    }
+}
+
+fn parse_function<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token>,
+{
+    assert!(
+        matches!(tokens.next(), Some(Token::LeftParen)),
+        "expected '(' after fn"
+    );
+    let mut parameters = Vec::new();
+    if !matches!(tokens.peek(), Some(Token::RightParen)) {
+        loop {
+            let parameter_name = match tokens.next() {
+                Some(Token::Identifier(name)) => name,
+                _ => panic!("expected parameter name"),
+            };
+            assert!(
+                matches!(tokens.next(), Some(Token::Colon)),
+                "expected ':' after parameter name"
+            );
+            let type_name = match tokens.next() {
+                Some(Token::Identifier(name)) => name,
+                _ => panic!("expected parameter type"),
+            };
+            parameters.push((parameter_name, parse_data_type(&type_name)));
+            match tokens.next() {
+                Some(Token::Comma) => continue,
+                Some(Token::RightParen) => break,
+                _ => panic!("expected ',' or ')' after parameter"),
+            }
+        }
+    } else {
+        tokens.next();
+    }
+    let return_type = match tokens.next() {
+        Some(Token::Identifier(name)) => parse_data_type(&name),
+        _ => panic!("expected function return type"),
+    };
+    let body = match tokens.next() {
+        Some(Token::LeftBrace) => Expression::Block(parse_block(tokens)),
+        _ => panic!("expected function body"),
+    };
+    ASTNode::FunctionDefinition {
+        name,
+        parameters,
+        return_type,
+        body,
     }
 }
 
@@ -184,6 +250,28 @@ where
         Token::LeftBrace => Expression::Block(parse_block(tokens)),
         _ => panic!("expected an expression"),
     };
+
+    if let Expression::Identifier(name) = lhs {
+        if matches!(tokens.peek(), Some(Token::LeftParen)) {
+            tokens.next();
+            let mut arguments = Vec::new();
+            if !matches!(tokens.peek(), Some(Token::RightParen)) {
+                loop {
+                    arguments.push(parse_expression(tokens, 0));
+                    match tokens.next() {
+                        Some(Token::Comma) => continue,
+                        Some(Token::RightParen) => break,
+                        _ => panic!("expected ',' or ')' after argument"),
+                    }
+                }
+            } else {
+                tokens.next();
+            }
+            lhs = Expression::Call { name, arguments };
+        } else {
+            lhs = Expression::Identifier(name);
+        }
+    }
 
     loop {
         let (precedence, operator) = match tokens.peek() {
@@ -249,6 +337,14 @@ where
 
         let first = tokens.next().unwrap();
         let item = match first {
+            Token::Return => {
+                let value = if matches!(tokens.peek(), Some(Token::RightBrace)) {
+                    None
+                } else {
+                    Some(parse_expression(tokens, 0))
+                };
+                ASTNode::Return(value)
+            }
             Token::Identifier(name)
                 if matches!(tokens.peek(), Some(Token::Equal | Token::Colon)) =>
             {

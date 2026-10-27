@@ -128,3 +128,35 @@ fn supports_explicit_void_values() {
     let types = check(&ast).unwrap();
     assert_eq!(types["unit"], DataType::Void);
 }
+
+#[test]
+fn checks_function_definitions_and_calls() {
+    let ast = parse(tokenize(
+        "add :: fn (x : i32, y : i32) i32 { x + y } result := add(3, 2)".chars(),
+    ));
+
+    let types = check(&ast).unwrap();
+    assert_eq!(types["result"], DataType::I32);
+}
+
+#[test]
+fn checks_explicit_return_and_function_errors() {
+    let ast = parse(tokenize(
+        "id :: fn (x : i32) i32 { return x } bad := id(true) missing := nope()".chars(),
+    ));
+
+    let errors = check(&ast).unwrap_err();
+    assert_eq!(errors.len(), 2);
+    assert!(errors[0].message.contains("expected i32, found bool"));
+    assert!(errors[1].message.contains("undefined function 'nope'"));
+}
+
+#[test]
+fn supports_void_functions_with_return() {
+    let ast = parse(tokenize(
+        "noop :: fn () void { return } result := noop()".chars(),
+    ));
+
+    let types = check(&ast).unwrap();
+    assert_eq!(types["result"], DataType::Void);
+}

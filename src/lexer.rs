@@ -3,6 +3,9 @@ pub(crate) enum Token {
     Identifier(String),
     LiteralNumber(String),
     LiteralBool(bool),
+    Fn,
+    Return,
+    Comma,
     Colon,
     Equal,
     EqualEqual,
@@ -44,6 +47,8 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
             result.push(match identifier.as_str() {
                 "true" => Token::LiteralBool(true),
                 "false" => Token::LiteralBool(false),
+                "fn" => Token::Fn,
+                "return" => Token::Return,
                 _ => Token::Identifier(identifier),
             });
         } else if ch.is_ascii_digit() {
@@ -61,6 +66,7 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
             chars.next();
             match ch {
                 ':' => result.push(Token::Colon),
+                ',' => result.push(Token::Comma),
                 '=' => {
                     if chars.peek() == Some(&'=') {
                         chars.next();

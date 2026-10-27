@@ -254,3 +254,30 @@ fn parses_an_operator_after_a_block_expression() {
             && matches!(rhs.as_ref(), Expression::LiteralNumber(value) if value == "2")
     ));
 }
+
+#[test]
+fn parses_function_definition_and_call() {
+    let nodes = parse(tokenize(
+        "add :: fn (x : i32, y : i32) i32 { x + y } result := add(3, 2)".chars(),
+    ));
+    assert!(matches!(
+        &nodes[0],
+        ASTNode::FunctionDefinition { name, parameters, return_type: DataType::I32, body: Expression::Block(_) }
+            if name == "add" && parameters == &vec![("x".into(), DataType::I32), ("y".into(), DataType::I32)]
+    ));
+    assert!(matches!(
+        &nodes[1],
+        ASTNode::VariableDefinition { value: Expression::Call { name, arguments }, .. }
+            if name == "add" && arguments.len() == 2
+    ));
+}
+
+#[test]
+fn parses_return_statement() {
+    let nodes = parse(tokenize("id :: fn (x : i32) i32 { return x }".chars()));
+    assert!(matches!(
+        &nodes[0],
+        ASTNode::FunctionDefinition { body: Expression::Block(items), .. }
+            if matches!(&items[0], ASTNode::Return(Some(Expression::Identifier(name))) if name == "x")
+    ));
+}
