@@ -4,6 +4,25 @@ use std::process::Command;
 use crate::lir::{LirFunction, LirInstruction, LirModule, TargetArch};
 use crate::mir::{CompareKind, MirTerminator, ValueId};
 
+#[derive(Clone, Copy)]
+enum RelocationKind {
+    Branch26,
+    Page21,
+    PageOff12,
+}
+
+struct Relocation {
+    offset: u32,
+    symbol: String,
+    kind: RelocationKind,
+}
+
+struct ObjectSymbol {
+    name: String,
+    section: u8,
+    value: u64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LinkOptions {
     pub(crate) library_paths: Vec<std::path::PathBuf>,
@@ -29,8 +48,8 @@ pub(crate) fn compile_executable_with_options(
     if module.target != TargetArch::Aarch64 {
         return Err("machine code emission is currently implemented for ARM64 only".into());
     }
-    let (text, symbols) = encode_module(module)?;
-    let object = write_macho_object(&text, &symbols);
+    let (text, data, symbols, relocations) = encode_module(module)?;
+    let object = write_macho_object(&text, &data, &symbols, &relocations);
     let object_path = output.with_extension("o");
     std::fs::write(&object_path, object)
         .map_err(|error| format!("cannot write object file: {error}"))?;
@@ -77,7 +96,9 @@ pub(crate) fn compile_executable_with_options(
     }
 }
 
-fn encode_module(module: &LirModule) -> Result<(Vec<u8>, Vec<(String, u64)>), String> {
+fn encode_module(
+    module: &LirModule,
+) -> Result<(Vec<u8>, Vec<u8>, Vec<ObjectSymbol>, Vec<Relocation>), String> {
     let mut offsets = std::collections::HashMap::new();
     let mut offset = 0u64;
     for function in &module.functions {
@@ -86,11 +107,37 @@ fn encode_module(module: &LirModule) -> Result<(Vec<u8>, Vec<(String, u64)>), St
     }
     let mut text = Vec::new();
     let mut symbols = Vec::new();
+    let mut relocations = Vec::new();
     for function in &module.functions {
-        symbols.push((format!("_{}", function.name), text.len() as u64));
-        encode_function(function, &mut text, &offsets)?;
+        symbols.push(ObjectSymbol {
+            name: format!("_{}", function.name),
+            section: 1,
+            value: text.len() as u64,
+        });
+        encode_function(function, &mut text, &offsets, &mut relocations)?;
     }
-    Ok((text, symbols))
+    let mut data = Vec::new();
+    for (name, bytes) in &module.strings {
+        symbols.push(ObjectSymbol {
+            name: name.clone(),
+            section: 2,
+            value: data.len() as u64,
+        });
+        data.extend_from_slice(bytes);
+    }
+    for relocation in &relocations {
+        if !symbols
+            .iter()
+            .any(|symbol| symbol.name == relocation.symbol)
+        {
+            symbols.push(ObjectSymbol {
+                name: relocation.symbol.clone(),
+                section: 0,
+                value: 0,
+            });
+        }
+    }
+    Ok((text, data, symbols, relocations))
 }
 
 fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
@@ -145,6 +192,7 @@ fn encode_function(
     function: &LirFunction,
     bytes: &mut Vec<u8>,
     offsets: &std::collections::HashMap<String, u64>,
+    relocations: &mut Vec<Relocation>,
 ) -> Result<(), String> {
     if function.params.len() > 8 {
         return Err("ARM64 backend currently supports at most 8 integer parameters".into());
@@ -171,9 +219,25 @@ fn encode_function(
                 continue;
             }
             LirInstruction::LoadAddress { symbol, .. } => {
-                return Err(format!(
-                    "string address '{symbol}' is not supported by the current object writer"
-                ));
+                let register = match instruction {
+                    LirInstruction::LoadAddress { register, .. } => *register,
+                    _ => unreachable!(),
+                };
+                let page = bytes.len() as u32;
+                push_word(bytes, 0x9000_0000 | register.0);
+                let low = bytes.len() as u32;
+                push_word(bytes, 0x9100_0000 | (register.0 << 5) | register.0);
+                relocations.push(Relocation {
+                    offset: page,
+                    symbol: symbol.clone(),
+                    kind: RelocationKind::Page21,
+                });
+                relocations.push(Relocation {
+                    offset: low,
+                    symbol: symbol.clone(),
+                    kind: RelocationKind::PageOff12,
+                });
+                continue;
             }
             LirInstruction::Add {
                 destination,
@@ -247,7 +311,12 @@ fn encode_function(
                     }
                     push_word(bytes, 0x9400_0000 | (delta as u32 & 0x03ff_ffff));
                 } else {
-                    return Err(format!("external call '{name}' requires symbol relocation"));
+                    relocations.push(Relocation {
+                        offset: call_address as u32,
+                        symbol: target_name,
+                        kind: RelocationKind::Branch26,
+                    });
+                    push_word(bytes, 0x9400_0000);
                 }
                 if let Some(result) = result
                     && result.0 != 0
@@ -359,21 +428,34 @@ fn push_word(bytes: &mut Vec<u8>, word: u32) {
     bytes.extend_from_slice(&word.to_le_bytes());
 }
 
-fn write_macho_object(text: &[u8], symbols: &[(String, u64)]) -> Vec<u8> {
+fn write_macho_object(
+    text: &[u8],
+    data: &[u8],
+    symbols: &[ObjectSymbol],
+    relocations: &[Relocation],
+) -> Vec<u8> {
     const HEADER_SIZE: usize = 32;
-    const SEGMENT_COMMAND_SIZE: usize = 152;
+    const SEGMENT_COMMAND_SIZE: usize = 232;
     const SYMTAB_COMMAND_SIZE: usize = 24;
     let commands_size = SEGMENT_COMMAND_SIZE + SYMTAB_COMMAND_SIZE;
     let text_offset = HEADER_SIZE + commands_size;
-    let symbol_offset = (text_offset + text.len() + 7) & !7;
+    let data_offset = (text_offset + text.len() + 7) & !7;
+    let relocation_offset = data_offset + data.len();
+    let symbol_offset = relocation_offset + relocations.len() * 8;
     let string_offset = symbol_offset + symbols.len() * 16;
     let mut strings = vec![0u8];
     let mut string_indexes = Vec::new();
-    for (name, _) in symbols {
+    for symbol in symbols {
         string_indexes.push(strings.len() as u32);
-        strings.extend_from_slice(name.as_bytes());
+        strings.extend_from_slice(symbol.name.as_bytes());
         strings.push(0);
     }
+    let symbol_indexes = symbols
+        .iter()
+        .enumerate()
+        .map(|(index, symbol)| (symbol.name.as_str(), index as u32))
+        .collect::<std::collections::HashMap<_, _>>();
+
     let mut output = Vec::new();
     for value in [
         0xfeed_facfu32,
@@ -390,19 +472,39 @@ fn write_macho_object(text: &[u8], symbols: &[(String, u64)]) -> Vec<u8> {
     output.extend_from_slice(&0x19u32.to_le_bytes());
     output.extend_from_slice(&(SEGMENT_COMMAND_SIZE as u32).to_le_bytes());
     write_name(&mut output, "__TEXT");
-    for value in [0u64, 0, text_offset as u64, text.len() as u64] {
+    let vm_size = data_offset + data.len() - text_offset;
+    for value in [0u64, vm_size as u64, 0, vm_size as u64] {
         output.extend_from_slice(&value.to_le_bytes());
     }
-    for value in [7u32, 5, 1, 0] {
+    for value in [7u32, 5, 2, 0] {
         output.extend_from_slice(&value.to_le_bytes());
     }
+
     write_name(&mut output, "__text");
     write_name(&mut output, "__TEXT");
     output.extend_from_slice(&0u64.to_le_bytes());
     output.extend_from_slice(&(text.len() as u64).to_le_bytes());
-    for value in [text_offset as u32, 2, 0, 0, 0x8000_0400u32, 0, 0, 0] {
+    for value in [
+        text_offset as u32,
+        2,
+        relocation_offset as u32,
+        relocations.len() as u32,
+        0x8000_0400u32,
+        0,
+        0,
+        0,
+    ] {
         output.extend_from_slice(&value.to_le_bytes());
     }
+
+    write_name(&mut output, "__data");
+    write_name(&mut output, "__TEXT");
+    output.extend_from_slice(&(text.len() as u64).to_le_bytes());
+    output.extend_from_slice(&(data.len() as u64).to_le_bytes());
+    for value in [data_offset as u32, 0, 0, 0, 0u32, 0, 0, 0] {
+        output.extend_from_slice(&value.to_le_bytes());
+    }
+
     output.extend_from_slice(&2u32.to_le_bytes());
     output.extend_from_slice(&(SYMTAB_COMMAND_SIZE as u32).to_le_bytes());
     for value in [
@@ -414,12 +516,31 @@ fn write_macho_object(text: &[u8], symbols: &[(String, u64)]) -> Vec<u8> {
         output.extend_from_slice(&value.to_le_bytes());
     }
     output.extend_from_slice(text);
+    output.resize(data_offset, 0);
+    output.extend_from_slice(data);
+    output.resize(relocation_offset, 0);
+    for relocation in relocations {
+        output.extend_from_slice(&(relocation.offset as i32).to_le_bytes());
+        let symbol_index = symbol_indexes[relocation.symbol.as_str()];
+        let (kind, pcrel) = match relocation.kind {
+            RelocationKind::Branch26 => (2u32, 1u32),
+            RelocationKind::Page21 => (3, 1),
+            RelocationKind::PageOff12 => (4, 0),
+        };
+        let info = symbol_index | (pcrel << 24) | (2 << 25) | (1 << 27) | (kind << 28);
+        output.extend_from_slice(&info.to_le_bytes());
+    }
     output.resize(symbol_offset, 0);
-    for ((_, value), string_index) in symbols.iter().zip(string_indexes) {
+    for (symbol, string_index) in symbols.iter().zip(string_indexes) {
         output.extend_from_slice(&string_index.to_le_bytes());
-        output.push(0x0f); // N_SECT | N_EXT
-        output.push(1);
+        output.push(if symbol.section == 0 { 0x01 } else { 0x0f });
+        output.push(symbol.section);
         output.extend_from_slice(&0u16.to_le_bytes());
+        let value = if symbol.section == 2 {
+            text.len() as u64 + symbol.value
+        } else {
+            symbol.value
+        };
         output.extend_from_slice(&value.to_le_bytes());
     }
     output.extend_from_slice(&strings);

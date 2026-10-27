@@ -179,3 +179,39 @@ fn builds_and_runs_functions_with_locals_assignment_and_return() {
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn builds_and_runs_external_print_with_string_literal() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    std::process::Command::new("make")
+        .current_dir(root.join("runtime"))
+        .status()
+        .unwrap();
+    let source = std::env::temp_dir().join(format!("mimi_print_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_print_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        r#"extern print : fn(str : []u8)void main :: fn () void { print("hello") }"#,
+    )
+    .unwrap();
+    let result = build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[root.join("runtime")],
+        &["print".into()],
+    );
+    assert!(result.is_ok(), "{result:?}");
+    let output = std::process::Command::new(&path).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "hello");
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+    std::process::Command::new("make")
+        .current_dir(root.join("runtime"))
+        .arg("clean")
+        .status()
+        .unwrap();
+}
