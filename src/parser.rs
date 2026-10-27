@@ -19,6 +19,7 @@ pub(crate) enum DataType {
     Struct(&'static str),
     Array(u64, &'static DataType),
     Slice(&'static DataType),
+    Enum(&'static str),
 }
 
 #[derive(Debug, PartialEq)]
@@ -63,6 +64,10 @@ pub(crate) enum Expression {
         object: Box<Expression>,
         start: Option<Box<Expression>>,
         end: Option<Box<Expression>>,
+    },
+    Match {
+        value: Box<Expression>,
+        arms: Vec<(Pattern, Expression)>,
     },
 }
 
@@ -131,6 +136,25 @@ pub(crate) enum ASTNode {
     Defer {
         body: Expression,
     },
+    EnumDefinition {
+        name: &'static str,
+        variants: Vec<(String, Option<DataType>)>,
+    },
+    IfLet {
+        variant: String,
+        binding: Option<String>,
+        value: Expression,
+        then_branch: Expression,
+        else_branch: Option<Expression>,
+    },
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum Pattern {
+    Variant {
+        name: String,
+        binding: Option<String>,
+    },
 }
 
 pub(crate) fn parse(tokens: Vec<Token>) -> Vec<ASTNode> {
@@ -151,6 +175,7 @@ where
     match token {
         Token::Identifier(name) => parse_statement_after_name(name, tokens),
         Token::If => parse_if(tokens),
+        Token::Match => ASTNode::Expression(parse_match(tokens)),
         Token::While => parse_while(tokens),
         Token::For => parse_for(tokens),
         Token::Loop => parse_loop(tokens),
@@ -174,6 +199,37 @@ fn parse_if<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
 where
     I: Iterator<Item = Token> + Clone,
 {
+    if let Some((variant, binding)) = peek_variant_pattern(tokens) {
+        tokens.next();
+        if binding.is_some() {
+            tokens.next();
+            tokens.next();
+            tokens.next();
+        }
+        assert!(
+            matches!(tokens.next(), Some(Token::Colon)),
+            "expected ':' in if-let"
+        );
+        assert!(
+            matches!(tokens.next(), Some(Token::Equal)),
+            "expected '=' in if-let"
+        );
+        let value = parse_expression(tokens, 0);
+        let then_branch = parse_block_expression(tokens);
+        let else_branch = if matches!(tokens.peek(), Some(Token::Else)) {
+            tokens.next();
+            Some(parse_block_expression(tokens))
+        } else {
+            None
+        };
+        return ASTNode::IfLet {
+            variant,
+            binding,
+            value,
+            then_branch,
+            else_branch,
+        };
+    }
     let condition = parse_expression(tokens, 0);
     let then_branch = parse_block_expression(tokens);
     let else_branch = if matches!(tokens.peek(), Some(Token::Else)) {
@@ -186,6 +242,85 @@ where
         condition,
         then_branch,
         else_branch,
+    }
+}
+
+fn peek_variant_pattern<I>(tokens: &std::iter::Peekable<I>) -> Option<(String, Option<String>)>
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let mut lookahead = tokens.clone();
+    let variant = match lookahead.next()? {
+        Token::Identifier(name) => name,
+        _ => return None,
+    };
+    let binding = if matches!(lookahead.peek(), Some(Token::LeftParen)) {
+        lookahead.next();
+        let binding = match lookahead.next()? {
+            Token::Identifier(name) => name,
+            _ => return None,
+        };
+        if !matches!(lookahead.next(), Some(Token::RightParen)) {
+            return None;
+        }
+        Some(binding)
+    } else {
+        None
+    };
+    matches!(lookahead.next(), Some(Token::Colon)).then_some((variant, binding))
+}
+
+fn parse_match<I>(tokens: &mut std::iter::Peekable<I>) -> Expression
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let value = parse_expression(tokens, 0);
+    assert!(
+        matches!(tokens.next(), Some(Token::LeftBrace)),
+        "expected '{{' after match value"
+    );
+    let mut arms = Vec::new();
+    while !matches!(tokens.peek(), Some(Token::RightBrace)) {
+        let variant = match tokens.next() {
+            Some(Token::Identifier(name)) => name,
+            _ => panic!("expected enum variant pattern"),
+        };
+        let binding = if matches!(tokens.peek(), Some(Token::LeftParen)) {
+            tokens.next();
+            let name = match tokens.next() {
+                Some(Token::Identifier(name)) => name,
+                _ => panic!("expected pattern binding"),
+            };
+            assert!(
+                matches!(tokens.next(), Some(Token::RightParen)),
+                "expected ')' after pattern binding"
+            );
+            Some(name)
+        } else {
+            None
+        };
+        assert!(
+            matches!(tokens.next(), Some(Token::FatArrow)),
+            "expected '=>' after match pattern"
+        );
+        let body = parse_expression(tokens, 0);
+        arms.push((
+            Pattern::Variant {
+                name: variant,
+                binding,
+            },
+            body,
+        ));
+        if matches!(tokens.peek(), Some(Token::Comma)) {
+            tokens.next();
+        } else if !matches!(tokens.peek(), Some(Token::RightBrace)) {
+            panic!("expected ',' or '}}' after match arm");
+        }
+    }
+    tokens.next();
+    Expression::Match {
+        value: Box::new(value),
+        arms,
     }
 }
 
@@ -250,6 +385,10 @@ where
                 if matches!(tokens.peek(), Some(Token::Struct)) {
                     tokens.next();
                     return parse_struct_definition(name, tokens);
+                }
+                if matches!(tokens.peek(), Some(Token::Enum)) {
+                    tokens.next();
+                    return parse_enum_definition(name, tokens);
                 }
                 if matches!(tokens.peek(), Some(Token::Fn)) {
                     tokens.next();
@@ -378,6 +517,45 @@ where
     ASTNode::StructDefinition { name, fields }
 }
 
+fn parse_enum_definition<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    assert!(
+        matches!(tokens.next(), Some(Token::LeftBrace)),
+        "expected '{{' after enum"
+    );
+    let mut variants = Vec::new();
+    while !matches!(tokens.peek(), Some(Token::RightBrace)) {
+        let variant = match tokens.next() {
+            Some(Token::Identifier(name)) => name,
+            _ => panic!("expected enum variant"),
+        };
+        let payload = if matches!(tokens.peek(), Some(Token::LeftParen)) {
+            tokens.next();
+            let ty = parse_type(tokens);
+            assert!(
+                matches!(tokens.next(), Some(Token::RightParen)),
+                "expected ')' after enum payload type"
+            );
+            Some(ty)
+        } else {
+            None
+        };
+        variants.push((variant, payload));
+        if matches!(tokens.peek(), Some(Token::Comma)) {
+            tokens.next();
+        } else if !matches!(tokens.peek(), Some(Token::RightBrace)) {
+            panic!("expected ',' or '}}' after enum variant");
+        }
+    }
+    tokens.next();
+    ASTNode::EnumDefinition {
+        name: Box::leak(name.into_boxed_str()),
+        variants,
+    }
+}
+
 fn parse_data_type(name: &str) -> DataType {
     match name {
         "u8" => DataType::U8,
@@ -475,6 +653,7 @@ where
             }
             Expression::ArrayLiteral(values)
         }
+        Token::Match => parse_match(tokens),
         _ => panic!("expected an expression"),
     };
 

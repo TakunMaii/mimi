@@ -5,6 +5,9 @@ pub(crate) enum Token {
     LiteralBool(bool),
     Fn,
     Struct,
+    Enum,
+    Match,
+    FatArrow,
     If,
     Else,
     While,
@@ -61,6 +64,8 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                 "false" => Token::LiteralBool(false),
                 "fn" => Token::Fn,
                 "struct" => Token::Struct,
+                "enum" => Token::Enum,
+                "match" => Token::Match,
                 "if" => Token::If,
                 "else" => Token::Else,
                 "while" => Token::While,
@@ -99,6 +104,9 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                     if chars.peek() == Some(&'=') {
                         chars.next();
                         result.push(Token::EqualEqual);
+                    } else if chars.peek() == Some(&'>') {
+                        chars.next();
+                        result.push(Token::FatArrow);
                     } else {
                         result.push(Token::Equal);
                     }

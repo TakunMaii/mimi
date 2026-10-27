@@ -367,3 +367,14 @@ fn parses_array_types_literals_indexing_and_slices() {
         }
     ));
 }
+
+#[test]
+fn parses_enum_definition_match_and_if_let() {
+    let nodes = parse(tokenize("result :: enum { some(f32), error, none, } value := some(1.0) if some(x) := value { x } match value { some(x) => x, error => 0.0, none => 0.0 }".chars()));
+    assert!(
+        matches!(&nodes[0], ASTNode::EnumDefinition { name, variants } if *name == "result" && variants.len() == 3)
+    );
+    assert!(
+        matches!(&nodes[2], ASTNode::IfLet { variant, binding: Some(binding), .. } if variant == "some" && binding == "x")
+    );
+}

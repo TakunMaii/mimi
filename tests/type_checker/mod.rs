@@ -220,3 +220,10 @@ fn checks_arrays_indexing_and_slices() {
     assert_eq!(types["first"], DataType::I32);
     assert!(matches!(types["part"], DataType::Slice(element) if *element == DataType::I32));
 }
+
+#[test]
+fn checks_enum_construction_if_let_and_match() {
+    let ast = parse(tokenize("result :: enum { some(f32), error, none, } value := some(1.0) selected := match value { some(x) => x, error => 0.0, none => 0.0 }".chars()));
+    let types = check(&ast).unwrap();
+    assert_eq!(types["selected"], DataType::F32);
+}

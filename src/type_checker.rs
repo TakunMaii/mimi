@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::parser::{ASTNode, DataType, Expression};
+use crate::parser::{ASTNode, DataType, Expression, Pattern};
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct TypeError {
@@ -21,6 +21,7 @@ struct Function {
 
 struct StructInfo {
     fields: HashMap<String, DataType>,
+    variants: HashMap<String, Option<DataType>>,
 }
 
 pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<TypeError>> {
@@ -30,6 +31,15 @@ pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<
     let mut errors = Vec::new();
 
     for node in nodes {
+        if let ASTNode::EnumDefinition { name, variants } = node {
+            structs.insert(
+                *name,
+                StructInfo {
+                    fields: HashMap::new(),
+                    variants: variants.iter().cloned().collect(),
+                },
+            );
+        }
         if let ASTNode::StructDefinition { name, fields } = node {
             let mut field_names = std::collections::HashSet::new();
             for (field_name, _) in fields {
@@ -44,6 +54,7 @@ pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<
                     *name,
                     StructInfo {
                         fields: fields.iter().cloned().collect(),
+                        variants: HashMap::new(),
                     },
                 )
                 .is_some()
@@ -213,6 +224,43 @@ fn check_statement(
         }
         ASTNode::Return(_) => Err(error("return is only valid inside a function")),
         ASTNode::StructDefinition { .. } => Ok(()),
+        ASTNode::EnumDefinition { .. } => Ok(()),
+        ASTNode::IfLet {
+            variant,
+            binding,
+            value,
+            then_branch,
+            else_branch,
+        } => {
+            let value_type = infer_expression(value, scopes, functions, structs, None)?;
+            let enum_name = match value_type {
+                DataType::Enum(name) | DataType::Struct(name) => name,
+                _ => return Err(error("if-let requires an enum value")),
+            };
+            let info = structs
+                .get(enum_name)
+                .ok_or_else(|| error("unknown enum type"))?;
+            let payload = info
+                .variants
+                .get(variant)
+                .ok_or_else(|| error(format!("unknown enum variant '{variant}'")))?;
+            scopes.push(HashMap::new());
+            if let (Some(binding), Some(payload)) = (binding, payload) {
+                scopes.last_mut().unwrap().insert(
+                    binding.clone(),
+                    Symbol {
+                        data_type: *payload,
+                        mutable: false,
+                    },
+                );
+            }
+            infer_expression(then_branch, scopes, functions, structs, None)?;
+            scopes.pop();
+            if let Some(branch) = else_branch {
+                infer_expression(branch, scopes, functions, structs, None)?;
+            }
+            Ok(())
+        }
         ASTNode::If {
             condition,
             then_branch,
@@ -272,9 +320,24 @@ fn infer_expression(
 ) -> Result<DataType, TypeError> {
     match expression {
         Expression::Identifier(name) => {
-            let data_type = lookup(scopes, name)
-                .map(|symbol| symbol.data_type)
-                .ok_or_else(|| error(format!("use of undefined identifier '{name}'")))?;
+            let data_type = if let Some(symbol) = lookup(scopes, name) {
+                symbol.data_type
+            } else {
+                let matches: Vec<_> = structs
+                    .iter()
+                    .filter_map(|(enum_name, info)| {
+                        info.variants
+                            .get(name)
+                            .filter(|payload| payload.is_none())
+                            .map(|_| *enum_name)
+                    })
+                    .collect();
+                match matches.as_slice() {
+                    [enum_name] => DataType::Enum(enum_name),
+                    [] => return Err(error(format!("use of undefined identifier '{name}'"))),
+                    _ => return Err(error(format!("ambiguous enum variant '{name}'"))),
+                }
+            };
             require_compatible(data_type, expected)?;
             Ok(expected.unwrap_or(data_type))
         }
@@ -389,6 +452,28 @@ fn infer_expression(
             result
         }
         Expression::Call { name, arguments } => {
+            for (enum_name, info) in structs {
+                if let Some(payload) = info.variants.get(name) {
+                    if arguments.len() != usize::from(payload.is_some()) {
+                        return Err(error(format!("invalid payload for enum variant '{name}'")));
+                    }
+                    if let (Some(payload), Some(argument)) = (payload, arguments.first()) {
+                        infer_expression(argument, scopes, functions, structs, Some(*payload))?;
+                    }
+                    return Ok(DataType::Enum(enum_name));
+                }
+            }
+            for (enum_name, info) in structs {
+                if let Some(payload) = info.variants.get(name) {
+                    if arguments.len() != usize::from(payload.is_some()) {
+                        return Err(error(format!("invalid payload for enum variant '{name}'")));
+                    }
+                    if let (Some(payload), Some(argument)) = (payload, arguments.first()) {
+                        infer_expression(argument, scopes, functions, structs, Some(*payload))?;
+                    }
+                    return Ok(DataType::Enum(enum_name));
+                }
+            }
             let function = functions
                 .get(name)
                 .ok_or_else(|| error(format!("call to undefined function '{name}'")))?;
@@ -517,6 +602,56 @@ fn infer_expression(
                 }
                 _ => Err(error("slicing requires an array or slice")),
             }
+        }
+        Expression::Match { value, arms } => {
+            let value_type = infer_expression(value, scopes, functions, structs, None)?;
+            let enum_name = match value_type {
+                DataType::Enum(name) | DataType::Struct(name) => name,
+                _ => return Err(error("match requires an enum value")),
+            };
+            let info = structs
+                .get(enum_name)
+                .ok_or_else(|| error("unknown enum type"))?;
+            let mut result = None;
+            let mut covered = HashSet::new();
+            for (pattern, body) in arms {
+                let Pattern::Variant { name, binding } = pattern;
+                covered.insert(name.clone());
+                let payload = info
+                    .variants
+                    .get(name)
+                    .ok_or_else(|| error(format!("unknown enum variant '{name}'")))?;
+                if binding.is_some() && payload.is_none() {
+                    return Err(error("variant has no payload"));
+                }
+                scopes.push(HashMap::new());
+                if let (Some(binding), Some(payload)) = (binding, payload) {
+                    scopes.last_mut().unwrap().insert(
+                        binding.clone(),
+                        Symbol {
+                            data_type: *payload,
+                            mutable: false,
+                        },
+                    );
+                }
+                let body_type =
+                    infer_expression(body, scopes, functions, structs, expected.or(result))?;
+                scopes.pop();
+                if let Some(previous) = result {
+                    if body_type != previous {
+                        result = common_numeric_type(previous, body_type);
+                        if result.is_none() {
+                            require_compatible(body_type, Some(previous))?;
+                        }
+                    }
+                } else {
+                    result = Some(body_type);
+                }
+            }
+            if covered.len() != info.variants.len() {
+                return Err(error("match is not exhaustive"));
+            }
+            Ok(result.unwrap_or(DataType::Void))
         }
     }
 }
@@ -677,6 +812,7 @@ fn common_numeric_type(lhs: DataType, rhs: DataType) -> Option<DataType> {
 fn require_compatible(actual: DataType, expected: Option<DataType>) -> Result<(), TypeError> {
     if let Some(expected) = expected
         && actual != expected
+        && !matches!((actual, expected), (DataType::Struct(a), DataType::Enum(b)) | (DataType::Enum(a), DataType::Struct(b)) if a == b)
         && !(actual.is_integer() && expected.is_float())
     {
         return Err(error(format!("expected {expected}, found {actual}")));
@@ -737,6 +873,7 @@ impl DataType {
             Self::Void => 0,
             Self::Struct(_) => 0,
             Self::Array(_, _) | Self::Slice(_) => 0,
+            Self::Enum(_) => 0,
         }
     }
 
@@ -785,6 +922,7 @@ impl std::fmt::Display for DataType {
             Self::Struct(name) => name,
             Self::Array(length, element) => return write!(formatter, "[{length}]{element}"),
             Self::Slice(element) => return write!(formatter, "[]{element}"),
+            Self::Enum(name) => name,
         };
         formatter.write_str(name)
     }
