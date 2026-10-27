@@ -59,6 +59,7 @@ pub(crate) enum LirInstruction {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LirFunction {
     pub(crate) name: String,
+    pub(crate) params: Vec<ValueId>,
     pub(crate) instructions: Vec<LirInstruction>,
     pub(crate) terminator: MirTerminator,
 }
@@ -113,6 +114,7 @@ fn lower_function(function: &MirFunction) -> LirFunction {
     }
     LirFunction {
         name: function.name.clone(),
+        params: function.params.iter().map(|(_, _, value)| *value).collect(),
         instructions,
         terminator: function.blocks[0].terminator.clone(),
     }
