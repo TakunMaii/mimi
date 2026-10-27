@@ -10,7 +10,8 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Lower unconditional `loop` bodies into CFG backedges.
 - [x] Lower `while` and `do-while` into CFG blocks for basic loop bodies.
 - [x] Lower `for` over fixed-size scalar arrays.
-- [ ] Lower `for` over slices.
+- [x] Lower `for` over slices taken directly from fixed-size scalar arrays.
+- [ ] Lower `for` over slice values and string slices.
 - [x] Lower `break` and `continue`, including loop-body `defer` exits.
 - [x] Lower `defer` at each scope exit and return path in LIFO order.
 - [ ] Lower `match` and `if-let`, including enum payload bindings.
@@ -34,7 +35,8 @@ and focused regression coverage; it does not imply support on every target.
 - [ ] Implement function values, indirect calls, and lambda bodies.
 - [ ] Implement instance and static methods in HIR/MIR, including automatic receivers.
 - [x] Allocate virtual registers with liveness and preserve values live across calls.
-- [ ] Support stack-passed arguments and callee-saved register allocation.
+- [x] Pass ARM64 integer arguments beyond x0-x7 on the stack (up to 16 total).
+- [ ] Allocate and preserve callee-saved registers.
 - [ ] Complete package symbol visibility and cross-package linking behavior.
 
 ## Targets and Tooling

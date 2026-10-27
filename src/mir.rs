@@ -685,12 +685,7 @@ impl Builder {
     }
 
     fn lower_for(&mut self, binding: &str, iterable: &Expression, body: &Expression) -> Option<()> {
-        let length = match iterable {
-            Expression::ArrayLiteral(values) => values.len() as u64,
-            Expression::Identifier(name) => *self.array_lengths.get(name)?,
-            _ => return None,
-        };
-        let array = self.expression(iterable)?;
+        let (array, length) = self.lower_array_view(iterable)?;
         let array_slot = self.slot();
         self.emit(MirInstruction::StoreSlot {
             slot: array_slot,
@@ -708,14 +703,9 @@ impl Builder {
             value: zero,
         });
         let length_slot = self.slot();
-        let length_value = self.value();
-        self.emit(MirInstruction::ConstInt {
-            result: length_value,
-            value: length as i128,
-        });
         self.emit(MirInstruction::StoreSlot {
             slot: length_slot,
-            value: length_value,
+            value: length,
         });
         let binding_slot = self.slot();
         let previous_binding = self
@@ -825,6 +815,62 @@ impl Builder {
             self.array_lengths.insert(binding.to_string(), length);
         }
         Some(())
+    }
+
+    fn lower_array_view(&mut self, expression: &Expression) -> Option<(ValueId, ValueId)> {
+        match expression {
+            Expression::ArrayLiteral(values) => {
+                let base = self.expression(expression)?;
+                let length = self.value();
+                self.emit(MirInstruction::ConstInt {
+                    result: length,
+                    value: values.len() as i128,
+                });
+                Some((base, length))
+            }
+            Expression::Identifier(name) => {
+                let length = *self.array_lengths.get(name)?;
+                let base = self.expression(expression)?;
+                let length_value = self.value();
+                self.emit(MirInstruction::ConstInt {
+                    result: length_value,
+                    value: length as i128,
+                });
+                Some((base, length_value))
+            }
+            Expression::Slice { object, start, end } => {
+                let (base, object_length) = self.lower_array_view(object)?;
+                let start = if let Some(start) = start {
+                    self.expression(start)?
+                } else {
+                    let start = self.value();
+                    self.emit(MirInstruction::ConstInt {
+                        result: start,
+                        value: 0,
+                    });
+                    start
+                };
+                let end = if let Some(end) = end {
+                    self.expression(end)?
+                } else {
+                    object_length
+                };
+                let sliced_base = self.value();
+                self.emit(MirInstruction::IndexAddress {
+                    result: sliced_base,
+                    base,
+                    index: start,
+                });
+                let length = self.value();
+                self.emit(MirInstruction::Sub {
+                    result: length,
+                    lhs: end,
+                    rhs: start,
+                });
+                Some((sliced_base, length))
+            }
+            _ => None,
+        }
     }
 
     fn logical(&mut self, lhs: &Expression, rhs: &Expression, and: bool) -> Option<ValueId> {

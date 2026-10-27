@@ -157,6 +157,7 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
         .flat_map(|block| &block.instructions)
         .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
     let frame_size = stack_frame_size(function);
+    size += function.params.len().saturating_sub(8) * 4;
     for block in &function.blocks {
         for instruction in &block.instructions {
             size += match instruction {
@@ -183,11 +184,7 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 LirInstruction::Not { .. } => 2,
                 LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
                 LirInstruction::Phi { .. } => 0,
-                LirInstruction::Call { args, result, .. } => {
-                    argument_moves(args).len()
-                        + 1
-                        + usize::from(result.is_some_and(|value| value.0 != 0))
-                }
+                LirInstruction::Call { args, result, .. } => encoded_call_words(args, *result)?,
             } * 4;
         }
         size += match block.terminator {
@@ -229,6 +226,22 @@ fn stack_frame_size(function: &LirFunction) -> u32 {
 
 fn stack_adjust_words(size: u32) -> usize {
     size.div_ceil(4095) as usize
+}
+
+fn stack_argument_size(argument_count: usize) -> u32 {
+    (argument_count.saturating_sub(8) as u32 * 8).next_multiple_of(16)
+}
+
+fn encoded_call_words(args: &[ValueId], result: Option<ValueId>) -> Result<usize, String> {
+    if args.len() > 16 {
+        return Err("ARM64 backend currently supports at most 16 integer arguments".into());
+    }
+    let stack_args = args.len().saturating_sub(8);
+    Ok(argument_moves(&args[..args.len().min(8)]).len()
+        + stack_args
+        + stack_adjust_words(stack_argument_size(args.len())) * 2
+        + 1
+        + usize::from(result.is_some_and(|value| value.0 != 0)))
 }
 
 fn slot_address_words(slot: crate::mir::SlotId) -> usize {
@@ -293,8 +306,8 @@ fn encode_function(
     offsets: &std::collections::HashMap<String, u64>,
     relocations: &mut Vec<Relocation>,
 ) -> Result<(), String> {
-    if function.params.len() > 8 {
-        return Err("ARM64 backend currently supports at most 8 integer parameters".into());
+    if function.params.len() > 16 {
+        return Err("ARM64 backend currently supports at most 16 integer parameters".into());
     }
     if function
         .blocks
@@ -316,6 +329,13 @@ fn encode_function(
         push_word(bytes, 0xa9bf_7bfd);
     }
     encode_stack_adjust(bytes, frame_size, true)?;
+    for (index, parameter) in function.params.iter().enumerate().skip(8) {
+        let offset = frame_size + u32::from(save_frame) * 16 + (index as u32 - 8) * 8;
+        if offset > 32760 {
+            return Err("ARM64 stack-passed parameter offset exceeds the load range".into());
+        }
+        push_word(bytes, 0xf940_03e0 | ((offset / 8) << 10) | parameter.0);
+    }
     let mut block_offsets = std::collections::HashMap::new();
     let mut cursor = bytes.len();
     for block in &function.blocks {
@@ -446,7 +466,23 @@ fn encode_function(
                     continue;
                 }
                 LirInstruction::Call { result, name, args } => {
-                    encode_parallel_argument_moves(args, bytes);
+                    if args.len() > 16 {
+                        return Err(
+                            "ARM64 backend currently supports at most 16 integer arguments".into(),
+                        );
+                    }
+                    let stack_size = stack_argument_size(args.len());
+                    encode_stack_adjust(bytes, stack_size, true)?;
+                    for (index, argument) in args.iter().enumerate().skip(8) {
+                        let offset = (index as u32 - 8) * 8;
+                        if offset > 32760 {
+                            return Err(
+                                "ARM64 outgoing argument offset exceeds the store range".into()
+                            );
+                        }
+                        push_word(bytes, 0xf900_03e0 | ((offset / 8) << 10) | argument.0);
+                    }
+                    encode_parallel_argument_moves(&args[..args.len().min(8)], bytes);
                     let call_address = bytes.len() as u64;
                     let target_name = format!("_{name}");
                     if let Some(target) = offsets.get(&target_name) {
@@ -465,6 +501,7 @@ fn encode_function(
                         });
                         push_word(bytes, 0x9400_0000);
                     }
+                    encode_stack_adjust(bytes, stack_size, false)?;
                     if let Some(result) = result
                         && result.0 != 0
                     {
@@ -576,9 +613,7 @@ fn block_encoded_size(
             LirInstruction::Not { .. } => 2,
             LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
             LirInstruction::Phi { .. } => 0,
-            LirInstruction::Call { args, result, .. } => {
-                argument_moves(args).len() + 1 + usize::from(result.is_some_and(|v| v.0 != 0))
-            }
+            LirInstruction::Call { args, result, .. } => encoded_call_words(args, *result)?,
         } * 4;
     }
     size += match block.terminator {
@@ -937,8 +972,8 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
     if function.blocks.is_empty() {
         return Err("function has no basic blocks".into());
     }
-    if function.params.len() > 8 {
-        return Err("ARM64 backend currently supports at most 8 integer parameters".into());
+    if function.params.len() > 16 {
+        return Err("ARM64 backend currently supports at most 16 integer parameters".into());
     }
     let label = format!("_{}", function.name);
     assembly.push_str(&format!(".globl {label}\n{label}:\n"));
@@ -952,6 +987,10 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
         assembly.push_str("    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
     }
     emit_stack_adjust(assembly, frame_size, true);
+    for (index, parameter) in function.params.iter().enumerate().skip(8) {
+        let offset = frame_size + u32::from(has_calls) * 16 + (index as u32 - 8) * 8;
+        emit_stack_load(assembly, parameter.0, offset);
+    }
 
     for block in &function.blocks {
         assembly.push_str(&format!(".L{}_{}:\n", function.name, block.id.0));
@@ -1033,13 +1072,19 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     ));
                 }
                 LirInstruction::Call { result, name, args } => {
-                    if args.len() > 8 {
+                    if args.len() > 16 {
                         return Err(
-                            "ARM64 assembly emitter supports at most 8 integer arguments".into(),
+                            "ARM64 assembly emitter supports at most 16 integer arguments".into(),
                         );
                     }
-                    emit_register_moves(assembly, &argument_moves(args));
+                    let stack_size = stack_argument_size(args.len());
+                    emit_stack_adjust(assembly, stack_size, true);
+                    for (index, argument) in args.iter().enumerate().skip(8) {
+                        emit_stack_store(assembly, argument.0, (index as u32 - 8) * 8);
+                    }
+                    emit_register_moves(assembly, &argument_moves(&args[..args.len().min(8)]));
                     assembly.push_str(&format!("    bl _{name}\n"));
+                    emit_stack_adjust(assembly, stack_size, false);
                     if let Some(result) = result {
                         if result.0 != 0 {
                             assembly.push_str(&format!("    mov x{}, x0\n", result.0));

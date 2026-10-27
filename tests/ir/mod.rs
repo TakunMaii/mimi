@@ -339,6 +339,38 @@ fn builds_and_runs_for_loops_over_fixed_arrays() {
 }
 
 #[test]
+fn builds_and_runs_for_loops_over_array_slices() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_array_slice_for_source_{}.mi",
+        std::process::id()
+    ));
+    let path = std::env::temp_dir().join(format!(
+        "mimi_array_slice_for_codegen_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { values := [1, 2, 3, 4] start := 2 sum := 0 for item in values[1:3] { sum = sum + item } for item in values[start:] { sum = sum + item } sum }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(12));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_break_continue_and_loop_defers() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
@@ -460,13 +492,14 @@ fn emits_host_assembly_for_calls_and_control_flow() {
         return;
     }
     let ast = parse(tokenize(
-        r#"extern print : fn(str : []u8)void identity :: fn (value : i32) i32 { value } main :: fn () i32 { i := 0 total := 0 while i < 3 { total = total + identity(i) i = i + 1 } if total == 3 { print("ok") 10 } else { 1 } }"#.chars(),
+        r#"extern print : fn(str : []u8)void identity :: fn (value : i32) i32 { value } sum10 :: fn (a : i32, b : i32, c : i32, d : i32, e : i32, f : i32, g : i32, h : i32, i : i32, j : i32) i32 { a + b + c + d + e + f + g + h + i + j } main :: fn () i32 { sum10(1, 2, 3, 4, 5, 6, 7, 8, 9, 10) i := 0 total := 0 while i < 3 { total = total + identity(i) i = i + 1 } if total == 3 { print("ok") 10 } else { 1 } }"#.chars(),
     ));
     let hir = hir::lower_ast(&ast);
     let mir = mir::lower_hir(&hir);
     let lir = lir::lower_mir(&mir, &lir::HostTarget);
     let assembly = codegen::emit_assembly(&lir).unwrap();
     assert!(assembly.contains("bl _identity"));
+    assert!(assembly.contains("bl _sum10"));
     assert!(assembly.contains("bl _print"));
     assert!(assembly.contains("adrp x"));
     assert!(assembly.contains(".section __TEXT,__const"));
@@ -475,6 +508,7 @@ fn emits_host_assembly_for_calls_and_control_flow() {
     assert!(assembly.contains(".Lmain_"));
     assert!(assembly.contains("stp x29, x30"));
     assert!(assembly.contains("ldp x29, x30"));
+    assert!(assembly.contains("ldr x8, [sp, #"));
     let assembly_path =
         std::env::temp_dir().join(format!("mimi_text_assembly_{}.s", std::process::id()));
     let object_path =
@@ -510,6 +544,33 @@ fn builds_and_runs_a_minimal_host_executable() {
     .unwrap();
     let status = std::process::Command::new(&path).status().unwrap();
     assert_eq!(status.code(), Some(7));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn builds_and_runs_stack_passed_integer_arguments() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_stack_args_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_stack_args_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "sum10 :: fn (a : i32, b : i32, c : i32, d : i32, e : i32, f : i32, g : i32, h : i32, i : i32, j : i32) i32 { a + b + c + d + e + f + g + h + i + j } main :: fn () i32 { sum10(1, 2, 3, 4, 5, 6, 7, 8, 9, 10) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(55));
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();
 }

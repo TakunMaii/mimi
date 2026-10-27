@@ -50,8 +50,8 @@ pub(crate) fn allocate_registers(function: &LirFunction) -> Result<LirFunction, 
 
     let mut colors = HashMap::<ValueId, u32>::new();
     for (index, parameter) in function.params.iter().enumerate() {
-        if index >= 8 {
-            return Err("ARM64 register allocator supports at most 8 integer parameters".into());
+        if index >= 16 {
+            return Err("ARM64 register allocator supports at most 16 integer parameters".into());
         }
         colors.insert(*parameter, index as u32);
     }
