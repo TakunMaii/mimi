@@ -87,8 +87,7 @@ fn encode_module(module: &LirModule) -> Result<(Vec<u8>, Vec<(String, u64)>), St
     let mut text = Vec::new();
     let mut symbols = Vec::new();
     for function in &module.functions {
-        let base = text.len() as u64;
-        symbols.push((format!("_{}", function.name), base));
+        symbols.push((format!("_{}", function.name), text.len() as u64));
         encode_function(function, &mut text, &offsets)?;
     }
     Ok((text, symbols))
@@ -96,6 +95,10 @@ fn encode_module(module: &LirModule) -> Result<(Vec<u8>, Vec<(String, u64)>), St
 
 fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
     let mut size = 0;
+    let has_calls = function
+        .instructions
+        .iter()
+        .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
     for instruction in &function.instructions {
         size += match instruction {
             LirInstruction::LoadImmediate { value, .. } => {
@@ -107,6 +110,7 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 }
                 if chunks == 0 { 1 } else { chunks }
             }
+            LirInstruction::LoadAddress { .. } => 2,
             LirInstruction::Add { .. }
             | LirInstruction::Sub { .. }
             | LirInstruction::Mul { .. }
@@ -124,10 +128,13 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
     if matches!(function.terminator, MirTerminator::Return(Some(value)) if value.0 != 0) {
         size += 4;
     }
+    if has_calls && function.name != "main" {
+        size += 4;
+    }
     size += if function.name == "main" {
         8 + usize::from(matches!(function.terminator, MirTerminator::Return(None))) * 4
     } else {
-        4
+        4 + usize::from(has_calls) * 4
     };
     Ok(size)
 }
@@ -148,11 +155,23 @@ fn encode_function(
     {
         return Err("ARM64 prototype backend supports virtual registers x0 through x15".into());
     }
+    let has_calls = function
+        .instructions
+        .iter()
+        .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
+    if has_calls && function.name != "main" {
+        push_word(bytes, 0xa9bf_7bfd);
+    }
     for instruction in &function.instructions {
         let word = match instruction {
             LirInstruction::LoadImmediate { register, value } => {
                 encode_immediate(register.0, *value as u64, bytes)?;
                 continue;
+            }
+            LirInstruction::LoadAddress { symbol, .. } => {
+                return Err(format!(
+                    "string address '{symbol}' is not supported by the current object writer"
+                ));
             }
             LirInstruction::Add {
                 destination,
@@ -180,15 +199,17 @@ fn encode_function(
                         push_word(bytes, 0xaa00_03e0 | (argument.0 << 16) | index as u32);
                     }
                 }
-                let target = offsets
-                    .get(&format!("_{name}"))
-                    .ok_or_else(|| format!("external call '{name}' requires symbol relocation"))?;
                 let call_address = bytes.len() as u64;
-                let delta = (*target as i64 - call_address as i64) / 4;
-                if !(-(1 << 25)..(1 << 25)).contains(&delta) {
-                    return Err(format!("call target '{name}' is out of ARM64 branch range"));
+                let target_name = format!("_{name}");
+                if let Some(target) = offsets.get(&target_name) {
+                    let delta = (*target as i64 - call_address as i64) / 4;
+                    if !(-(1 << 25)..(1 << 25)).contains(&delta) {
+                        return Err(format!("call target '{name}' is out of ARM64 branch range"));
+                    }
+                    push_word(bytes, 0x9400_0000 | (delta as u32 & 0x03ff_ffff));
+                } else {
+                    return Err(format!("external call '{name}' requires symbol relocation"));
                 }
-                push_word(bytes, 0x9400_0000 | (delta as u32 & 0x03ff_ffff));
                 if let Some(result) = result
                     && result.0 != 0
                 {
@@ -215,6 +236,9 @@ fn encode_function(
         encode_immediate(16, 1, bytes)?;
         push_word(bytes, 0xd400_1001); // svc #0x80
     } else {
+        if has_calls {
+            push_word(bytes, 0xa8c1_7bfd);
+        }
         push_word(bytes, 0xd65f_03c0); // ret
     }
     Ok(())
@@ -223,6 +247,7 @@ fn encode_function(
 fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
     match instruction {
         LirInstruction::LoadImmediate { register, .. } => vec![*register],
+        LirInstruction::LoadAddress { register, .. } => vec![*register],
         LirInstruction::Add {
             destination,
             lhs,
@@ -377,6 +402,11 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     ));
                 }
                 assembly.push_str(&format!("    mov x{}, #{}\n", register.0, value));
+            }
+            LirInstruction::LoadAddress { symbol, .. } => {
+                return Err(format!(
+                    "string address '{symbol}' requires data-section relocation support"
+                ));
             }
             LirInstruction::Add {
                 destination,

@@ -34,6 +34,10 @@ pub(crate) enum LirInstruction {
         register: ValueId,
         value: i128,
     },
+    LoadAddress {
+        register: ValueId,
+        symbol: String,
+    },
     Add {
         destination: ValueId,
         lhs: ValueId,
@@ -73,16 +77,23 @@ pub(crate) struct LirFunction {
 pub(crate) struct LirModule {
     pub(crate) target: TargetArch,
     pub(crate) functions: Vec<LirFunction>,
+    pub(crate) strings: Vec<(String, Vec<u8>)>,
 }
 
 pub(crate) fn lower_mir<T: Target>(module: &MirModule, target: &T) -> LirModule {
+    let mut strings = Vec::new();
     LirModule {
         target: target.arch(),
-        functions: module.functions.iter().map(lower_function).collect(),
+        functions: module
+            .functions
+            .iter()
+            .map(|function| lower_function(function, &mut strings))
+            .collect(),
+        strings,
     }
 }
 
-fn lower_function(function: &MirFunction) -> LirFunction {
+fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) -> LirFunction {
     let mut instructions = Vec::new();
     for instruction in &function.blocks[0].instructions {
         instructions.push(match instruction {
@@ -114,6 +125,14 @@ fn lower_function(function: &MirFunction) -> LirFunction {
                 register: *result,
                 value: i128::from(*value),
             },
+            MirInstruction::ConstString { result, bytes } => {
+                let symbol = format!("_mimi_string_{}", strings.len());
+                strings.push((symbol.clone(), bytes.clone()));
+                LirInstruction::LoadAddress {
+                    register: *result,
+                    symbol,
+                }
+            }
             MirInstruction::Call { result, name, args } => LirInstruction::Call {
                 result: *result,
                 name: name.clone(),

@@ -93,3 +93,19 @@ fn builds_and_runs_an_internal_function_call() {
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn lowers_string_literals_to_data_symbols_in_lir() {
+    let ast = parse(tokenize(r#"main :: fn () []u8 { "hello" }"#.chars()));
+    let hir = hir::lower_ast(&ast);
+    let mir = mir::lower_hir(&hir);
+    let lir = lir::lower_mir(&mir, &lir::HostTarget);
+    assert_eq!(
+        lir.strings,
+        vec![("_mimi_string_0".into(), b"hello".to_vec())]
+    );
+    assert!(matches!(
+        lir.functions[0].instructions.as_slice(),
+        [lir::LirInstruction::LoadAddress { .. }]
+    ));
+}

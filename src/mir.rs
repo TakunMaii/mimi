@@ -17,6 +17,10 @@ pub(crate) enum MirInstruction {
         result: ValueId,
         value: bool,
     },
+    ConstString {
+        result: ValueId,
+        bytes: Vec<u8>,
+    },
     Add {
         result: ValueId,
         lhs: ValueId,
@@ -107,11 +111,28 @@ impl Builder {
                 });
                 Some(result)
             }
+            Expression::LiteralString(value) => {
+                let result = self.value();
+                self.instructions.push(MirInstruction::ConstString {
+                    result,
+                    bytes: value.as_bytes().to_vec(),
+                });
+                Some(result)
+            }
             Expression::Call { name, arguments } => {
-                let args = arguments
-                    .iter()
-                    .map(|argument| self.expression(argument))
-                    .collect::<Option<Vec<_>>>()?;
+                let mut args = Vec::new();
+                for argument in arguments {
+                    let value = self.expression(argument)?;
+                    args.push(value);
+                    if let Expression::LiteralString(text) = argument {
+                        let length = self.value();
+                        self.instructions.push(MirInstruction::ConstInt {
+                            result: length,
+                            value: text.len() as i128,
+                        });
+                        args.push(length);
+                    }
+                }
                 let result = self.value();
                 self.instructions.push(MirInstruction::Call {
                     result: Some(result),
@@ -166,6 +187,11 @@ fn lower_function(function: &HirFunction) -> MirFunction {
         })
         .collect();
     let result = builder.expression(&function.body);
+    let result = if function.result == HirType::Void {
+        None
+    } else {
+        result
+    };
     MirFunction {
         name: function.name.clone(),
         params,
