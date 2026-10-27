@@ -104,6 +104,44 @@ fn tokenizes_boolean_literals() {
 }
 
 #[test]
+fn tokenizes_import_strings_and_pub() {
+    assert_eq!(
+        tokenize(r#"pub std :: @import("std")"#.chars()),
+        vec![
+            Token::Pub,
+            Token::Identifier("std".into()),
+            Token::Colon,
+            Token::Colon,
+            Token::At,
+            Token::Identifier("import".into()),
+            Token::LeftParen,
+            Token::LiteralString("std".into()),
+            Token::RightParen,
+        ]
+    );
+}
+
+#[test]
+fn parses_import_alias_and_public_declaration() {
+    assert_eq!(
+        parse(tokenize(
+            r#"std :: @import("std") pub answer := 42"#.chars()
+        )),
+        vec![
+            ASTNode::Import {
+                alias: "std".into(),
+                path: "std".into(),
+            },
+            ASTNode::Public(Box::new(ASTNode::VariableDefinition {
+                name: "answer".into(),
+                data_type: None,
+                value: Expression::LiteralNumber("42".into()),
+            })),
+        ]
+    );
+}
+
+#[test]
 fn parses_explicit_and_inferred_types() {
     let type_cases = [
         ("u8", DataType::U8),

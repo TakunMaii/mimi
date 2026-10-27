@@ -233,6 +233,24 @@ fn rejects_if_else_expressions_with_incompatible_branches() {
 }
 
 #[test]
+fn imports_public_functions_through_package_namespaces() {
+    let path = std::env::temp_dir().join(format!("mimi_import_{}.mimi", std::process::id()));
+    std::fs::write(
+        &path,
+        "pub add :: fn (left : i32, right : i32) i32 { left + right } hidden :: fn () i32 { 0 }",
+    )
+    .unwrap();
+    let source = format!(
+        "std :: @import(\"{}\") result := std.add(1, 2)",
+        path.display()
+    );
+    let ast = parse(tokenize(source.chars()));
+    let types = check(&ast).unwrap();
+    assert_eq!(types["result"], DataType::I32);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn rejects_non_boolean_if_and_while_conditions() {
     let ast = parse(tokenize("if 1 {} while 2 {}".chars()));
     let errors = check(&ast).unwrap_err();

@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
+use crate::lexer::tokenize;
 use crate::parser::{ASTNode, DataType, Expression, Pattern};
 
 #[derive(Debug, PartialEq)]
@@ -41,11 +43,101 @@ fn resolve_self(data_type: DataType, owner: &'static str) -> DataType {
     }
 }
 
+fn imported_exports(path: &str) -> Result<HashMap<String, DataType>, String> {
+    let mut source_path = PathBuf::from(path);
+    if !source_path.exists() && source_path.extension().is_none() {
+        source_path.set_extension("mimi");
+    }
+    let source = std::fs::read_to_string(&source_path)
+        .map_err(|err| format!("cannot read '{}': {err}", source_path.display()))?;
+    let ast = crate::parser::parse(tokenize(source.chars()));
+    let mut exports = HashMap::new();
+    for node in ast {
+        let ASTNode::Public(declaration) = node else {
+            continue;
+        };
+        match *declaration {
+            ASTNode::FunctionDefinition {
+                name,
+                parameters,
+                return_type,
+                ..
+            } => {
+                exports.insert(
+                    name,
+                    DataType::Function(
+                        Box::leak(
+                            parameters
+                                .into_iter()
+                                .map(|(_, data_type)| data_type)
+                                .collect::<Vec<_>>()
+                                .into_boxed_slice(),
+                        ),
+                        Box::leak(Box::new(return_type)),
+                    ),
+                );
+            }
+            ASTNode::CompileTimeConstant {
+                name,
+                data_type,
+                value,
+            }
+            | ASTNode::VariableDefinition {
+                name,
+                data_type,
+                value,
+            } => {
+                if let Some(data_type) = data_type.or_else(|| imported_literal_type(&value)) {
+                    exports.insert(name, data_type);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(exports)
+}
+
+fn imported_literal_type(expression: &Expression) -> Option<DataType> {
+    match expression {
+        Expression::LiteralBool(_) => Some(DataType::Bool),
+        Expression::LiteralNumber(value) if value.contains('.') => Some(DataType::F64),
+        Expression::LiteralNumber(_) | Expression::Negate(_) => Some(DataType::I32),
+        _ => None,
+    }
+}
+
 pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<TypeError>> {
     let mut scopes = vec![HashMap::new()];
     let mut functions = HashMap::new();
     let mut structs = HashMap::new();
     let mut errors = Vec::new();
+    let mut expanded_nodes = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        match node {
+            ASTNode::Public(inner) => expanded_nodes.push((**inner).clone()),
+            other => expanded_nodes.push(other.clone()),
+        }
+    }
+    let nodes = expanded_nodes.as_slice();
+
+    for node in nodes {
+        if let ASTNode::Import { alias, path } = node {
+            match imported_exports(path) {
+                Ok(exports) => {
+                    for (name, data_type) in exports {
+                        scopes[0].insert(
+                            format!("{alias}.{name}"),
+                            Symbol {
+                                data_type,
+                                mutable: false,
+                            },
+                        );
+                    }
+                }
+                Err(message) => errors.push(error(format!("import '{path}': {message}"))),
+            }
+        }
+    }
 
     for node in nodes {
         if let ASTNode::EnumDefinition { name, variants } = node {
@@ -301,6 +393,7 @@ fn check_statement(
         ASTNode::Return(_) => Err(error("return is only valid inside a function")),
         ASTNode::StructDefinition { .. } => Ok(()),
         ASTNode::EnumDefinition { .. } => Ok(()),
+        ASTNode::Import { .. } | ASTNode::Public(_) => Ok(()),
         ASTNode::IfLet {
             variant,
             binding,
@@ -677,6 +770,12 @@ fn infer_expression(
             Ok(result)
         }
         Expression::MemberAccess { object, member } => {
+            if let Expression::Identifier(package) = object.as_ref() {
+                let qualified = format!("{package}.{member}");
+                if let Some(symbol) = lookup(scopes, &qualified) {
+                    return Ok(symbol.data_type);
+                }
+            }
             let object_type = infer_expression(object, scopes, functions, structs, None)?;
             let struct_name = match object_type {
                 DataType::Struct(name) => name,
@@ -708,6 +807,33 @@ fn infer_expression(
             )))
         }
         Expression::CallValue { callee, arguments } => {
+            if let Expression::MemberAccess { object, member } = callee.as_ref()
+                && let Expression::Identifier(package) = object.as_ref()
+            {
+                let qualified = format!("{package}.{member}");
+                if let Some(Symbol {
+                    data_type: DataType::Function(parameters, return_type),
+                    ..
+                }) = lookup(scopes, &qualified).copied()
+                {
+                    if arguments.len() != parameters.len() {
+                        return Err(error(format!(
+                            "wrong number of arguments for '{qualified}'"
+                        )));
+                    }
+                    for (argument, parameter_type) in arguments.iter().zip(parameters.iter()) {
+                        infer_expression(
+                            argument,
+                            scopes,
+                            functions,
+                            structs,
+                            Some(*parameter_type),
+                        )?;
+                    }
+                    require_compatible(*return_type, expected)?;
+                    return Ok(*return_type);
+                }
+            }
             if let Expression::MemberAccess { object, member } = callee.as_ref() {
                 let object_type = infer_expression(object, scopes, functions, structs, None)?;
                 let struct_name = match object_type {

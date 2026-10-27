@@ -1,6 +1,7 @@
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Token {
     Identifier(String),
+    LiteralString(String),
     LiteralNumber(String),
     LiteralBool(bool),
     Fn,
@@ -10,6 +11,7 @@ pub(crate) enum Token {
     FatArrow,
     If,
     Else,
+    Pub,
     Do,
     While,
     For,
@@ -29,6 +31,7 @@ pub(crate) enum Token {
     GreaterThanOrEqual,
     AndAnd,
     Ampersand,
+    At,
     OrOr,
     Bang,
     Plus,
@@ -70,6 +73,7 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                 "match" => Token::Match,
                 "if" => Token::If,
                 "else" => Token::Else,
+                "pub" => Token::Pub,
                 "do" => Token::Do,
                 "while" => Token::While,
                 "for" => Token::For,
@@ -79,6 +83,30 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                 "return" => Token::Return,
                 _ => Token::Identifier(identifier),
             });
+        } else if ch == '"' {
+            chars.next();
+            let mut value = String::new();
+            let mut closed = false;
+            while let Some(next) = chars.next() {
+                match next {
+                    '"' => {
+                        closed = true;
+                        break;
+                    }
+                    '\\' => match chars.next() {
+                        Some('"') => value.push('"'),
+                        Some('\\') => value.push('\\'),
+                        Some('n') => value.push('\n'),
+                        Some('r') => value.push('\r'),
+                        Some('t') => value.push('\t'),
+                        Some(other) => panic!("unsupported string escape: \\{other}"),
+                        None => break,
+                    },
+                    other => value.push(other),
+                }
+            }
+            assert!(closed, "unterminated string literal");
+            result.push(Token::LiteralString(value));
         } else if ch.is_ascii_digit() {
             let mut number = String::new();
             while let Some(&ch) = chars.peek() {
@@ -146,6 +174,7 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                         result.push(Token::Ampersand);
                     }
                 }
+                '@' => result.push(Token::At),
                 '|' => {
                     assert_eq!(chars.next(), Some('|'), "expected '||'");
                     result.push(Token::OrOr);

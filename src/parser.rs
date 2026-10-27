@@ -174,6 +174,11 @@ pub(crate) enum ASTNode {
         then_branch: Expression,
         else_branch: Option<Expression>,
     },
+    Import {
+        alias: String,
+        path: String,
+    },
+    Public(Box<ASTNode>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -208,6 +213,10 @@ where
     I: Iterator<Item = Token> + Clone,
 {
     match token {
+        Token::Pub => ASTNode::Public(Box::new(parse_statement_token(
+            tokens.next().expect("expected declaration after 'pub'"),
+            tokens,
+        ))),
         Token::Identifier(name) => parse_statement_after_name(name, tokens),
         Token::If => parse_if(tokens),
         Token::Match => ASTNode::Expression(parse_match(tokens)),
@@ -461,6 +470,9 @@ where
                     tokens.next();
                     return parse_function(name, tokens);
                 }
+                if matches!(tokens.peek(), Some(Token::At)) {
+                    return parse_import(name, tokens);
+                }
                 (2, None)
             }
             Some(Token::Identifier(type_name)) => {
@@ -517,6 +529,33 @@ where
             value,
         },
     }
+}
+
+fn parse_import<I>(alias: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    assert!(
+        matches!(tokens.next(), Some(Token::At)),
+        "expected '@import'"
+    );
+    assert!(
+        matches!(tokens.next(), Some(Token::Identifier(name)) if name == "import"),
+        "expected '@import'"
+    );
+    assert!(
+        matches!(tokens.next(), Some(Token::LeftParen)),
+        "expected '(' after '@import'"
+    );
+    let path = match tokens.next() {
+        Some(Token::LiteralString(path)) => path,
+        _ => panic!("expected string path in '@import'"),
+    };
+    assert!(
+        matches!(tokens.next(), Some(Token::RightParen)),
+        "expected ')' after import path"
+    );
+    ASTNode::Import { alias, path }
 }
 
 fn parse_function<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
@@ -1153,9 +1192,13 @@ where
 
         let first = tokens.next().unwrap();
         let item = match first {
-            Token::If | Token::Do | Token::While | Token::For | Token::Loop | Token::Defer => {
-                parse_statement_token(first, tokens)
-            }
+            Token::Pub
+            | Token::If
+            | Token::Do
+            | Token::While
+            | Token::For
+            | Token::Loop
+            | Token::Defer => parse_statement_token(first, tokens),
             Token::Return => {
                 let value = if matches!(tokens.peek(), Some(Token::RightBrace)) {
                     None
