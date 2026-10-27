@@ -204,6 +204,17 @@ fn checks_control_flow_conditions() {
 }
 
 #[test]
+fn checks_do_while_conditions_as_booleans() {
+    let valid = parse(tokenize("do { value := 1 } while true".chars()));
+    check(&valid).unwrap();
+
+    let invalid = parse(tokenize("do {} while 1".chars()));
+    let errors = check(&invalid).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].message.contains("bool"));
+}
+
+#[test]
 fn rejects_non_boolean_if_and_while_conditions() {
     let ast = parse(tokenize("if 1 {} while 2 {}".chars()));
     let errors = check(&ast).unwrap_err();

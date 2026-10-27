@@ -143,6 +143,10 @@ pub(crate) enum ASTNode {
         condition: Expression,
         body: Expression,
     },
+    DoWhile {
+        body: Expression,
+        condition: Expression,
+    },
     For {
         binding: String,
         iterable: Expression,
@@ -202,6 +206,7 @@ where
         Token::Identifier(name) => parse_statement_after_name(name, tokens),
         Token::If => parse_if(tokens),
         Token::Match => ASTNode::Expression(parse_match(tokens)),
+        Token::Do => parse_do_while(tokens),
         Token::While => parse_while(tokens),
         Token::For => parse_for(tokens),
         Token::Loop => parse_loop(tokens),
@@ -359,6 +364,19 @@ where
         condition,
         body: parse_block_expression(tokens),
     }
+}
+
+fn parse_do_while<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let body = parse_block_expression(tokens);
+    assert!(
+        matches!(tokens.next(), Some(Token::While)),
+        "expected 'while' after do-while body"
+    );
+    let condition = parse_expression(tokens, 0);
+    ASTNode::DoWhile { body, condition }
 }
 
 fn parse_for<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
@@ -1111,7 +1129,7 @@ where
 
         let first = tokens.next().unwrap();
         let item = match first {
-            Token::If | Token::While | Token::For | Token::Loop | Token::Defer => {
+            Token::If | Token::Do | Token::While | Token::For | Token::Loop | Token::Defer => {
                 parse_statement_token(first, tokens)
             }
             Token::Return => {

@@ -354,6 +354,11 @@ fn check_statement(
             infer_expression(body, scopes, functions, structs, None)?;
             Ok(())
         }
+        ASTNode::DoWhile { body, condition } => {
+            infer_expression(body, scopes, functions, structs, None)?;
+            infer_expression(condition, scopes, functions, structs, Some(DataType::Bool))?;
+            Ok(())
+        }
         ASTNode::For {
             binding,
             iterable,

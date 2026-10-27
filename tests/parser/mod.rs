@@ -347,6 +347,12 @@ fn parses_control_flow_statements() {
 }
 
 #[test]
+fn parses_do_while_statements() {
+    let nodes = parse(tokenize("do { work := 1 } while done".chars()));
+    assert!(matches!(nodes.as_slice(), [ASTNode::DoWhile { .. }]));
+}
+
+#[test]
 fn parses_array_types_literals_indexing_and_slices() {
     let nodes = parse(tokenize(
         "values : [3]i32 = [1, 2, 3] first := values[0] part : []i32 = values[1:3]".chars(),
