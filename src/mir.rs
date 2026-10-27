@@ -150,6 +150,9 @@ struct Builder {
     variables: std::collections::HashMap<String, Variable>,
     array_lengths: std::collections::HashMap<String, u64>,
     enum_tags: std::collections::HashMap<String, u64>,
+    struct_fields: std::collections::HashMap<String, Vec<(String, Option<Expression>)>>,
+    function_struct_params: std::collections::HashMap<String, Vec<Option<String>>>,
+    variable_structs: std::collections::HashMap<String, String>,
     defer_scopes: Vec<Vec<Expression>>,
     loop_targets: Vec<LoopTargets>,
 }
@@ -280,6 +283,29 @@ impl Builder {
                 self.emit(MirInstruction::LoadIndirect { result, address });
                 Some(result)
             }
+            Expression::StructLiteral { type_name, fields } => {
+                self.lower_struct_literal((*type_name)?, fields)
+            }
+            Expression::MemberAccess { object, member } => {
+                let struct_name = self.expression_struct_name(object)?;
+                let fields = self.struct_fields.get(&struct_name)?;
+                let field_index = fields.iter().position(|(name, _)| name == member)?;
+                let base = self.expression(object)?;
+                let index = self.value();
+                self.emit(MirInstruction::ConstInt {
+                    result: index,
+                    value: field_index as i128,
+                });
+                let address = self.value();
+                self.emit(MirInstruction::IndexAddress {
+                    result: address,
+                    base,
+                    index,
+                });
+                let result = self.value();
+                self.emit(MirInstruction::LoadIndirect { result, address });
+                Some(result)
+            }
             Expression::LiteralNumber(text) => {
                 let result = self.value();
                 let value = text.parse().ok()?;
@@ -360,8 +386,22 @@ impl Builder {
             Expression::Match { value, arms } => self.lower_match(value, arms),
             Expression::Call { name, arguments } => {
                 let mut args = Vec::new();
-                for argument in arguments {
-                    let value = self.expression(argument)?;
+                let parameter_structs = self.function_struct_params.get(name).cloned();
+                for (index, argument) in arguments.iter().enumerate() {
+                    let expected_struct = parameter_structs
+                        .as_ref()
+                        .and_then(|parameters| parameters.get(index))
+                        .and_then(Option::as_deref);
+                    let value = match (argument, expected_struct) {
+                        (
+                            Expression::StructLiteral {
+                                type_name: None,
+                                fields,
+                            },
+                            Some(struct_name),
+                        ) => self.lower_struct_literal(struct_name, fields)?,
+                        _ => self.expression(argument)?,
+                    };
                     args.push(value);
                     if let Expression::LiteralString(text) = argument {
                         let length = self.value();
@@ -427,6 +467,7 @@ impl Builder {
             Expression::Block(items) => {
                 let outer_variables = self.variables.clone();
                 let outer_array_lengths = self.array_lengths.clone();
+                let outer_variable_structs = self.variable_structs.clone();
                 self.defer_scopes.push(Vec::new());
                 let result = (|| {
                     let mut result = None;
@@ -437,6 +478,14 @@ impl Builder {
                                 data_type,
                                 value,
                             } => {
+                                let struct_name = match data_type {
+                                    Some(crate::parser::DataType::Struct(name))
+                                        if self.struct_fields.contains_key(*name) =>
+                                    {
+                                        Some((*name).to_string())
+                                    }
+                                    _ => self.expression_struct_name(value),
+                                };
                                 let array_length = match data_type {
                                     Some(crate::parser::DataType::Array(length, _)) => {
                                         Some(*length)
@@ -448,7 +497,16 @@ impl Builder {
                                         _ => None,
                                     },
                                 };
-                                let value = self.expression(value)?;
+                                let value = match (value, struct_name.as_deref()) {
+                                    (
+                                        Expression::StructLiteral {
+                                            type_name: None,
+                                            fields,
+                                        },
+                                        Some(struct_name),
+                                    ) => self.lower_struct_literal(struct_name, fields)?,
+                                    _ => self.expression(value)?,
+                                };
                                 let slot = self.slot();
                                 self.emit(MirInstruction::StoreSlot { slot, value });
                                 self.variables.insert(name.clone(), Variable::Slot(slot));
@@ -457,12 +515,22 @@ impl Builder {
                                 } else {
                                     self.array_lengths.remove(name);
                                 }
+                                if let Some(struct_name) = struct_name {
+                                    self.variable_structs.insert(name.clone(), struct_name);
+                                } else {
+                                    self.variable_structs.remove(name);
+                                }
                             }
                             crate::parser::ASTNode::CompileTimeConstant { name, value, .. } => {
+                                let struct_name = self.expression_struct_name(value);
                                 let value = self.expression(value)?;
                                 self.variables.insert(name.clone(), Variable::Value(value));
+                                if let Some(struct_name) = struct_name {
+                                    self.variable_structs.insert(name.clone(), struct_name);
+                                }
                             }
                             crate::parser::ASTNode::Assignment { name, value } => {
+                                let struct_name = self.expression_struct_name(value);
                                 let value = self.expression(value)?;
                                 match self.variables.get(name).copied() {
                                     Some(Variable::Slot(slot)) => {
@@ -471,6 +539,9 @@ impl Builder {
                                     _ => {
                                         self.variables.insert(name.clone(), Variable::Value(value));
                                     }
+                                }
+                                if let Some(struct_name) = struct_name {
+                                    self.variable_structs.insert(name.clone(), struct_name);
                                 }
                             }
                             crate::parser::ASTNode::IndexAssignment {
@@ -491,6 +562,30 @@ impl Builder {
                             }
                             crate::parser::ASTNode::PointerAssignment { pointer, value } => {
                                 let address = self.expression(pointer)?;
+                                let value = self.expression(value)?;
+                                self.emit(MirInstruction::StoreIndirect { address, value });
+                            }
+                            crate::parser::ASTNode::MemberAssignment {
+                                object,
+                                member,
+                                value,
+                            } => {
+                                let struct_name = self.expression_struct_name(object)?;
+                                let fields = self.struct_fields.get(&struct_name)?;
+                                let field_index =
+                                    fields.iter().position(|(name, _)| name == member)?;
+                                let base = self.expression(object)?;
+                                let index = self.value();
+                                self.emit(MirInstruction::ConstInt {
+                                    result: index,
+                                    value: field_index as i128,
+                                });
+                                let address = self.value();
+                                self.emit(MirInstruction::IndexAddress {
+                                    result: address,
+                                    base,
+                                    index,
+                                });
                                 let value = self.expression(value)?;
                                 self.emit(MirInstruction::StoreIndirect { address, value });
                             }
@@ -591,6 +686,7 @@ impl Builder {
                 self.defer_scopes.pop();
                 self.variables = outer_variables;
                 self.array_lengths = outer_array_lengths;
+                self.variable_structs = outer_variable_structs;
                 result
             }
             _ => None,
@@ -1027,11 +1123,50 @@ impl Builder {
         });
         Some(result)
     }
+
+    fn expression_struct_name(&self, expression: &Expression) -> Option<String> {
+        match expression {
+            Expression::Identifier(name) => self.variable_structs.get(name).cloned(),
+            Expression::StructLiteral {
+                type_name: Some(name),
+                ..
+            } => Some((*name).to_string()),
+            Expression::AddressOf(inner) => self.expression_struct_name(inner),
+            _ => None,
+        }
+    }
+
+    fn lower_struct_literal(
+        &mut self,
+        struct_name: &str,
+        provided: &[(String, Expression)],
+    ) -> Option<ValueId> {
+        let fields = self.struct_fields.get(struct_name)?.clone();
+        let base = self.slot();
+        self.next_slot += fields.len().saturating_sub(1) as u32;
+        for (index, (field_name, default)) in fields.iter().enumerate() {
+            let expression = provided
+                .iter()
+                .find(|(name, _)| name == field_name)
+                .map(|(_, expression)| expression)
+                .or(default.as_ref())?;
+            let value = self.expression(expression)?;
+            self.emit(MirInstruction::StoreSlot {
+                slot: SlotId(base.0 + index as u32),
+                value,
+            });
+        }
+        let result = self.value();
+        self.emit(MirInstruction::SlotAddress { result, slot: base });
+        Some(result)
+    }
 }
 
 fn lower_function(
     function: &HirFunction,
     enum_tags: &std::collections::HashMap<String, u64>,
+    struct_fields: &std::collections::HashMap<String, Vec<(String, Option<Expression>)>>,
+    function_struct_params: &std::collections::HashMap<String, Vec<Option<String>>>,
 ) -> MirFunction {
     let mut builder = Builder {
         next_value: 0,
@@ -1045,6 +1180,9 @@ fn lower_function(
         variables: std::collections::HashMap::new(),
         array_lengths: std::collections::HashMap::new(),
         enum_tags: enum_tags.clone(),
+        struct_fields: struct_fields.clone(),
+        function_struct_params: function_struct_params.clone(),
+        variable_structs: std::collections::HashMap::new(),
         defer_scopes: Vec::new(),
         loop_targets: Vec::new(),
     };
@@ -1057,6 +1195,9 @@ fn lower_function(
             builder.variables.insert(name.clone(), Variable::Slot(slot));
             if let HirType::Array { length, .. } = ty {
                 builder.array_lengths.insert(name.clone(), *length);
+            }
+            if let Some(struct_name) = struct_name_from_hir_type(ty, &builder.struct_fields) {
+                builder.variable_structs.insert(name.clone(), struct_name);
             }
             builder.emit(MirInstruction::StoreSlot {
                 slot,
@@ -1166,11 +1307,46 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
                 .map(|(tag, (variant, _))| (variant.clone(), tag as u64))
         })
         .collect::<std::collections::HashMap<_, _>>();
+    let struct_fields = module
+        .structs
+        .iter()
+        .map(|structure| (structure.name.clone(), structure.fields.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
+    let function_struct_params = module
+        .functions
+        .iter()
+        .map(|function| {
+            let parameters = function
+                .params
+                .iter()
+                .map(|(_, data_type)| struct_name_from_hir_type(data_type, &struct_fields))
+                .collect();
+            (function.name.clone(), parameters)
+        })
+        .collect::<std::collections::HashMap<_, _>>();
     MirModule {
         functions: module
             .functions
             .iter()
-            .map(|function| lower_function(function, &enum_tags))
+            .map(|function| {
+                lower_function(
+                    function,
+                    &enum_tags,
+                    &struct_fields,
+                    &function_struct_params,
+                )
+            })
             .collect(),
+    }
+}
+
+fn struct_name_from_hir_type(
+    data_type: &HirType,
+    structs: &std::collections::HashMap<String, Vec<(String, Option<Expression>)>>,
+) -> Option<String> {
+    match data_type {
+        HirType::Named(name) if structs.contains_key(name) => Some(name.clone()),
+        HirType::Pointer(inner) => struct_name_from_hir_type(inner, structs),
+        _ => None,
     }
 }

@@ -132,6 +132,11 @@ pub(crate) enum ASTNode {
         pointer: Expression,
         value: Expression,
     },
+    MemberAssignment {
+        object: Expression,
+        member: String,
+        value: Expression,
+    },
     CompileTimeConstant {
         name: String,
         data_type: Option<DataType>,
@@ -237,6 +242,9 @@ where
         ))),
         Token::Identifier(name) if matches!(tokens.peek(), Some(Token::LeftBracket)) => {
             parse_index_assignment_or_expression(name, tokens)
+        }
+        Token::Identifier(name) if matches!(tokens.peek(), Some(Token::Dot)) => {
+            parse_member_assignment_or_expression(name, tokens)
         }
         Token::Star => parse_pointer_assignment_or_expression(tokens),
         Token::Identifier(name) => parse_statement_after_name(name, tokens),
@@ -1167,6 +1175,29 @@ where
     }
 }
 
+fn parse_member_assignment_or_expression<I>(
+    name: String,
+    tokens: &mut std::iter::Peekable<I>,
+) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let target = parse_expression_from(Token::Identifier(name), tokens, 0);
+    if !matches!(tokens.peek(), Some(Token::Equal)) {
+        return ASTNode::Expression(target);
+    }
+    tokens.next();
+    let value = parse_expression(tokens, 0);
+    match target {
+        Expression::MemberAccess { object, member } => ASTNode::MemberAssignment {
+            object: *object,
+            member,
+            value,
+        },
+        _ => panic!("member assignment requires a field target"),
+    }
+}
+
 fn parse_arguments<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<Expression>
 where
     I: Iterator<Item = Token> + Clone,
@@ -1341,6 +1372,9 @@ where
             }
             Token::Identifier(name) if matches!(tokens.peek(), Some(Token::LeftBracket)) => {
                 parse_index_assignment_or_expression(name, tokens)
+            }
+            Token::Identifier(name) if matches!(tokens.peek(), Some(Token::Dot)) => {
+                parse_member_assignment_or_expression(name, tokens)
             }
             Token::Identifier(name) => {
                 ASTNode::Expression(parse_expression_from(Token::Identifier(name), tokens, 0))

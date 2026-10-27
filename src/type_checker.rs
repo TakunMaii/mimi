@@ -475,6 +475,30 @@ fn check_statement(
             infer_expression(value, scopes, functions, structs, Some(*element_type))?;
             Ok(())
         }
+        ASTNode::MemberAssignment {
+            object,
+            member,
+            value,
+        } => {
+            let object_type = infer_expression(object, scopes, functions, structs, None)?;
+            let struct_name = match object_type {
+                DataType::Struct(name) => name,
+                DataType::Pointer(inner) => match *inner {
+                    DataType::Struct(name) => name,
+                    _ => return Err(error("member assignment requires a struct value")),
+                },
+                _ => return Err(error("member assignment requires a struct value")),
+            };
+            let field = structs
+                .get(struct_name)
+                .and_then(|info| info.fields.get(member))
+                .ok_or_else(|| error(format!("unknown field '{member}' in '{struct_name}'")))?;
+            if !field.mutable {
+                return Err(error(format!("cannot assign to fixed field '{member}'")));
+            }
+            infer_expression(value, scopes, functions, structs, Some(field.data_type))?;
+            Ok(())
+        }
         ASTNode::Expression(_) => Err(error("expression statements are only valid inside blocks")),
         ASTNode::FunctionDefinition { .. } => {
             Err(error("nested function definitions are unsupported"))

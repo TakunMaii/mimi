@@ -89,11 +89,18 @@ pub(crate) struct HirEnum {
     pub(crate) variants: Vec<(String, bool)>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HirStruct {
+    pub(crate) name: String,
+    pub(crate) fields: Vec<(String, Option<Expression>)>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct HirModule {
     pub(crate) functions: Vec<HirFunction>,
     pub(crate) extern_functions: Vec<HirExternalFunction>,
     pub(crate) enums: Vec<HirEnum>,
+    pub(crate) structs: Vec<HirStruct>,
 }
 
 pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
@@ -138,6 +145,15 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                 variants: variants
                     .iter()
                     .map(|(variant, payload)| (variant.clone(), payload.is_some()))
+                    .collect(),
+            });
+        }
+        if let ASTNode::StructDefinition { name, fields, .. } = node {
+            module.structs.push(HirStruct {
+                name: (*name).to_string(),
+                fields: fields
+                    .iter()
+                    .map(|(field, _, default, _)| (field.clone(), default.clone()))
                     .collect(),
             });
         }

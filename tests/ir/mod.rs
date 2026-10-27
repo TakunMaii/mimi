@@ -339,6 +339,32 @@ fn builds_and_runs_match_and_if_let_for_payloadless_enums() {
 }
 
 #[test]
+fn builds_and_runs_scalar_struct_fields_and_defaults() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_struct_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_struct_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "pos :: struct { x : i32, y : i32 = 3 } get_x :: fn (point : pos) i32 { point.x } main :: fn () i32 { point := pos { x = 7 } copy : pos = { x = 4, } pointer := &point pointer.y = 6 point.x = 10 get_x(point) + get_x({ x = 4, }) + point.y + copy.y }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(20));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_for_loops_over_fixed_arrays() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

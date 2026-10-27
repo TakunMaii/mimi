@@ -22,7 +22,8 @@ and focused regression coverage; it does not imply support on every target.
 - [ ] Implement floating-point literals, arithmetic, comparisons, and ABI handling.
 - [ ] Define target data layout and ABI rules for all supported value types.
 - [x] Implement 64-bit stack slots, loads/stores, and mutable locals across loops and branches.
-- [ ] Implement struct layout, literals, field access, and default initialization.
+- [x] Lower scalar struct literals, 64-bit field slots, defaults, reads, writes, parameters, and inferred arguments.
+- [ ] Implement nested fields, compound layouts, and value return ABI.
 - [ ] Implement enum layout, construction, and payload access.
 - [x] Implement fixed-size scalar array literals, stack layout, indexing, and reads.
 - [x] Store indexed elements in fixed-size scalar arrays.

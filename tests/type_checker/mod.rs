@@ -372,6 +372,22 @@ fn checks_address_of_dereference_and_pointer_assignment() {
 }
 
 #[test]
+fn checks_struct_field_assignment_and_fixed_fields() {
+    let valid = parse(tokenize(
+        "pos :: struct { x : i32 } main :: fn () i32 { point := pos { x = 1 } pointer := &point pointer.x = 8 point.x }".chars(),
+    ));
+    check(&valid).unwrap();
+
+    let invalid = parse(tokenize(
+        "pos :: struct { fixed : i32 : 3 } main :: fn () i32 { point := pos {} point.fixed = 8 0 }"
+            .chars(),
+    ));
+    let errors = check(&invalid).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].message.contains("fixed field 'fixed'"));
+}
+
+#[test]
 fn checks_enum_construction_if_let_and_match() {
     let ast = parse(tokenize("result :: enum { some(f32), error, none, } value := some(1.0) selected := match value { some(x) => x, error => 0.0, none => 0.0 }".chars()));
     let types = check(&ast).unwrap();
