@@ -146,12 +146,20 @@ struct Builder {
     variables: std::collections::HashMap<String, Variable>,
     array_lengths: std::collections::HashMap<String, u64>,
     defer_scopes: Vec<Vec<Expression>>,
+    loop_targets: Vec<LoopTargets>,
 }
 
 #[derive(Clone, Copy)]
 enum Variable {
     Value(ValueId),
     Slot(SlotId),
+}
+
+#[derive(Clone, Copy)]
+struct LoopTargets {
+    break_block: BlockId,
+    continue_block: BlockId,
+    defer_scope_depth: usize,
 }
 
 impl Builder {
@@ -425,6 +433,22 @@ impl Builder {
                             crate::parser::ASTNode::Loop { body } => {
                                 self.lower_loop(body);
                             }
+                            crate::parser::ASTNode::If {
+                                condition,
+                                then_branch,
+                                else_branch,
+                            } => {
+                                let expression = Expression::If {
+                                    condition: Box::new(condition.clone()),
+                                    then_branch: Box::new(then_branch.clone()),
+                                    else_branch: Box::new(
+                                        else_branch
+                                            .clone()
+                                            .unwrap_or_else(|| Expression::Block(Vec::new())),
+                                    ),
+                                };
+                                self.expression(&expression);
+                            }
                             crate::parser::ASTNode::For {
                                 binding,
                                 iterable,
@@ -444,6 +468,18 @@ impl Builder {
                                     .and_then(|expression| self.expression(expression));
                                 self.run_all_defers();
                                 self.terminate(MirTerminator::Return(value));
+                                break;
+                            }
+                            crate::parser::ASTNode::Break => {
+                                let targets = *self.loop_targets.last()?;
+                                self.run_loop_defers(targets.defer_scope_depth);
+                                self.terminate(MirTerminator::Jump(targets.break_block));
+                                break;
+                            }
+                            crate::parser::ASTNode::Continue => {
+                                let targets = *self.loop_targets.last()?;
+                                self.run_loop_defers(targets.defer_scope_depth);
+                                self.terminate(MirTerminator::Jump(targets.continue_block));
                                 break;
                             }
                             _ => {}
@@ -506,6 +542,20 @@ impl Builder {
         }
     }
 
+    fn run_loop_defers(&mut self, scope_depth: usize) {
+        let deferred = self.defer_scopes[scope_depth..]
+            .iter()
+            .rev()
+            .flat_map(|scope| scope.iter().rev().cloned())
+            .collect::<Vec<_>>();
+        for expression in deferred {
+            self.expression(&expression);
+            if !self.is_open(self.current) {
+                break;
+            }
+        }
+    }
+
     fn lower_while(
         &mut self,
         condition: &Expression,
@@ -520,6 +570,12 @@ impl Builder {
         } else {
             self.terminate(MirTerminator::Jump(condition_block));
         }
+
+        self.loop_targets.push(LoopTargets {
+            break_block: exit_block,
+            continue_block: condition_block,
+            defer_scope_depth: self.defer_scopes.len(),
+        });
 
         if !do_first {
             self.current = condition_block;
@@ -546,19 +602,27 @@ impl Builder {
                 else_block: exit_block,
             });
         }
+        self.loop_targets.pop();
         self.current = exit_block;
         Some(())
     }
 
     fn lower_loop(&mut self, body: &Expression) {
         let loop_block = self.new_block();
+        let exit_block = self.new_block();
         self.terminate(MirTerminator::Jump(loop_block));
+        self.loop_targets.push(LoopTargets {
+            break_block: exit_block,
+            continue_block: loop_block,
+            defer_scope_depth: self.defer_scopes.len(),
+        });
         self.current = loop_block;
         self.expression(body);
         if self.is_open(self.current) {
             self.terminate(MirTerminator::Jump(loop_block));
         }
-        self.current = self.new_block();
+        self.loop_targets.pop();
+        self.current = exit_block;
     }
 
     fn lower_for(&mut self, binding: &str, iterable: &Expression, body: &Expression) -> Option<()> {
@@ -602,6 +666,7 @@ impl Builder {
 
         let condition_block = self.new_block();
         let body_block = self.new_block();
+        let step_block = self.new_block();
         let exit_block = self.new_block();
         self.terminate(MirTerminator::Jump(condition_block));
 
@@ -629,6 +694,11 @@ impl Builder {
             else_block: exit_block,
         });
 
+        self.loop_targets.push(LoopTargets {
+            break_block: exit_block,
+            continue_block: step_block,
+            defer_scope_depth: self.defer_scopes.len(),
+        });
         self.current = body_block;
         let index = self.value();
         self.emit(MirInstruction::LoadSlot {
@@ -657,6 +727,11 @@ impl Builder {
         });
         self.expression(body);
         if self.is_open(self.current) {
+            self.terminate(MirTerminator::Jump(step_block));
+        }
+
+        self.current = step_block;
+        if self.is_open(self.current) {
             let index = self.value();
             self.emit(MirInstruction::LoadSlot {
                 result: index,
@@ -680,6 +755,7 @@ impl Builder {
             self.terminate(MirTerminator::Jump(condition_block));
         }
 
+        self.loop_targets.pop();
         self.current = exit_block;
         if let Some(previous) = previous_binding {
             self.variables.insert(binding.to_string(), previous);
@@ -745,6 +821,7 @@ fn lower_function(function: &HirFunction) -> MirFunction {
         variables: std::collections::HashMap::new(),
         array_lengths: std::collections::HashMap::new(),
         defer_scopes: Vec::new(),
+        loop_targets: Vec::new(),
     };
     let params = function
         .params

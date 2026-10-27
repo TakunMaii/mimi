@@ -215,6 +215,28 @@ fn checks_do_while_conditions_as_booleans() {
 }
 
 #[test]
+fn checks_break_and_continue_are_inside_loops() {
+    let valid = parse(tokenize(
+        "main :: fn () i32 { while true { continue } loop { break } 0 }".chars(),
+    ));
+    check(&valid).unwrap();
+
+    let invalid = parse(tokenize("break continue".chars()));
+    let errors = check(&invalid).unwrap_err();
+    assert_eq!(errors.len(), 2);
+    assert!(
+        errors[0]
+            .message
+            .contains("break is only valid inside a loop")
+    );
+    assert!(
+        errors[1]
+            .message
+            .contains("continue is only valid inside a loop")
+    );
+}
+
+#[test]
 fn infers_value_from_if_else_expression() {
     let ast = parse(tokenize(
         "value := if true { 1 } else { 2 } flag := if false { true } else { false }".chars(),

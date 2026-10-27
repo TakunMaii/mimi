@@ -140,6 +140,8 @@ pub(crate) enum ASTNode {
         return_type: DataType,
     },
     Return(Option<Expression>),
+    Break,
+    Continue,
     StructDefinition {
         name: &'static str,
         fields: Vec<(String, DataType, Option<Expression>, bool)>,
@@ -232,6 +234,8 @@ where
         Token::For => parse_for(tokens),
         Token::Loop => parse_loop(tokens),
         Token::Defer => parse_defer(tokens),
+        Token::Break => ASTNode::Break,
+        Token::Continue => ASTNode::Continue,
         _ => panic!("expected a statement"),
     }
 }
@@ -1261,7 +1265,9 @@ where
             | Token::While
             | Token::For
             | Token::Loop
-            | Token::Defer => parse_statement_token(first, tokens),
+            | Token::Defer
+            | Token::Break
+            | Token::Continue => parse_statement_token(first, tokens),
             Token::Return => {
                 let value = if matches!(tokens.peek(), Some(Token::RightBrace)) {
                     None

@@ -20,6 +20,8 @@ pub(crate) enum Token {
     Defer,
     In,
     Return,
+    Break,
+    Continue,
     Comma,
     Dot,
     Colon,
@@ -83,6 +85,8 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                 "defer" => Token::Defer,
                 "in" => Token::In,
                 "return" => Token::Return,
+                "break" => Token::Break,
+                "continue" => Token::Continue,
                 _ => Token::Identifier(identifier),
             });
         } else if ch == '"' {

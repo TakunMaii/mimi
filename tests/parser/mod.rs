@@ -104,6 +104,14 @@ fn tokenizes_boolean_literals() {
 }
 
 #[test]
+fn tokenizes_loop_control_keywords() {
+    assert_eq!(
+        tokenize("break continue".chars()),
+        vec![Token::Break, Token::Continue]
+    );
+}
+
+#[test]
 fn tokenizes_import_strings_and_pub() {
     assert_eq!(
         tokenize(r#"pub std :: @import("std")"#.chars()),
@@ -385,7 +393,7 @@ fn parses_struct_definition_literals_and_member_access() {
 #[test]
 fn parses_control_flow_statements() {
     let nodes = parse(tokenize(
-        "if true { x := 1 } else { x := 2 } while false { defer { loop {} } } for item in values { item }"
+        "if true { x := 1 } else { x := 2 } while false { defer { loop {} } break continue } for item in values { item }"
             .chars(),
     ));
     assert!(matches!(
@@ -397,6 +405,18 @@ fn parses_control_flow_statements() {
     ));
     assert!(matches!(&nodes[1], ASTNode::While { .. }));
     assert!(matches!(&nodes[2], ASTNode::For { binding, .. } if binding == "item"));
+}
+
+#[test]
+fn parses_break_and_continue_in_blocks() {
+    let nodes = parse(tokenize("main :: fn () void { break continue }".chars()));
+    assert!(matches!(
+        &nodes[0],
+        ASTNode::FunctionDefinition {
+            body: Expression::Block(items),
+            ..
+        } if matches!(items.as_slice(), [ASTNode::Break, ASTNode::Continue])
+    ));
 }
 
 #[test]

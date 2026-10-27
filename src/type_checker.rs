@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use crate::lexer::tokenize;
 use crate::parser::{ASTNode, DataType, Expression, Pattern};
 
+const LOOP_CONTEXT: &str = "\0mimi_loop_context";
+
 #[derive(Debug, PartialEq)]
 pub(crate) struct TypeError {
     pub(crate) message: String,
@@ -444,6 +446,15 @@ fn check_statement(
         }
         ASTNode::ExternalFunction { .. } => Ok(()),
         ASTNode::Return(_) => Err(error("return is only valid inside a function")),
+        ASTNode::Break | ASTNode::Continue => {
+            if scopes.iter().any(|scope| scope.contains_key(LOOP_CONTEXT)) {
+                Ok(())
+            } else if matches!(node, ASTNode::Break) {
+                Err(error("break is only valid inside a loop"))
+            } else {
+                Err(error("continue is only valid inside a loop"))
+            }
+        }
         ASTNode::StructDefinition { .. } => Ok(()),
         ASTNode::EnumDefinition { .. } => Ok(()),
         ASTNode::Import { .. } | ASTNode::Public(_) => Ok(()),
@@ -496,14 +507,20 @@ fn check_statement(
             Ok(())
         }
         ASTNode::While { condition, body } => {
-            infer_expression(condition, scopes, functions, structs, Some(DataType::Bool))?;
-            infer_expression(body, scopes, functions, structs, None)?;
-            Ok(())
+            scopes.push(loop_scope());
+            let result =
+                infer_expression(condition, scopes, functions, structs, Some(DataType::Bool))
+                    .and_then(|_| infer_expression(body, scopes, functions, structs, None));
+            scopes.pop();
+            result.map(|_| ())
         }
         ASTNode::DoWhile { body, condition } => {
-            infer_expression(body, scopes, functions, structs, None)?;
-            infer_expression(condition, scopes, functions, structs, Some(DataType::Bool))?;
-            Ok(())
+            scopes.push(loop_scope());
+            let result = infer_expression(body, scopes, functions, structs, None).and_then(|_| {
+                infer_expression(condition, scopes, functions, structs, Some(DataType::Bool))
+            });
+            scopes.pop();
+            result.map(|_| ())
         }
         ASTNode::For {
             binding,
@@ -515,23 +532,41 @@ fn check_statement(
                 DataType::Array(_, element) | DataType::Slice(element) => *element,
                 _ => return Err(error("for loop requires an array or slice")),
             };
-            scopes.push(HashMap::from([(
+            let mut loop_scope = loop_scope();
+            loop_scope.insert(
                 binding.clone(),
                 Symbol {
                     data_type: item_type,
                     mutable: false,
                 },
-            )]));
+            );
+            scopes.push(loop_scope);
             let result = infer_expression(body, scopes, functions, structs, None);
             scopes.pop();
             result?;
             Ok(())
         }
-        ASTNode::Loop { body } | ASTNode::Defer { body } => {
+        ASTNode::Loop { body } => {
+            scopes.push(loop_scope());
+            let result = infer_expression(body, scopes, functions, structs, None);
+            scopes.pop();
+            result.map(|_| ())
+        }
+        ASTNode::Defer { body } => {
             infer_expression(body, scopes, functions, structs, None)?;
             Ok(())
         }
     }
+}
+
+fn loop_scope() -> HashMap<String, Symbol> {
+    HashMap::from([(
+        LOOP_CONTEXT.to_string(),
+        Symbol {
+            data_type: DataType::Void,
+            mutable: false,
+        },
+    )])
 }
 
 fn lookup<'a>(scopes: &'a [HashMap<String, Symbol>], name: &str) -> Option<&'a Symbol> {
