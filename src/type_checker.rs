@@ -32,10 +32,12 @@ struct FieldInfo {
 }
 
 fn resolve_self(data_type: DataType, owner: &'static str) -> DataType {
-    if matches!(data_type, DataType::SelfType) {
-        DataType::Struct(owner)
-    } else {
-        data_type
+    match data_type {
+        DataType::SelfType => DataType::Struct(owner),
+        DataType::Pointer(inner) => {
+            DataType::Pointer(Box::leak(Box::new(resolve_self(*inner, owner))))
+        }
+        _ => data_type,
     }
 }
 
@@ -440,6 +442,10 @@ fn infer_expression(
                 )))
             }
         }
+        Expression::AddressOf(inner) => {
+            let inner_type = infer_expression(inner, scopes, functions, structs, None)?;
+            Ok(DataType::Pointer(Box::leak(Box::new(inner_type))))
+        }
         Expression::Not(inner) => {
             infer_expression(inner, scopes, functions, structs, Some(DataType::Bool))?;
             Ok(DataType::Bool)
@@ -643,6 +649,10 @@ fn infer_expression(
             let object_type = infer_expression(object, scopes, functions, structs, None)?;
             let struct_name = match object_type {
                 DataType::Struct(name) => name,
+                DataType::Pointer(element) => match *element {
+                    DataType::Struct(name) => name,
+                    _ => return Err(error("member access requires a struct value")),
+                },
                 _ => return Err(error("member access requires a struct value")),
             };
             if let Some(info) = structs.get(struct_name) {
@@ -667,6 +677,62 @@ fn infer_expression(
             )))
         }
         Expression::CallValue { callee, arguments } => {
+            if let Expression::MemberAccess { object, member } = callee.as_ref() {
+                let object_type = infer_expression(object, scopes, functions, structs, None)?;
+                let struct_name = match object_type {
+                    DataType::Struct(name) => name,
+                    DataType::Pointer(element) => match *element {
+                        DataType::Struct(name) => name,
+                        _ => return Err(error("method call requires a struct value")),
+                    },
+                    _ => return Err(error("method call requires a struct value")),
+                };
+                let method = structs
+                    .get(struct_name)
+                    .and_then(|info| info.methods.get(member))
+                    .ok_or_else(|| {
+                        error(format!("unknown method '{member}' in '{struct_name}'"))
+                    })?;
+                let Some(receiver_parameter) = method.parameters.first().copied() else {
+                    return Err(error("method must declare a receiver parameter"));
+                };
+                if arguments.len() == method.parameters.len() {
+                    for (argument, parameter_type) in arguments.iter().zip(method.parameters.iter())
+                    {
+                        infer_expression(
+                            argument,
+                            scopes,
+                            functions,
+                            structs,
+                            Some(*parameter_type),
+                        )?;
+                    }
+                } else if arguments.len() + 1 == method.parameters.len() {
+                    check_receiver_compatibility(
+                        object_type,
+                        receiver_parameter,
+                        object,
+                        scopes,
+                        functions,
+                        structs,
+                    )?;
+                    for (argument, parameter_type) in
+                        arguments.iter().zip(method.parameters.iter().skip(1))
+                    {
+                        infer_expression(
+                            argument,
+                            scopes,
+                            functions,
+                            structs,
+                            Some(*parameter_type),
+                        )?;
+                    }
+                } else {
+                    return Err(error("wrong number of method arguments"));
+                }
+                require_compatible(method.return_type, expected)?;
+                return Ok(method.return_type);
+            }
             let function_type = infer_expression(callee, scopes, functions, structs, None)?;
             let (parameters, return_type) = match function_type {
                 DataType::Function(p, r) => (p, r),
@@ -843,6 +909,34 @@ fn infer_expression(
             }
             Ok(result.unwrap_or(DataType::Void))
         }
+    }
+}
+
+fn check_receiver_compatibility(
+    actual: DataType,
+    expected: DataType,
+    expression: &Expression,
+    scopes: &mut Vec<HashMap<String, Symbol>>,
+    functions: &HashMap<String, Function>,
+    structs: &HashMap<&'static str, StructInfo>,
+) -> Result<(), TypeError> {
+    if actual == expected {
+        return Ok(());
+    }
+    match (actual, expected) {
+        (DataType::Struct(actual_name), DataType::Pointer(expected_inner))
+            if *expected_inner == DataType::Struct(actual_name) =>
+        {
+            let address = Expression::AddressOf(Box::new(expression.clone()));
+            let inferred = infer_expression(&address, scopes, functions, structs, None)?;
+            require_compatible(inferred, Some(expected))
+        }
+        (DataType::Pointer(actual_inner), DataType::Struct(expected_name))
+            if *actual_inner == DataType::Struct(expected_name) =>
+        {
+            Ok(())
+        }
+        _ => require_compatible(actual, Some(expected)),
     }
 }
 
@@ -1085,7 +1179,7 @@ impl DataType {
             Self::Struct(_) => 0,
             Self::Array(_, _) | Self::Slice(_) => 0,
             Self::Enum(_) => 0,
-            Self::Function(_, _) | Self::SelfType => 0,
+            Self::Function(_, _) | Self::SelfType | Self::Pointer(_) => 0,
         }
     }
 
@@ -1139,6 +1233,7 @@ impl std::fmt::Display for DataType {
             Self::Function(parameters, return_type) => {
                 return write!(formatter, "fn({parameters:?}){return_type}");
             }
+            Self::Pointer(element) => return write!(formatter, "*{element}"),
         };
         formatter.write_str(name)
     }

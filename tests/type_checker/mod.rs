@@ -284,3 +284,28 @@ fn checks_function_values_and_static_methods() {
     let types = check(&ast).unwrap();
     assert_eq!(types["result"], DataType::I32);
 }
+
+#[test]
+fn supports_pointer_member_access_and_automatic_method_receivers() {
+    let ast = parse(tokenize(
+        "pos :: struct { x : i32, value() :: fn (self : Self) i32 { self.x } through_ptr() :: fn (self : *Self) i32 { self.x } } point : pos = pos { x = 4 } pointer := &point from_value := point.value() from_pointer := pointer.value() through_value := point.through_ptr() through_pointer := pointer.through_ptr() field := pointer.x"
+            .chars(),
+    ));
+    let types = check(&ast).unwrap();
+    assert_eq!(types["from_value"], DataType::I32);
+    assert_eq!(types["from_pointer"], DataType::I32);
+    assert_eq!(types["through_value"], DataType::I32);
+    assert_eq!(types["through_pointer"], DataType::I32);
+    assert_eq!(types["field"], DataType::I32);
+}
+
+#[test]
+fn allows_explicit_method_receivers() {
+    let ast = parse(tokenize(
+        "pos :: struct { x : i32, value() :: fn (self : Self) i32 { self.x } through_ptr() :: fn (self : *Self) i32 { self.x } } point : pos = pos { x = 4 } value := point.value(point) pointer := &point through := pointer.through_ptr(&point)"
+            .chars(),
+    ));
+    let types = check(&ast).unwrap();
+    assert_eq!(types["value"], DataType::I32);
+    assert_eq!(types["through"], DataType::I32);
+}

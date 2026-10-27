@@ -22,6 +22,7 @@ pub(crate) enum DataType {
     Enum(&'static str),
     Function(&'static [DataType], &'static DataType),
     SelfType,
+    Pointer(&'static DataType),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -31,6 +32,7 @@ pub(crate) enum Expression {
     LiteralBool(bool),
     Negate(Box<Expression>),
     Not(Box<Expression>),
+    AddressOf(Box<Expression>),
     Add(Box<Expression>, Box<Expression>),
     Subtract(Box<Expression>, Box<Expression>),
     Multiply(Box<Expression>, Box<Expression>),
@@ -446,6 +448,14 @@ where
                     _ => panic!("expected '=' or ':' after type"),
                 }
             }
+            Some(Token::Star) => {
+                let data_type = DataType::Pointer(Box::leak(Box::new(parse_type(tokens))));
+                match tokens.next() {
+                    Some(Token::Equal) => (1, Some(data_type)),
+                    Some(Token::Colon) => (2, Some(data_type)),
+                    _ => panic!("expected '=' or ':' after pointer type"),
+                }
+            }
             _ => panic!("expected ':', '=', or a type after ':'"),
         },
         _ => panic!("expected an operator after identifier"),
@@ -699,6 +709,10 @@ where
             Box::leak(Box::new(return_type)),
         );
     }
+    if matches!(tokens.peek(), Some(Token::Star)) {
+        tokens.next();
+        return DataType::Pointer(Box::leak(Box::new(parse_type(tokens))));
+    }
     if matches!(tokens.peek(), Some(Token::LeftBracket)) {
         tokens.next();
         let length = match tokens.next() {
@@ -748,6 +762,7 @@ where
         Token::LiteralBool(value) => Expression::LiteralBool(value),
         Token::Minus => Expression::Negate(Box::new(parse_expression(tokens, 6))),
         Token::Bang => Expression::Not(Box::new(parse_expression(tokens, 6))),
+        Token::Ampersand => Expression::AddressOf(Box::new(parse_expression(tokens, 6))),
         Token::LeftParen => {
             let expression = parse_expression(tokens, 0);
             match tokens.next() {

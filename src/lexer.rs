@@ -27,6 +27,7 @@ pub(crate) enum Token {
     GreaterThan,
     GreaterThanOrEqual,
     AndAnd,
+    Ampersand,
     OrOr,
     Bang,
     Plus,
@@ -136,8 +137,12 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                     }
                 }
                 '&' => {
-                    assert_eq!(chars.next(), Some('&'), "expected '&&'");
-                    result.push(Token::AndAnd);
+                    if chars.peek() == Some(&'&') {
+                        chars.next();
+                        result.push(Token::AndAnd);
+                    } else {
+                        result.push(Token::Ampersand);
+                    }
                 }
                 '|' => {
                     assert_eq!(chars.next(), Some('|'), "expected '||'");
