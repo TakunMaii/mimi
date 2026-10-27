@@ -104,8 +104,13 @@ pub(crate) enum LirInstruction {
         destination: ValueId,
         base: ValueId,
         index: ValueId,
+        scale: u8,
     },
     LoadIndirect {
+        destination: ValueId,
+        address: ValueId,
+    },
+    LoadByteIndirect {
         destination: ValueId,
         address: ValueId,
     },
@@ -251,13 +256,21 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                             result,
                             base,
                             index,
+                            scale,
                         } => LirInstruction::IndexAddress {
                             destination: *result,
                             base: *base,
                             index: *index,
+                            scale: *scale,
                         },
                         MirInstruction::LoadIndirect { result, address } => {
                             LirInstruction::LoadIndirect {
+                                destination: *result,
+                                address: *address,
+                            }
+                        }
+                        MirInstruction::LoadByteIndirect { result, address } => {
+                            LirInstruction::LoadByteIndirect {
                                 destination: *result,
                                 address: *address,
                             }
@@ -280,7 +293,7 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
         .collect();
     LirFunction {
         name: function.name.clone(),
-        params: function.params.iter().map(|(_, _, value)| *value).collect(),
+        params: function.abi_params.clone(),
         slot_count: function.slot_count,
         blocks,
     }

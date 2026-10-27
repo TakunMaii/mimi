@@ -11,7 +11,7 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Lower `while` and `do-while` into CFG blocks for basic loop bodies.
 - [x] Lower `for` over fixed-size scalar arrays.
 - [x] Lower `for` over slices taken directly from fixed-size scalar arrays.
-- [ ] Lower `for` over slice values and string slices.
+- [x] Lower `for` over local slice values, slice parameters, and string slices.
 - [x] Lower `break` and `continue`, including loop-body `defer` exits.
 - [x] Lower `defer` at each scope exit and return path in LIFO order.
 - [x] Lower `match` and `if-let` for payloadless enums.
@@ -27,8 +27,9 @@ and focused regression coverage; it does not imply support on every target.
 - [ ] Implement enum layout, construction, and payload access.
 - [x] Implement fixed-size scalar array literals, stack layout, indexing, and reads.
 - [x] Store indexed elements in fixed-size scalar arrays.
-- [ ] Support array element layouts beyond the current 64-bit scalar slots.
-- [ ] Implement slice representation, indexing, and slicing.
+- [ ] Support array element layouts beyond the current 64-bit scalar slots, including byte arrays across slice boundaries.
+- [x] Represent local slices with pointer/length slots; support indexing, slicing, and parameter passing.
+- [ ] Complete slice return values and reassignment.
 - [x] Implement local addresses, pointer loads/stores, and pointer type checks.
 - [ ] Implement array/struct pointers, general pointer arithmetic, and pointer member access in MIR.
 

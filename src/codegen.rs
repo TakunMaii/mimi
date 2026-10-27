@@ -187,6 +187,7 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 LirInstruction::SlotAddress { slot, .. } => slot_address_words(*slot),
                 LirInstruction::IndexAddress { .. }
                 | LirInstruction::LoadIndirect { .. }
+                | LirInstruction::LoadByteIndirect { .. }
                 | LirInstruction::StoreIndirect { .. } => 1,
                 LirInstruction::Not { .. } => 2,
                 LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
@@ -471,11 +472,27 @@ fn encode_function(
                     destination,
                     base,
                     index,
-                } => 0x8b00_0c00 | (index.0 << 16) | (base.0 << 5) | destination.0,
+                    scale,
+                } => {
+                    let shift = match scale {
+                        1 => 0,
+                        8 => 3,
+                        _ => return Err(format!("unsupported ARM64 index scale {scale}")),
+                    };
+                    0x8b00_0000
+                        | (index.0 << 16)
+                        | ((shift as u32) << 10)
+                        | (base.0 << 5)
+                        | destination.0
+                }
                 LirInstruction::LoadIndirect {
                     destination,
                     address,
                 } => 0xf940_0000 | (address.0 << 5) | destination.0,
+                LirInstruction::LoadByteIndirect {
+                    destination,
+                    address,
+                } => 0x3940_0000 | (address.0 << 5) | destination.0,
                 LirInstruction::StoreIndirect { address, value } => {
                     0xf900_0000 | (address.0 << 5) | value.0
                 }
@@ -667,6 +684,7 @@ fn block_encoded_size(
             LirInstruction::SlotAddress { slot, .. } => slot_address_words(*slot),
             LirInstruction::IndexAddress { .. }
             | LirInstruction::LoadIndirect { .. }
+            | LirInstruction::LoadByteIndirect { .. }
             | LirInstruction::StoreIndirect { .. } => 1,
             LirInstruction::Not { .. } => 2,
             LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
@@ -763,8 +781,13 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
             destination,
             base,
             index,
+            ..
         } => vec![*destination, *base, *index],
         LirInstruction::LoadIndirect {
+            destination,
+            address,
+        }
+        | LirInstruction::LoadByteIndirect {
             destination,
             address,
         } => vec![*destination, *address],
@@ -1196,14 +1219,26 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     destination,
                     base,
                     index,
-                } => assembly.push_str(&format!(
-                    "    add x{}, x{}, x{}, lsl #3\n",
-                    destination.0, base.0, index.0
-                )),
+                    scale,
+                } => match scale {
+                    1 => assembly.push_str(&format!(
+                        "    add x{}, x{}, x{}\n",
+                        destination.0, base.0, index.0
+                    )),
+                    8 => assembly.push_str(&format!(
+                        "    add x{}, x{}, x{}, lsl #3\n",
+                        destination.0, base.0, index.0
+                    )),
+                    _ => return Err(format!("unsupported ARM64 index scale {scale}")),
+                },
                 LirInstruction::LoadIndirect {
                     destination,
                     address,
                 } => assembly.push_str(&format!("    ldr x{}, [x{}]\n", destination.0, address.0)),
+                LirInstruction::LoadByteIndirect {
+                    destination,
+                    address,
+                } => assembly.push_str(&format!("    ldrb w{}, [x{}]\n", destination.0, address.0)),
                 LirInstruction::StoreIndirect { address, value } => {
                     assembly.push_str(&format!("    str x{}, [x{}]\n", value.0, address.0))
                 }

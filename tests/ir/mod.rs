@@ -406,7 +406,7 @@ fn builds_and_runs_for_loops_over_array_slices() {
     ));
     std::fs::write(
         &source,
-        "main :: fn () i32 { values := [1, 2, 3, 4] start := 2 sum := 0 for item in values[1:3] { sum = sum + item } for item in values[start:] { sum = sum + item } sum }",
+        "main :: fn () i32 { values := [1, 2, 3, 4] start := 2 sum := 0 for item in values[1:3] { sum = sum + item } for item in values[start:] { sum = sum + item } view := values[1:3] for item in view { sum = sum + item } subview := view[1:] for item in subview { sum = sum + item } sum = sum + view[0] sum }",
     )
     .unwrap();
     build_file(
@@ -418,7 +418,78 @@ fn builds_and_runs_for_loops_over_array_slices() {
     )
     .unwrap();
     let status = std::process::Command::new(&path).status().unwrap();
-    assert_eq!(status.code(), Some(12));
+    assert_eq!(status.code(), Some(22));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn builds_and_runs_for_loops_over_string_slices() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_string_slice_for_source_{}.mi",
+        std::process::id()
+    ));
+    let path = std::env::temp_dir().join(format!(
+        "mimi_string_slice_for_codegen_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { text := \"ABC\" sum := 0 for byte in text { sum = sum + byte } for byte in \"DE\" { sum = sum + byte } sum = sum + text[1] sum }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(145));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn passes_slice_pointer_and_length_to_functions() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_slice_parameter_source_{}.mi",
+        std::process::id()
+    ));
+    let path = std::env::temp_dir().join(format!(
+        "mimi_slice_parameter_codegen_{}",
+        std::process::id()
+    ));
+    for (program, expected) in [
+        (
+            "sum :: fn (values : []i32) i32 { total := 0 for item in values { total = total + item } total } main :: fn () i32 { values := [1, 2, 3, 4] sum(values[1:3]) }",
+            5,
+        ),
+        (
+            "sum_bytes :: fn (values : []u8) i32 { total := 0 for byte in values { total = total + byte } total } main :: fn () i32 { sum_bytes(\"ABC\") }",
+            198,
+        ),
+    ] {
+        std::fs::write(&source, program).unwrap();
+        build_file(
+            source.to_str().unwrap(),
+            path.to_str().unwrap(),
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let status = std::process::Command::new(&path).status().unwrap();
+        assert_eq!(status.code(), Some(expected));
+    }
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();
 }

@@ -98,8 +98,13 @@ pub(crate) enum MirInstruction {
         result: ValueId,
         base: ValueId,
         index: ValueId,
+        scale: u8,
     },
     LoadIndirect {
+        result: ValueId,
+        address: ValueId,
+    },
+    LoadByteIndirect {
         result: ValueId,
         address: ValueId,
     },
@@ -132,6 +137,7 @@ pub(crate) struct MirBlock {
 pub(crate) struct MirFunction {
     pub(crate) name: String,
     pub(crate) params: Vec<(String, HirType, ValueId)>,
+    pub(crate) abi_params: Vec<ValueId>,
     pub(crate) result: HirType,
     pub(crate) slot_count: u32,
     pub(crate) blocks: Vec<MirBlock>,
@@ -149,9 +155,12 @@ struct Builder {
     current: BlockId,
     variables: std::collections::HashMap<String, Variable>,
     array_lengths: std::collections::HashMap<String, u64>,
+    slice_lengths: std::collections::HashMap<String, SlotId>,
+    slice_scales: std::collections::HashMap<String, u8>,
     enum_tags: std::collections::HashMap<String, u64>,
     struct_fields: std::collections::HashMap<String, Vec<(String, Option<Expression>)>>,
     function_struct_params: std::collections::HashMap<String, Vec<Option<String>>>,
+    function_slice_params: std::collections::HashMap<String, Vec<bool>>,
     variable_structs: std::collections::HashMap<String, String>,
     defer_scopes: Vec<Vec<Expression>>,
     loop_targets: Vec<LoopTargets>,
@@ -237,16 +246,21 @@ impl Builder {
                 Some(result)
             }
             Expression::Index { object, index } => {
-                let base = self.expression(object)?;
+                let (base, _, scale) = self.lower_array_view(object)?;
                 let index = self.expression(index)?;
                 let address = self.value();
                 self.emit(MirInstruction::IndexAddress {
                     result: address,
                     base,
                     index,
+                    scale,
                 });
                 let result = self.value();
-                self.emit(MirInstruction::LoadIndirect { result, address });
+                if scale == 1 {
+                    self.emit(MirInstruction::LoadByteIndirect { result, address });
+                } else {
+                    self.emit(MirInstruction::LoadIndirect { result, address });
+                }
                 Some(result)
             }
             Expression::AddressOf(inner) => {
@@ -263,13 +277,14 @@ impl Builder {
                         address
                     }
                     Expression::Index { object, index } => {
-                        let base = self.expression(object)?;
+                        let (base, _, scale) = self.lower_array_view(object)?;
                         let index = self.expression(index)?;
                         let address = self.value();
                         self.emit(MirInstruction::IndexAddress {
                             result: address,
                             base,
                             index,
+                            scale,
                         });
                         address
                     }
@@ -301,6 +316,7 @@ impl Builder {
                     result: address,
                     base,
                     index,
+                    scale: 8,
                 });
                 let result = self.value();
                 self.emit(MirInstruction::LoadIndirect { result, address });
@@ -387,7 +403,19 @@ impl Builder {
             Expression::Call { name, arguments } => {
                 let mut args = Vec::new();
                 let parameter_structs = self.function_struct_params.get(name).cloned();
+                let parameter_slices = self.function_slice_params.get(name).cloned();
                 for (index, argument) in arguments.iter().enumerate() {
+                    if parameter_slices
+                        .as_ref()
+                        .and_then(|parameters| parameters.get(index))
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        let (base, length, _) = self.lower_array_view(argument)?;
+                        args.push(base);
+                        args.push(length);
+                        continue;
+                    }
                     let expected_struct = parameter_structs
                         .as_ref()
                         .and_then(|parameters| parameters.get(index))
@@ -403,14 +431,6 @@ impl Builder {
                         _ => self.expression(argument)?,
                     };
                     args.push(value);
-                    if let Expression::LiteralString(text) = argument {
-                        let length = self.value();
-                        self.emit(MirInstruction::ConstInt {
-                            result: length,
-                            value: text.len() as i128,
-                        });
-                        args.push(length);
-                    }
                 }
                 let result = self.value();
                 self.emit(MirInstruction::Call {
@@ -467,6 +487,8 @@ impl Builder {
             Expression::Block(items) => {
                 let outer_variables = self.variables.clone();
                 let outer_array_lengths = self.array_lengths.clone();
+                let outer_slice_lengths = self.slice_lengths.clone();
+                let outer_slice_scales = self.slice_scales.clone();
                 let outer_variable_structs = self.variable_structs.clone();
                 self.defer_scopes.push(Vec::new());
                 let result = (|| {
@@ -486,10 +508,13 @@ impl Builder {
                                     }
                                     _ => self.expression_struct_name(value),
                                 };
+                                let declared_slice =
+                                    matches!(data_type, Some(crate::parser::DataType::Slice(_)));
                                 let array_length = match data_type {
                                     Some(crate::parser::DataType::Array(length, _)) => {
                                         Some(*length)
                                     }
+                                    Some(crate::parser::DataType::Slice(_)) => None,
                                     _ => match value {
                                         Expression::ArrayLiteral(values) => {
                                             Some(values.len() as u64)
@@ -497,19 +522,38 @@ impl Builder {
                                         _ => None,
                                     },
                                 };
-                                let value = match (value, struct_name.as_deref()) {
-                                    (
-                                        Expression::StructLiteral {
-                                            type_name: None,
-                                            fields,
-                                        },
-                                        Some(struct_name),
-                                    ) => self.lower_struct_literal(struct_name, fields)?,
-                                    _ => self.expression(value)?,
+                                let is_slice = declared_slice || self.is_slice_value(value);
+                                let (value, slice_view) = if is_slice {
+                                    let (base, length, scale) = self.lower_array_view(value)?;
+                                    (base, Some((length, scale)))
+                                } else {
+                                    let value = match (value, struct_name.as_deref()) {
+                                        (
+                                            Expression::StructLiteral {
+                                                type_name: None,
+                                                fields,
+                                            },
+                                            Some(struct_name),
+                                        ) => self.lower_struct_literal(struct_name, fields)?,
+                                        _ => self.expression(value)?,
+                                    };
+                                    (value, None)
                                 };
                                 let slot = self.slot();
                                 self.emit(MirInstruction::StoreSlot { slot, value });
                                 self.variables.insert(name.clone(), Variable::Slot(slot));
+                                if let Some((length, scale)) = slice_view {
+                                    let length_slot = self.slot();
+                                    self.emit(MirInstruction::StoreSlot {
+                                        slot: length_slot,
+                                        value: length,
+                                    });
+                                    self.slice_lengths.insert(name.clone(), length_slot);
+                                    self.slice_scales.insert(name.clone(), scale);
+                                } else {
+                                    self.slice_lengths.remove(name);
+                                    self.slice_scales.remove(name);
+                                }
                                 if let Some(length) = array_length {
                                     self.array_lengths.insert(name.clone(), length);
                                 } else {
@@ -553,10 +597,17 @@ impl Builder {
                                 let index = self.expression(index)?;
                                 let value = self.expression(value)?;
                                 let address = self.value();
+                                let scale = match object {
+                                    Expression::Identifier(name) => {
+                                        self.slice_scales.get(name).copied().unwrap_or(8)
+                                    }
+                                    _ => 8,
+                                };
                                 self.emit(MirInstruction::IndexAddress {
                                     result: address,
                                     base,
                                     index,
+                                    scale,
                                 });
                                 self.emit(MirInstruction::StoreIndirect { address, value });
                             }
@@ -585,6 +636,7 @@ impl Builder {
                                     result: address,
                                     base,
                                     index,
+                                    scale: 8,
                                 });
                                 let value = self.expression(value)?;
                                 self.emit(MirInstruction::StoreIndirect { address, value });
@@ -686,6 +738,8 @@ impl Builder {
                 self.defer_scopes.pop();
                 self.variables = outer_variables;
                 self.array_lengths = outer_array_lengths;
+                self.slice_lengths = outer_slice_lengths;
+                self.slice_scales = outer_slice_scales;
                 self.variable_structs = outer_variable_structs;
                 result
             }
@@ -817,7 +871,7 @@ impl Builder {
     }
 
     fn lower_for(&mut self, binding: &str, iterable: &Expression, body: &Expression) -> Option<()> {
-        let (array, length) = self.lower_array_view(iterable)?;
+        let (array, length, scale) = self.lower_array_view(iterable)?;
         let array_slot = self.slot();
         self.emit(MirInstruction::StoreSlot {
             slot: array_slot,
@@ -844,6 +898,8 @@ impl Builder {
             .variables
             .insert(binding.to_string(), Variable::Slot(binding_slot));
         let previous_length = self.array_lengths.remove(binding);
+        let previous_slice_length = self.slice_lengths.remove(binding);
+        let previous_slice_scale = self.slice_scales.remove(binding);
 
         let condition_block = self.new_block();
         let body_block = self.new_block();
@@ -896,12 +952,20 @@ impl Builder {
             result: address,
             base: array,
             index,
+            scale,
         });
         let item = self.value();
-        self.emit(MirInstruction::LoadIndirect {
-            result: item,
-            address,
-        });
+        if scale == 1 {
+            self.emit(MirInstruction::LoadByteIndirect {
+                result: item,
+                address,
+            });
+        } else {
+            self.emit(MirInstruction::LoadIndirect {
+                result: item,
+                address,
+            });
+        }
         self.emit(MirInstruction::StoreSlot {
             slot: binding_slot,
             value: item,
@@ -946,10 +1010,24 @@ impl Builder {
         if let Some(length) = previous_length {
             self.array_lengths.insert(binding.to_string(), length);
         }
+        if let Some(length) = previous_slice_length {
+            self.slice_lengths.insert(binding.to_string(), length);
+        }
+        if let Some(scale) = previous_slice_scale {
+            self.slice_scales.insert(binding.to_string(), scale);
+        }
         Some(())
     }
 
-    fn lower_array_view(&mut self, expression: &Expression) -> Option<(ValueId, ValueId)> {
+    fn is_slice_value(&self, expression: &Expression) -> bool {
+        match expression {
+            Expression::LiteralString(_) | Expression::Slice { .. } => true,
+            Expression::Identifier(name) => self.slice_lengths.contains_key(name),
+            _ => false,
+        }
+    }
+
+    fn lower_array_view(&mut self, expression: &Expression) -> Option<(ValueId, ValueId, u8)> {
         match expression {
             Expression::ArrayLiteral(values) => {
                 let base = self.expression(expression)?;
@@ -958,20 +1036,39 @@ impl Builder {
                     result: length,
                     value: values.len() as i128,
                 });
-                Some((base, length))
+                Some((base, length, 8))
+            }
+            Expression::LiteralString(text) => {
+                let base = self.expression(expression)?;
+                let length = self.value();
+                self.emit(MirInstruction::ConstInt {
+                    result: length,
+                    value: text.len() as i128,
+                });
+                Some((base, length, 1))
             }
             Expression::Identifier(name) => {
-                let length = *self.array_lengths.get(name)?;
                 let base = self.expression(expression)?;
-                let length_value = self.value();
-                self.emit(MirInstruction::ConstInt {
-                    result: length_value,
-                    value: length as i128,
-                });
-                Some((base, length_value))
+                if let Some(length_slot) = self.slice_lengths.get(name).copied() {
+                    let length = self.value();
+                    self.emit(MirInstruction::LoadSlot {
+                        result: length,
+                        slot: length_slot,
+                    });
+                    let scale = *self.slice_scales.get(name)?;
+                    Some((base, length, scale))
+                } else {
+                    let length = *self.array_lengths.get(name)?;
+                    let length_value = self.value();
+                    self.emit(MirInstruction::ConstInt {
+                        result: length_value,
+                        value: length as i128,
+                    });
+                    Some((base, length_value, 8))
+                }
             }
             Expression::Slice { object, start, end } => {
-                let (base, object_length) = self.lower_array_view(object)?;
+                let (base, object_length, scale) = self.lower_array_view(object)?;
                 let start = if let Some(start) = start {
                     self.expression(start)?
                 } else {
@@ -992,6 +1089,7 @@ impl Builder {
                     result: sliced_base,
                     base,
                     index: start,
+                    scale,
                 });
                 let length = self.value();
                 self.emit(MirInstruction::Sub {
@@ -999,7 +1097,7 @@ impl Builder {
                     lhs: end,
                     rhs: start,
                 });
-                Some((sliced_base, length))
+                Some((sliced_base, length, scale))
             }
             _ => None,
         }
@@ -1167,6 +1265,7 @@ fn lower_function(
     enum_tags: &std::collections::HashMap<String, u64>,
     struct_fields: &std::collections::HashMap<String, Vec<(String, Option<Expression>)>>,
     function_struct_params: &std::collections::HashMap<String, Vec<Option<String>>>,
+    function_slice_params: &std::collections::HashMap<String, Vec<bool>>,
 ) -> MirFunction {
     let mut builder = Builder {
         next_value: 0,
@@ -1179,33 +1278,59 @@ fn lower_function(
         current: BlockId(0),
         variables: std::collections::HashMap::new(),
         array_lengths: std::collections::HashMap::new(),
+        slice_lengths: std::collections::HashMap::new(),
+        slice_scales: std::collections::HashMap::new(),
         enum_tags: enum_tags.clone(),
         struct_fields: struct_fields.clone(),
         function_struct_params: function_struct_params.clone(),
+        function_slice_params: function_slice_params.clone(),
         variable_structs: std::collections::HashMap::new(),
         defer_scopes: Vec::new(),
         loop_targets: Vec::new(),
     };
-    let params = function
-        .params
-        .iter()
-        .map(|(name, ty)| {
-            let incoming = builder.value();
-            let slot = builder.slot();
-            builder.variables.insert(name.clone(), Variable::Slot(slot));
-            if let HirType::Array { length, .. } = ty {
-                builder.array_lengths.insert(name.clone(), *length);
-            }
-            if let Some(struct_name) = struct_name_from_hir_type(ty, &builder.struct_fields) {
-                builder.variable_structs.insert(name.clone(), struct_name);
-            }
+    let mut params = Vec::new();
+    let mut abi_params = Vec::new();
+    for (name, ty) in &function.params {
+        let incoming = builder.value();
+        abi_params.push(incoming);
+        let slot = builder.slot();
+        builder.variables.insert(name.clone(), Variable::Slot(slot));
+        if let HirType::Array { length, .. } = ty {
+            builder.array_lengths.insert(name.clone(), *length);
+        }
+        if let HirType::Slice(element) = ty {
+            let length = builder.value();
+            abi_params.push(length);
+            let length_slot = builder.slot();
+            builder.slice_lengths.insert(name.clone(), length_slot);
+            builder.slice_scales.insert(
+                name.clone(),
+                if matches!(
+                    element.as_ref(),
+                    HirType::Integer {
+                        bits: 8,
+                        signed: false
+                    }
+                ) {
+                    1
+                } else {
+                    8
+                },
+            );
             builder.emit(MirInstruction::StoreSlot {
-                slot,
-                value: incoming,
+                slot: length_slot,
+                value: length,
             });
-            (name.clone(), ty.clone(), incoming)
-        })
-        .collect();
+        }
+        if let Some(struct_name) = struct_name_from_hir_type(ty, &builder.struct_fields) {
+            builder.variable_structs.insert(name.clone(), struct_name);
+        }
+        builder.emit(MirInstruction::StoreSlot {
+            slot,
+            value: incoming,
+        });
+        params.push((name.clone(), ty.clone(), incoming));
+    }
     let result = builder.expression(&function.body);
     let result = if function.result == HirType::Void {
         None
@@ -1220,6 +1345,7 @@ fn lower_function(
     MirFunction {
         name: function.name.clone(),
         params,
+        abi_params,
         result: function.result.clone(),
         slot_count: builder.next_slot,
         blocks,
@@ -1324,6 +1450,30 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
             (function.name.clone(), parameters)
         })
         .collect::<std::collections::HashMap<_, _>>();
+    let function_slice_params = module
+        .functions
+        .iter()
+        .map(|function| {
+            (
+                function.name.clone(),
+                function
+                    .params
+                    .iter()
+                    .map(|(_, ty)| matches!(ty, HirType::Slice(_)))
+                    .collect(),
+            )
+        })
+        .chain(module.extern_functions.iter().map(|function| {
+            (
+                function.name.clone(),
+                function
+                    .params
+                    .iter()
+                    .map(|ty| matches!(ty, HirType::Slice(_)))
+                    .collect(),
+            )
+        }))
+        .collect::<std::collections::HashMap<_, _>>();
     MirModule {
         functions: module
             .functions
@@ -1334,6 +1484,7 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
                     &enum_tags,
                     &struct_fields,
                     &function_struct_params,
+                    &function_slice_params,
                 )
             })
             .collect(),

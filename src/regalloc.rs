@@ -270,6 +270,7 @@ fn instruction_uses_defs(instruction: &LirInstruction) -> (Vec<ValueId>, Vec<Val
             destination,
             base: lhs,
             index: rhs,
+            ..
         } => (vec![*lhs, *rhs], vec![*destination]),
         LirInstruction::Rem {
             destination,
@@ -293,6 +294,10 @@ fn instruction_uses_defs(instruction: &LirInstruction) -> (Vec<ValueId>, Vec<Val
         | LirInstruction::SlotAddress { destination, .. } => (Vec::new(), vec![*destination]),
         LirInstruction::StoreSlot { value, .. } => (vec![*value], Vec::new()),
         LirInstruction::LoadIndirect {
+            destination,
+            address,
+        }
+        | LirInstruction::LoadByteIndirect {
             destination,
             address,
         } => (vec![*address], vec![*destination]),
@@ -356,6 +361,7 @@ fn rewrite_function(
                     destination,
                     base: lhs,
                     index: rhs,
+                    ..
                 } => {
                     map_value(destination)?;
                     map_value(lhs)?;
@@ -387,6 +393,10 @@ fn rewrite_function(
                 | LirInstruction::SlotAddress { destination, .. } => map_value(destination)?,
                 LirInstruction::StoreSlot { value, .. } => map_value(value)?,
                 LirInstruction::LoadIndirect {
+                    destination,
+                    address,
+                }
+                | LirInstruction::LoadByteIndirect {
                     destination,
                     address,
                 } => {
