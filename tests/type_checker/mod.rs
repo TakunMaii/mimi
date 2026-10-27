@@ -193,3 +193,20 @@ fn rejects_invalid_struct_fields_and_ambiguous_struct_literals() {
             .contains("cannot infer anonymous struct type")
     );
 }
+
+#[test]
+fn checks_control_flow_conditions() {
+    let ast = parse(tokenize(
+        "values := 1 if true { value := 1 } while false { defer { loop {} } } for item in values { item }"
+            .chars(),
+    ));
+    check(&ast).unwrap();
+}
+
+#[test]
+fn rejects_non_boolean_if_and_while_conditions() {
+    let ast = parse(tokenize("if 1 {} while 2 {}".chars()));
+    let errors = check(&ast).unwrap_err();
+    assert_eq!(errors.len(), 2);
+    assert!(errors.iter().all(|error| error.message.contains("bool")));
+}

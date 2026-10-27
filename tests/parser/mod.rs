@@ -328,3 +328,20 @@ fn parses_struct_definition_literals_and_member_access() {
         if member == "x")
     );
 }
+
+#[test]
+fn parses_control_flow_statements() {
+    let nodes = parse(tokenize(
+        "if true { x := 1 } else { x := 2 } while false { defer { loop {} } } for item in values { item }"
+            .chars(),
+    ));
+    assert!(matches!(
+        &nodes[0],
+        ASTNode::If {
+            else_branch: Some(_),
+            ..
+        }
+    ));
+    assert!(matches!(&nodes[1], ASTNode::While { .. }));
+    assert!(matches!(&nodes[2], ASTNode::For { binding, .. } if binding == "item"));
+}

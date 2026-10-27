@@ -99,6 +99,26 @@ pub(crate) enum ASTNode {
         name: &'static str,
         fields: Vec<(String, DataType)>,
     },
+    If {
+        condition: Expression,
+        then_branch: Expression,
+        else_branch: Option<Expression>,
+    },
+    While {
+        condition: Expression,
+        body: Expression,
+    },
+    For {
+        binding: String,
+        iterable: Expression,
+        body: Expression,
+    },
+    Loop {
+        body: Expression,
+    },
+    Defer {
+        body: Expression,
+    },
 }
 
 pub(crate) fn parse(tokens: Vec<Token>) -> Vec<ASTNode> {
@@ -106,15 +126,104 @@ pub(crate) fn parse(tokens: Vec<Token>) -> Vec<ASTNode> {
     let mut nodes = vec![];
 
     while let Some(token) = tokens.next() {
-        let name = match token {
-            Token::Identifier(name) => name,
-            _ => panic!("expected an identifier at the start of a statement"),
-        };
-
-        nodes.push(parse_statement_after_name(name, &mut tokens));
+        nodes.push(parse_statement_token(token, &mut tokens));
     }
 
     nodes
+}
+
+fn parse_statement_token<I>(token: Token, tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    match token {
+        Token::Identifier(name) => parse_statement_after_name(name, tokens),
+        Token::If => parse_if(tokens),
+        Token::While => parse_while(tokens),
+        Token::For => parse_for(tokens),
+        Token::Loop => parse_loop(tokens),
+        Token::Defer => parse_defer(tokens),
+        _ => panic!("expected a statement"),
+    }
+}
+
+fn parse_block_expression<I>(tokens: &mut std::iter::Peekable<I>) -> Expression
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    assert!(
+        matches!(tokens.next(), Some(Token::LeftBrace)),
+        "expected '{{'"
+    );
+    Expression::Block(parse_block(tokens))
+}
+
+fn parse_if<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let condition = parse_expression(tokens, 0);
+    let then_branch = parse_block_expression(tokens);
+    let else_branch = if matches!(tokens.peek(), Some(Token::Else)) {
+        tokens.next();
+        Some(parse_block_expression(tokens))
+    } else {
+        None
+    };
+    ASTNode::If {
+        condition,
+        then_branch,
+        else_branch,
+    }
+}
+
+fn parse_while<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let condition = parse_expression(tokens, 0);
+    ASTNode::While {
+        condition,
+        body: parse_block_expression(tokens),
+    }
+}
+
+fn parse_for<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let binding = match tokens.next() {
+        Some(Token::Identifier(name)) => name,
+        _ => panic!("expected loop binding after 'for'"),
+    };
+    assert!(
+        matches!(tokens.next(), Some(Token::In)),
+        "expected 'in' after loop binding"
+    );
+    let iterable = parse_expression(tokens, 0);
+    ASTNode::For {
+        binding,
+        iterable,
+        body: parse_block_expression(tokens),
+    }
+}
+
+fn parse_loop<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    ASTNode::Loop {
+        body: parse_block_expression(tokens),
+    }
+}
+
+fn parse_defer<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    ASTNode::Defer {
+        body: parse_block_expression(tokens),
+    }
 }
 
 fn parse_statement_after_name<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
@@ -319,7 +428,7 @@ where
                 tokens.next();
             }
             lhs = Expression::Call { name, arguments };
-        } else if matches!(tokens.peek(), Some(Token::LeftBrace)) {
+        } else if brace_starts_struct_literal(tokens) {
             tokens.next();
             lhs = Expression::StructLiteral {
                 type_name: Some(Box::leak(name.into_boxed_str())),
@@ -386,6 +495,18 @@ where
     }
 
     lhs
+}
+
+fn brace_starts_struct_literal<I>(tokens: &std::iter::Peekable<I>) -> bool
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let mut lookahead = tokens.clone();
+    if !matches!(lookahead.next(), Some(Token::LeftBrace)) {
+        return false;
+    }
+    matches!(lookahead.next(), Some(Token::Identifier(_)))
+        && matches!(lookahead.next(), Some(Token::Equal))
 }
 
 fn parse_struct_fields<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<(String, Expression)>
@@ -463,6 +584,9 @@ where
 
         let first = tokens.next().unwrap();
         let item = match first {
+            Token::If | Token::While | Token::For | Token::Loop | Token::Defer => {
+                parse_statement_token(first, tokens)
+            }
             Token::Return => {
                 let value = if matches!(tokens.peek(), Some(Token::RightBrace)) {
                     None

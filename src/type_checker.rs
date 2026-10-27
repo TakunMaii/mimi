@@ -213,6 +213,51 @@ fn check_statement(
         }
         ASTNode::Return(_) => Err(error("return is only valid inside a function")),
         ASTNode::StructDefinition { .. } => Ok(()),
+        ASTNode::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            infer_expression(condition, scopes, functions, structs, Some(DataType::Bool))?;
+            infer_expression(
+                then_branch,
+                scopes,
+                functions,
+                structs,
+                Some(DataType::Void),
+            )?;
+            if let Some(branch) = else_branch {
+                infer_expression(branch, scopes, functions, structs, Some(DataType::Void))?;
+            }
+            Ok(())
+        }
+        ASTNode::While { condition, body } => {
+            infer_expression(condition, scopes, functions, structs, Some(DataType::Bool))?;
+            infer_expression(body, scopes, functions, structs, Some(DataType::Void))?;
+            Ok(())
+        }
+        ASTNode::For {
+            binding,
+            iterable,
+            body,
+        } => {
+            let iterable_type = infer_expression(iterable, scopes, functions, structs, None)?;
+            scopes.push(HashMap::from([(
+                binding.clone(),
+                Symbol {
+                    data_type: iterable_type,
+                    mutable: false,
+                },
+            )]));
+            let result = infer_expression(body, scopes, functions, structs, Some(DataType::Void));
+            scopes.pop();
+            result?;
+            Ok(())
+        }
+        ASTNode::Loop { body } | ASTNode::Defer { body } => {
+            infer_expression(body, scopes, functions, structs, Some(DataType::Void))?;
+            Ok(())
+        }
     }
 }
 
