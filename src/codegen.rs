@@ -201,14 +201,14 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                             * 4
                     }
             }
-            MirTerminator::Jump(target) => 4 + phi_copies(function, block.id, target).len() * 4,
+            MirTerminator::Jump(target) => 4 + phi_move_count(function, block.id, target) * 4,
             MirTerminator::Branch {
                 then_block,
                 else_block,
                 ..
             } => {
-                12 + (phi_copies(function, block.id, then_block).len()
-                    + phi_copies(function, block.id, else_block).len())
+                12 + (phi_move_count(function, block.id, then_block)
+                    + phi_move_count(function, block.id, else_block))
                     * 4
             }
             MirTerminator::Unreachable => {
@@ -260,14 +260,30 @@ fn phi_copies(
         .collect()
 }
 
+fn phi_move_count(
+    function: &LirFunction,
+    from: crate::mir::BlockId,
+    to: crate::mir::BlockId,
+) -> usize {
+    let moves = phi_copies(function, from, to)
+        .into_iter()
+        .map(|(destination, source)| (destination.0, source.0))
+        .collect::<Vec<_>>();
+    parallel_moves(&moves).len()
+}
+
 fn emit_phi_copies(
     function: &LirFunction,
     from: crate::mir::BlockId,
     to: crate::mir::BlockId,
     bytes: &mut Vec<u8>,
 ) {
-    for (destination, source) in phi_copies(function, from, to) {
-        push_word(bytes, 0xaa00_03e0 | (source.0 << 16) | destination.0);
+    let moves = phi_copies(function, from, to)
+        .into_iter()
+        .map(|(destination, source)| (destination.0, source.0))
+        .collect::<Vec<_>>();
+    for (destination, source) in parallel_moves(&moves) {
+        push_word(bytes, 0xaa00_03e0 | (source << 16) | destination);
     }
 }
 
@@ -581,14 +597,14 @@ fn block_encoded_size(
                         * 4
                 }
         }
-        MirTerminator::Jump(target) => 4 + phi_copies(function, block.id, target).len() * 4,
+        MirTerminator::Jump(target) => 4 + phi_move_count(function, block.id, target) * 4,
         MirTerminator::Branch {
             then_block,
             else_block,
             ..
         } => {
-            12 + (phi_copies(function, block.id, then_block).len()
-                + phi_copies(function, block.id, else_block).len())
+            12 + (phi_move_count(function, block.id, then_block)
+                + phi_move_count(function, block.id, else_block))
                 * 4
         }
         MirTerminator::Unreachable => {
@@ -727,13 +743,18 @@ fn encode_parallel_argument_moves(args: &[ValueId], bytes: &mut Vec<u8>) {
 }
 
 fn argument_moves(args: &[ValueId]) -> Vec<(u32, u32)> {
-    let mut pending = args
+    let moves = args
         .iter()
         .enumerate()
         .filter_map(|(destination, source)| {
             (source.0 != destination as u32).then_some((destination as u32, source.0))
         })
         .collect::<Vec<_>>();
+    parallel_moves(&moves)
+}
+
+fn parallel_moves(moves: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut pending = moves.to_vec();
     let mut output = Vec::new();
     while !pending.is_empty() {
         let sources = pending
@@ -889,176 +910,292 @@ fn emit_aarch64(module: &LirModule) -> Result<String, String> {
         let function = allocate_registers(function)?;
         emit_function(&function, &mut assembly)?;
     }
+    if !module.strings.is_empty() {
+        assembly.push_str(".section __TEXT,__const\n.p2align 3\n");
+        for (symbol, bytes) in &module.strings {
+            assembly.push_str(&format!("{symbol}:\n"));
+            if bytes.is_empty() {
+                assembly.push_str("    .byte 0\n");
+            } else {
+                for chunk in bytes.chunks(16) {
+                    assembly.push_str("    .byte ");
+                    for (index, byte) in chunk.iter().enumerate() {
+                        if index != 0 {
+                            assembly.push_str(", ");
+                        }
+                        assembly.push_str(&byte.to_string());
+                    }
+                    assembly.push('\n');
+                }
+            }
+        }
+    }
     Ok(assembly)
 }
 
 fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), String> {
+    if function.blocks.is_empty() {
+        return Err("function has no basic blocks".into());
+    }
     if function.params.len() > 8 {
         return Err("ARM64 backend currently supports at most 8 integer parameters".into());
     }
     let label = format!("_{}", function.name);
     assembly.push_str(&format!(".globl {label}\n{label}:\n"));
     let frame_size = stack_frame_size(function);
-    if frame_size > 4095 {
-        return Err("textual ARM64 emitter supports stack frames up to 4095 bytes".into());
+    let has_calls = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
+    if has_calls {
+        assembly.push_str("    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
     }
-    if frame_size != 0 {
-        assembly.push_str(&format!("    sub sp, sp, #{frame_size}\n"));
-    }
-    for instruction in &function.blocks[0].instructions {
-        match instruction {
-            LirInstruction::LoadImmediate { register, value } => {
-                if !(-4095..=4095).contains(value) {
-                    return Err(format!(
-                        "integer immediate {value} is too large for ARM64 prototype backend"
+    emit_stack_adjust(assembly, frame_size, true);
+
+    for block in &function.blocks {
+        assembly.push_str(&format!(".L{}_{}:\n", function.name, block.id.0));
+        for instruction in &block.instructions {
+            match instruction {
+                LirInstruction::LoadImmediate { register, value } => {
+                    emit_immediate(assembly, register.0, *value as u64);
+                }
+                LirInstruction::LoadAddress { register, symbol } => {
+                    assembly.push_str(&format!(
+                        "    adrp x{}, {symbol}@PAGE\n    add x{}, x{}, {symbol}@PAGEOFF\n",
+                        register.0, register.0, register.0
                     ));
                 }
-                assembly.push_str(&format!("    mov x{}, #{}\n", register.0, value));
-            }
-            LirInstruction::LoadAddress { symbol, .. } => {
-                return Err(format!(
-                    "string address '{symbol}' requires data-section relocation support"
-                ));
-            }
-            LirInstruction::Add {
-                destination,
-                lhs,
-                rhs,
-            } => {
-                assembly.push_str(&format!(
+                LirInstruction::Add {
+                    destination,
+                    lhs,
+                    rhs,
+                } => assembly.push_str(&format!(
                     "    add x{}, x{}, x{}\n",
                     destination.0, lhs.0, rhs.0
-                ));
-            }
-            LirInstruction::Sub {
-                destination,
-                lhs,
-                rhs,
-            } => {
-                assembly.push_str(&format!(
+                )),
+                LirInstruction::Sub {
+                    destination,
+                    lhs,
+                    rhs,
+                } => assembly.push_str(&format!(
                     "    sub x{}, x{}, x{}\n",
                     destination.0, lhs.0, rhs.0
-                ));
-            }
-            LirInstruction::Mul {
-                destination,
-                lhs,
-                rhs,
-            } => {
-                assembly.push_str(&format!(
+                )),
+                LirInstruction::Mul {
+                    destination,
+                    lhs,
+                    rhs,
+                } => assembly.push_str(&format!(
                     "    mul x{}, x{}, x{}\n",
                     destination.0, lhs.0, rhs.0
-                ));
-            }
-            LirInstruction::Div {
-                destination,
-                lhs,
-                rhs,
-            } => {
-                assembly.push_str(&format!(
+                )),
+                LirInstruction::Div {
+                    destination,
+                    lhs,
+                    rhs,
+                } => assembly.push_str(&format!(
                     "    sdiv x{}, x{}, x{}\n",
                     destination.0, lhs.0, rhs.0
-                ));
-            }
-            LirInstruction::Neg { destination, value } => {
-                assembly.push_str(&format!("    neg x{}, x{}\n", destination.0, value.0));
-            }
-            LirInstruction::Not { destination, value } => {
-                assembly.push_str(&format!(
-                    "    cmp x{}, #0\n    cset x{}, eq\n",
-                    value.0, destination.0
-                ));
-            }
-            LirInstruction::LoadSlot { destination, slot } => {
-                assembly.push_str(&format!(
-                    "    ldr x{}, [sp, #{}]\n",
-                    destination.0,
-                    slot.0 * 8
-                ));
-            }
-            LirInstruction::StoreSlot { slot, value } => {
-                assembly.push_str(&format!("    str x{}, [sp, #{}]\n", value.0, slot.0 * 8));
-            }
-            LirInstruction::Rem {
-                destination,
-                lhs,
-                rhs,
-            } => {
-                assembly.push_str(&format!(
+                )),
+                LirInstruction::Rem {
+                    destination,
+                    lhs,
+                    rhs,
+                } => assembly.push_str(&format!(
                     "    sdiv x16, x{}, x{}\n    msub x{}, x16, x{}, x{}\n",
                     lhs.0, rhs.0, destination.0, rhs.0, lhs.0
-                ));
-            }
-            LirInstruction::SlotAddress { destination, slot } => {
-                assembly.push_str(&format!(
-                    "    add x{}, sp, #{}\n",
-                    destination.0,
-                    slot.0 * 8
-                ));
-            }
-            LirInstruction::IndexAddress {
-                destination,
-                base,
-                index,
-            } => {
-                assembly.push_str(&format!(
+                )),
+                LirInstruction::Neg { destination, value } => {
+                    assembly.push_str(&format!("    neg x{}, x{}\n", destination.0, value.0))
+                }
+                LirInstruction::Not { destination, value } => assembly.push_str(&format!(
+                    "    cmp x{}, #0\n    cset x{}, eq\n",
+                    value.0, destination.0
+                )),
+                LirInstruction::Compare {
+                    destination,
+                    lhs,
+                    rhs,
+                    kind,
+                } => {
+                    let condition = match kind {
+                        CompareKind::Equal => "eq",
+                        CompareKind::NotEqual => "ne",
+                        CompareKind::GreaterEqual => "ge",
+                        CompareKind::Less => "lt",
+                        CompareKind::Greater => "gt",
+                        CompareKind::LessEqual => "le",
+                    };
+                    assembly.push_str(&format!(
+                        "    cmp x{}, x{}\n    cset x{}, {condition}\n",
+                        lhs.0, rhs.0, destination.0
+                    ));
+                }
+                LirInstruction::Call { result, name, args } => {
+                    if args.len() > 8 {
+                        return Err(
+                            "ARM64 assembly emitter supports at most 8 integer arguments".into(),
+                        );
+                    }
+                    emit_register_moves(assembly, &argument_moves(args));
+                    assembly.push_str(&format!("    bl _{name}\n"));
+                    if let Some(result) = result {
+                        if result.0 != 0 {
+                            assembly.push_str(&format!("    mov x{}, x0\n", result.0));
+                        }
+                    }
+                }
+                LirInstruction::Phi { .. } => {}
+                LirInstruction::LoadSlot { destination, slot } => {
+                    emit_stack_load(assembly, destination.0, slot.0 * 8);
+                }
+                LirInstruction::StoreSlot { slot, value } => {
+                    emit_stack_store(assembly, value.0, slot.0 * 8);
+                }
+                LirInstruction::SlotAddress { destination, slot } => {
+                    emit_sp_address(assembly, destination.0, slot.0 * 8);
+                }
+                LirInstruction::IndexAddress {
+                    destination,
+                    base,
+                    index,
+                } => assembly.push_str(&format!(
                     "    add x{}, x{}, x{}, lsl #3\n",
                     destination.0, base.0, index.0
-                ));
+                )),
+                LirInstruction::LoadIndirect {
+                    destination,
+                    address,
+                } => assembly.push_str(&format!("    ldr x{}, [x{}]\n", destination.0, address.0)),
+                LirInstruction::StoreIndirect { address, value } => {
+                    assembly.push_str(&format!("    str x{}, [x{}]\n", value.0, address.0))
+                }
             }
-            LirInstruction::LoadIndirect {
-                destination,
-                address,
+        }
+        match block.terminator {
+            MirTerminator::Jump(target) => {
+                emit_assembly_phi_copies(assembly, function, block.id, target);
+                assembly.push_str(&format!("    b .L{}_{}\n", function.name, target.0));
+            }
+            MirTerminator::Branch {
+                condition,
+                then_block,
+                else_block,
             } => {
-                assembly.push_str(&format!("    ldr x{}, [x{}]\n", destination.0, address.0));
-            }
-            LirInstruction::StoreIndirect { address, value } => {
-                assembly.push_str(&format!("    str x{}, [x{}]\n", value.0, address.0));
-            }
-            LirInstruction::Compare {
-                destination,
-                lhs,
-                rhs,
-                kind,
-            } => {
-                let condition = match kind {
-                    CompareKind::Equal => "eq",
-                    CompareKind::NotEqual => "ne",
-                    CompareKind::GreaterEqual => "ge",
-                    CompareKind::Less => "lt",
-                    CompareKind::Greater => "gt",
-                    CompareKind::LessEqual => "le",
-                };
                 assembly.push_str(&format!(
-                    "    cmp x{}, x{}\n    cset x{}, {}\n",
-                    lhs.0, rhs.0, destination.0, condition
+                    "    cbz x{}, .L{}_{}_else_from_{}\n",
+                    condition.0, function.name, block.id.0, else_block.0
                 ));
-            }
-            LirInstruction::Call { name, .. } => {
-                return Err(format!(
-                    "external call '{name}' is not yet supported by the ARM64 assembly emitter"
+                emit_assembly_phi_copies(assembly, function, block.id, then_block);
+                assembly.push_str(&format!("    b .L{}_{}\n", function.name, then_block.0));
+                assembly.push_str(&format!(
+                    ".L{}_{}_else_from_{}:\n",
+                    function.name, block.id.0, else_block.0
                 ));
+                emit_assembly_phi_copies(assembly, function, block.id, else_block);
+                assembly.push_str(&format!("    b .L{}_{}\n", function.name, else_block.0));
             }
-            LirInstruction::Phi { .. } => {
-                return Err("phi nodes require multi-block code generation".into());
+            MirTerminator::Return(value) => {
+                if let Some(value) = value
+                    && value.0 != 0
+                {
+                    assembly.push_str(&format!("    mov x0, x{}\n", value.0));
+                }
+                emit_stack_adjust(assembly, frame_size, false);
+                if has_calls {
+                    assembly.push_str("    ldp x29, x30, [sp], #16\n");
+                }
+                assembly.push_str("    ret\n");
+            }
+            MirTerminator::Unreachable => {
+                return Err("unreachable terminator reached ARM64 assembly emitter".into());
             }
         }
     }
-    if let Some(value) = return_value(function) {
-        if value.0 != 0 {
-            assembly.push_str(&format!("    mov x0, x{}\n", value.0));
-        }
-    }
-    if frame_size != 0 {
-        assembly.push_str(&format!("    add sp, sp, #{frame_size}\n"));
-    }
-    assembly.push_str("    ret\n");
     Ok(())
 }
 
-fn return_value(function: &LirFunction) -> Option<ValueId> {
-    match function.blocks.first()?.terminator {
-        MirTerminator::Return(value) => value,
-        _ => None,
+fn emit_immediate(assembly: &mut String, register: u32, value: u64) {
+    let chunks = (0..4)
+        .map(|shift| ((value >> (shift * 16)) & 0xffff) as u16)
+        .collect::<Vec<_>>();
+    let first = chunks.iter().position(|chunk| *chunk != 0).unwrap_or(0);
+    assembly.push_str(&format!(
+        "    movz x{register}, #{}, lsl #{}\n",
+        chunks[first],
+        first * 16
+    ));
+    for (shift, chunk) in chunks.iter().enumerate().skip(first + 1) {
+        if *chunk != 0 {
+            assembly.push_str(&format!(
+                "    movk x{register}, #{chunk}, lsl #{}\n",
+                shift * 16
+            ));
+        }
     }
+}
+
+fn emit_stack_adjust(assembly: &mut String, size: u32, subtract: bool) {
+    let instruction = if subtract { "sub" } else { "add" };
+    let mut remaining = size;
+    while remaining != 0 {
+        let immediate = remaining.min(4095);
+        assembly.push_str(&format!("    {instruction} sp, sp, #{immediate}\n"));
+        remaining -= immediate;
+    }
+}
+
+fn emit_sp_address(assembly: &mut String, destination: u32, offset: u32) {
+    if offset == 0 {
+        assembly.push_str(&format!("    mov x{destination}, sp\n"));
+        return;
+    }
+    let first = offset.min(4095);
+    assembly.push_str(&format!("    add x{destination}, sp, #{first}\n"));
+    let mut remaining = offset - first;
+    while remaining != 0 {
+        let immediate = remaining.min(4095);
+        assembly.push_str(&format!(
+            "    add x{destination}, x{destination}, #{immediate}\n"
+        ));
+        remaining -= immediate;
+    }
+}
+
+fn emit_stack_load(assembly: &mut String, destination: u32, offset: u32) {
+    if offset <= 32760 {
+        assembly.push_str(&format!("    ldr x{destination}, [sp, #{offset}]\n"));
+    } else {
+        emit_sp_address(assembly, 16, offset);
+        assembly.push_str(&format!("    ldr x{destination}, [x16]\n"));
+    }
+}
+
+fn emit_stack_store(assembly: &mut String, value: u32, offset: u32) {
+    if offset <= 32760 {
+        assembly.push_str(&format!("    str x{value}, [sp, #{offset}]\n"));
+    } else {
+        emit_sp_address(assembly, 16, offset);
+        assembly.push_str(&format!("    str x{value}, [x16]\n"));
+    }
+}
+
+fn emit_register_moves(assembly: &mut String, moves: &[(u32, u32)]) {
+    for (destination, source) in moves {
+        assembly.push_str(&format!("    mov x{destination}, x{source}\n"));
+    }
+}
+
+fn emit_assembly_phi_copies(
+    assembly: &mut String,
+    function: &LirFunction,
+    from: crate::mir::BlockId,
+    to: crate::mir::BlockId,
+) {
+    let moves = phi_copies(function, from, to)
+        .into_iter()
+        .map(|(destination, source)| (destination.0, source.0))
+        .collect::<Vec<_>>();
+    emit_register_moves(assembly, &parallel_moves(&moves));
 }

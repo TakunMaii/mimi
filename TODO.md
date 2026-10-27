@@ -38,7 +38,7 @@ and focused regression coverage; it does not imply support on every target.
 
 ## Targets and Tooling
 
-- [ ] Make textual assembly emission cover all MIR blocks and supported operations.
+- [x] Emit textual assembly for all current LIR blocks and supported operations.
 - [ ] Implement x86_64 code generation.
 - [ ] Define target interfaces and add another platform/object format.
 - [ ] Add integration tests that compile, link, and run representative programs per feature.

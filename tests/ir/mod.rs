@@ -428,6 +428,44 @@ fn emits_host_assembly_for_integer_function() {
 }
 
 #[test]
+fn emits_host_assembly_for_calls_and_control_flow() {
+    if !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let ast = parse(tokenize(
+        r#"extern print : fn(str : []u8)void identity :: fn (value : i32) i32 { value } main :: fn () i32 { i := 0 total := 0 while i < 3 { total = total + identity(i) i = i + 1 } if total == 3 { print("ok") 10 } else { 1 } }"#.chars(),
+    ));
+    let hir = hir::lower_ast(&ast);
+    let mir = mir::lower_hir(&hir);
+    let lir = lir::lower_mir(&mir, &lir::HostTarget);
+    let assembly = codegen::emit_assembly(&lir).unwrap();
+    assert!(assembly.contains("bl _identity"));
+    assert!(assembly.contains("bl _print"));
+    assert!(assembly.contains("adrp x"));
+    assert!(assembly.contains(".section __TEXT,__const"));
+    assert!(assembly.contains("_mimi_string_0:"));
+    assert!(assembly.contains("cbz x"));
+    assert!(assembly.contains(".Lmain_"));
+    assert!(assembly.contains("stp x29, x30"));
+    assert!(assembly.contains("ldp x29, x30"));
+    let assembly_path =
+        std::env::temp_dir().join(format!("mimi_text_assembly_{}.s", std::process::id()));
+    let object_path =
+        std::env::temp_dir().join(format!("mimi_text_assembly_{}.o", std::process::id()));
+    std::fs::write(&assembly_path, assembly).unwrap();
+    let status = std::process::Command::new("cc")
+        .arg("-c")
+        .arg(&assembly_path)
+        .arg("-o")
+        .arg(&object_path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    std::fs::remove_file(assembly_path).unwrap();
+    std::fs::remove_file(object_path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_a_minimal_host_executable() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
