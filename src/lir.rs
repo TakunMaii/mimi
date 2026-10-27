@@ -1,4 +1,4 @@
-use crate::mir::{MirFunction, MirInstruction, MirModule, MirTerminator, ValueId};
+use crate::mir::{CompareKind, MirFunction, MirInstruction, MirModule, MirTerminator, ValueId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TargetArch {
@@ -57,6 +57,21 @@ pub(crate) enum LirInstruction {
         destination: ValueId,
         lhs: ValueId,
         rhs: ValueId,
+    },
+    Rem {
+        destination: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    Neg {
+        destination: ValueId,
+        value: ValueId,
+    },
+    Compare {
+        destination: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+        kind: CompareKind,
     },
     Call {
         result: Option<ValueId>,
@@ -120,6 +135,26 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                 destination: *result,
                 lhs: *lhs,
                 rhs: *rhs,
+            },
+            MirInstruction::Rem { result, lhs, rhs } => LirInstruction::Rem {
+                destination: *result,
+                lhs: *lhs,
+                rhs: *rhs,
+            },
+            MirInstruction::Neg { result, value } => LirInstruction::Neg {
+                destination: *result,
+                value: *value,
+            },
+            MirInstruction::Compare {
+                result,
+                lhs,
+                rhs,
+                kind,
+            } => LirInstruction::Compare {
+                destination: *result,
+                lhs: *lhs,
+                rhs: *rhs,
+                kind: *kind,
             },
             MirInstruction::ConstBool { result, value } => LirInstruction::LoadImmediate {
                 register: *result,

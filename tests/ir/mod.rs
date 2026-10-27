@@ -109,3 +109,47 @@ fn lowers_string_literals_to_data_symbols_in_lir() {
         [lir::LirInstruction::LoadAddress { .. }]
     ));
 }
+
+#[test]
+fn builds_and_runs_extended_integer_operations() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_ops_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_ops_codegen_{}", std::process::id()));
+    std::fs::write(&source, "main :: fn () i32 { 5 % 2 }").unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(1));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn builds_and_runs_integer_comparison() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_cmp_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_cmp_codegen_{}", std::process::id()));
+    std::fs::write(&source, "main :: fn () bool { 3 < 4 }").unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(1));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}

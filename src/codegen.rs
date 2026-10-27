@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::lir::{LirFunction, LirInstruction, LirModule, TargetArch};
-use crate::mir::{MirTerminator, ValueId};
+use crate::mir::{CompareKind, MirTerminator, ValueId};
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LinkOptions {
@@ -114,7 +114,9 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
             LirInstruction::Add { .. }
             | LirInstruction::Sub { .. }
             | LirInstruction::Mul { .. }
-            | LirInstruction::Div { .. } => 1,
+            | LirInstruction::Div { .. }
+            | LirInstruction::Neg { .. } => 1,
+            LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
             LirInstruction::Call { args, result, .. } => {
                 args.iter()
                     .enumerate()
@@ -193,6 +195,43 @@ fn encode_function(
                 lhs,
                 rhs,
             } => 0x9ac0_0c00 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+            LirInstruction::Neg { destination, value } => {
+                push_word(bytes, 0xcb00_03e0 | (value.0 << 16) | destination.0);
+                continue;
+            }
+            LirInstruction::Rem {
+                destination,
+                lhs,
+                rhs,
+            } => {
+                push_word(bytes, 0x9ac0_0c10 | (rhs.0 << 16) | (lhs.0 << 5));
+                push_word(
+                    bytes,
+                    0x9b00_8000 | (rhs.0 << 16) | (lhs.0 << 10) | (16 << 5) | destination.0,
+                );
+                continue;
+            }
+            LirInstruction::Compare {
+                destination,
+                lhs,
+                rhs,
+                kind,
+            } => {
+                push_word(bytes, 0xeb00_001f | (rhs.0 << 16) | (lhs.0 << 5));
+                let condition = match kind {
+                    CompareKind::Equal => 0,
+                    CompareKind::NotEqual => 1,
+                    CompareKind::GreaterEqual => 10,
+                    CompareKind::Less => 11,
+                    CompareKind::Greater => 12,
+                    CompareKind::LessEqual => 13,
+                };
+                push_word(
+                    bytes,
+                    0x9a9f_07e0 | (((condition ^ 1) as u32) << 12) | destination.0,
+                );
+                continue;
+            }
             LirInstruction::Call { result, name, args } => {
                 for (index, argument) in args.iter().enumerate() {
                     if argument.0 != index as u32 {
@@ -268,6 +307,20 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
             lhs,
             rhs,
         } => vec![*destination, *lhs, *rhs],
+        LirInstruction::Rem {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::Compare {
+            destination,
+            lhs,
+            rhs,
+            ..
+        } => {
+            vec![*destination, *lhs, *rhs]
+        }
+        LirInstruction::Neg { destination, value } => vec![*destination, *value],
         LirInstruction::Call { result, args, .. } => {
             result.iter().copied().chain(args.iter().copied()).collect()
         }
@@ -446,6 +499,38 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                 assembly.push_str(&format!(
                     "    sdiv x{}, x{}, x{}\n",
                     destination.0, lhs.0, rhs.0
+                ));
+            }
+            LirInstruction::Neg { destination, value } => {
+                assembly.push_str(&format!("    neg x{}, x{}\n", destination.0, value.0));
+            }
+            LirInstruction::Rem {
+                destination,
+                lhs,
+                rhs,
+            } => {
+                assembly.push_str(&format!(
+                    "    sdiv x16, x{}, x{}\n    msub x{}, x16, x{}, x{}\n",
+                    lhs.0, rhs.0, destination.0, rhs.0, lhs.0
+                ));
+            }
+            LirInstruction::Compare {
+                destination,
+                lhs,
+                rhs,
+                kind,
+            } => {
+                let condition = match kind {
+                    CompareKind::Equal => "eq",
+                    CompareKind::NotEqual => "ne",
+                    CompareKind::GreaterEqual => "ge",
+                    CompareKind::Less => "lt",
+                    CompareKind::Greater => "gt",
+                    CompareKind::LessEqual => "le",
+                };
+                assembly.push_str(&format!(
+                    "    cmp x{}, x{}\n    cset x{}, {}\n",
+                    lhs.0, rhs.0, destination.0, condition
                 ));
             }
             LirInstruction::Call { name, .. } => {
