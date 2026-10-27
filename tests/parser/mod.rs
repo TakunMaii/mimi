@@ -1,6 +1,6 @@
 use super::{
     lexer::{Token, tokenize},
-    parser::{ASTNode, Expression, parse},
+    parser::{ASTNode, DataType, Expression, parse},
 };
 
 #[test]
@@ -33,6 +33,7 @@ fn parses_arithmetic_precedence_and_parentheses() {
         parse(tokenize("result := 1 + 2 * (3 - 4)".chars())),
         vec![ASTNode::VariableDefinition {
             name: "result".into(),
+            data_type: None,
             value: Expression::Add(
                 Box::new(Expression::LiteralNumber(1.0)),
                 Box::new(Expression::Multiply(
@@ -54,6 +55,7 @@ fn parses_all_statement_kinds_with_expression_values() {
         vec![
             ASTNode::VariableDefinition {
                 name: "x".into(),
+                data_type: None,
                 value: Expression::Add(
                     Box::new(Expression::Identifier("a".into())),
                     Box::new(Expression::LiteralNumber(1.0)),
@@ -68,6 +70,7 @@ fn parses_all_statement_kinds_with_expression_values() {
             },
             ASTNode::CompileTimeConstant {
                 name: "z".into(),
+                data_type: None,
                 value: Expression::Remainder(
                     Box::new(Expression::Subtract(
                         Box::new(Expression::Identifier("y".into())),
@@ -86,7 +89,62 @@ fn parses_unary_negation() {
         parse(tokenize("x := -value".chars())),
         vec![ASTNode::VariableDefinition {
             name: "x".into(),
+            data_type: None,
             value: Expression::Negate(Box::new(Expression::Identifier("value".into()))),
         }]
+    );
+}
+
+#[test]
+fn tokenizes_boolean_literals() {
+    assert_eq!(
+        tokenize("true false".chars()),
+        vec![Token::LiteralBool(true), Token::LiteralBool(false)]
+    );
+}
+
+#[test]
+fn parses_explicit_and_inferred_types() {
+    let type_cases = [
+        ("u8", DataType::U8),
+        ("u16", DataType::U16),
+        ("u32", DataType::U32),
+        ("u64", DataType::U64),
+        ("i8", DataType::I8),
+        ("i16", DataType::I16),
+        ("i32", DataType::I32),
+        ("i64", DataType::I64),
+        ("f8", DataType::F8),
+        ("f16", DataType::F16),
+        ("f32", DataType::F32),
+        ("f64", DataType::F64),
+        ("bool", DataType::Bool),
+    ];
+
+    for (type_name, data_type) in type_cases {
+        assert_eq!(
+            parse(tokenize(format!("value : {type_name} = 1").chars())),
+            vec![ASTNode::VariableDefinition {
+                name: "value".into(),
+                data_type: Some(data_type),
+                value: Expression::LiteralNumber(1.0),
+            }]
+        );
+    }
+
+    assert_eq!(
+        parse(tokenize("flag : bool : true inferred := false".chars())),
+        vec![
+            ASTNode::CompileTimeConstant {
+                name: "flag".into(),
+                data_type: Some(DataType::Bool),
+                value: Expression::LiteralBool(true),
+            },
+            ASTNode::VariableDefinition {
+                name: "inferred".into(),
+                data_type: None,
+                value: Expression::LiteralBool(false),
+            },
+        ]
     );
 }

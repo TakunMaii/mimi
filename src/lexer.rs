@@ -2,6 +2,7 @@
 pub(crate) enum Token {
     Identifier(String),
     LiteralNumber(f64),
+    LiteralBool(bool),
     Colon,
     Equal,
     Plus,
@@ -29,7 +30,11 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                     break;
                 }
             }
-            result.push(Token::Identifier(identifier));
+            result.push(match identifier.as_str() {
+                "true" => Token::LiteralBool(true),
+                "false" => Token::LiteralBool(false),
+                _ => Token::Identifier(identifier),
+            });
         } else if ch.is_ascii_digit() {
             let mut number = String::new();
             while let Some(&ch) = chars.peek() {

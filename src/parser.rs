@@ -1,9 +1,27 @@
 use crate::lexer::Token;
 
 #[derive(Debug, PartialEq)]
+pub(crate) enum DataType {
+    U8,
+    U16,
+    U32,
+    U64,
+    I8,
+    I16,
+    I32,
+    I64,
+    F8,
+    F16,
+    F32,
+    F64,
+    Bool,
+}
+
+#[derive(Debug, PartialEq)]
 pub(crate) enum Expression {
     Identifier(String),
     LiteralNumber(f64),
+    LiteralBool(bool),
     Negate(Box<Expression>),
     Add(Box<Expression>, Box<Expression>),
     Subtract(Box<Expression>, Box<Expression>),
@@ -14,9 +32,20 @@ pub(crate) enum Expression {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ASTNode {
-    VariableDefinition { name: String, value: Expression },
-    Assignment { name: String, value: Expression },
-    CompileTimeConstant { name: String, value: Expression },
+    VariableDefinition {
+        name: String,
+        data_type: Option<DataType>,
+        value: Expression,
+    },
+    Assignment {
+        name: String,
+        value: Expression,
+    },
+    CompileTimeConstant {
+        name: String,
+        data_type: Option<DataType>,
+        value: Expression,
+    },
 }
 
 pub(crate) fn parse(tokens: Vec<Token>) -> Vec<ASTNode> {
@@ -29,12 +58,20 @@ pub(crate) fn parse(tokens: Vec<Token>) -> Vec<ASTNode> {
             _ => panic!("expected an identifier at the start of a statement"),
         };
 
-        let node_kind = match tokens.next() {
-            Some(Token::Equal) => 0,
+        let (node_kind, data_type) = match tokens.next() {
+            Some(Token::Equal) => (0, None),
             Some(Token::Colon) => match tokens.next() {
-                Some(Token::Equal) => 1,
-                Some(Token::Colon) => 2,
-                _ => panic!("expected ':' or '=' after ':'"),
+                Some(Token::Equal) => (1, None),
+                Some(Token::Colon) => (2, None),
+                Some(Token::Identifier(type_name)) => {
+                    let data_type = parse_data_type(&type_name);
+                    match tokens.next() {
+                        Some(Token::Equal) => (1, Some(data_type)),
+                        Some(Token::Colon) => (2, Some(data_type)),
+                        _ => panic!("expected '=' or ':' after type"),
+                    }
+                }
+                _ => panic!("expected ':', '=', or a type after ':'"),
             },
             _ => panic!("expected an operator after identifier"),
         };
@@ -43,12 +80,39 @@ pub(crate) fn parse(tokens: Vec<Token>) -> Vec<ASTNode> {
 
         nodes.push(match node_kind {
             0 => ASTNode::Assignment { name, value },
-            1 => ASTNode::VariableDefinition { name, value },
-            _ => ASTNode::CompileTimeConstant { name, value },
+            1 => ASTNode::VariableDefinition {
+                name,
+                data_type,
+                value,
+            },
+            _ => ASTNode::CompileTimeConstant {
+                name,
+                data_type,
+                value,
+            },
         });
     }
 
     nodes
+}
+
+fn parse_data_type(name: &str) -> DataType {
+    match name {
+        "u8" => DataType::U8,
+        "u16" => DataType::U16,
+        "u32" => DataType::U32,
+        "u64" => DataType::U64,
+        "i8" => DataType::I8,
+        "i16" => DataType::I16,
+        "i32" => DataType::I32,
+        "i64" => DataType::I64,
+        "f8" => DataType::F8,
+        "f16" => DataType::F16,
+        "f32" => DataType::F32,
+        "f64" => DataType::F64,
+        "bool" => DataType::Bool,
+        _ => panic!("unknown data type: {name}"),
+    }
 }
 
 fn parse_expression<I>(tokens: &mut std::iter::Peekable<I>, min_precedence: u8) -> Expression
@@ -58,6 +122,7 @@ where
     let mut lhs = match tokens.next() {
         Some(Token::Identifier(name)) => Expression::Identifier(name),
         Some(Token::LiteralNumber(value)) => Expression::LiteralNumber(value),
+        Some(Token::LiteralBool(value)) => Expression::LiteralBool(value),
         Some(Token::Minus) => Expression::Negate(Box::new(parse_expression(tokens, 3))),
         Some(Token::LeftParen) => {
             let expression = parse_expression(tokens, 0);
