@@ -1,7 +1,7 @@
 #[derive(Debug, PartialEq)]
 pub(crate) enum Token {
     Identifier(String),
-    LiteralNumber(f64),
+    LiteralNumber(String),
     LiteralBool(bool),
     Colon,
     Equal,
@@ -53,9 +53,8 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                     break;
                 }
             }
-            result.push(Token::LiteralNumber(
-                number.parse().expect("invalid number literal"),
-            ));
+            number.parse::<f64>().expect("invalid number literal");
+            result.push(Token::LiteralNumber(number));
         } else {
             chars.next();
             match ch {

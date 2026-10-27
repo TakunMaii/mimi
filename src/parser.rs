@@ -1,6 +1,6 @@
 use crate::lexer::Token;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum DataType {
     U8,
     U16,
@@ -20,7 +20,7 @@ pub(crate) enum DataType {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Expression {
     Identifier(String),
-    LiteralNumber(f64),
+    LiteralNumber(String),
     LiteralBool(bool),
     Negate(Box<Expression>),
     Not(Box<Expression>),

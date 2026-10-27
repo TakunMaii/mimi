@@ -15,14 +15,14 @@ fn tokenizes_arithmetic_operators_and_parentheses() {
             Token::LeftParen,
             Token::Identifier("a".into()),
             Token::Plus,
-            Token::LiteralNumber(2.0),
+            Token::LiteralNumber("2".into()),
             Token::RightParen,
             Token::Star,
-            Token::LiteralNumber(3.0),
+            Token::LiteralNumber("3".into()),
             Token::Slash,
-            Token::LiteralNumber(4.0),
+            Token::LiteralNumber("4".into()),
             Token::Percent,
-            Token::LiteralNumber(2.0),
+            Token::LiteralNumber("2".into()),
         ]
     );
 }
@@ -35,12 +35,12 @@ fn parses_arithmetic_precedence_and_parentheses() {
             name: "result".into(),
             data_type: None,
             value: Expression::Add(
-                Box::new(Expression::LiteralNumber(1.0)),
+                Box::new(Expression::LiteralNumber("1".into())),
                 Box::new(Expression::Multiply(
-                    Box::new(Expression::LiteralNumber(2.0)),
+                    Box::new(Expression::LiteralNumber("2".into())),
                     Box::new(Expression::Subtract(
-                        Box::new(Expression::LiteralNumber(3.0)),
-                        Box::new(Expression::LiteralNumber(4.0)),
+                        Box::new(Expression::LiteralNumber("3".into())),
+                        Box::new(Expression::LiteralNumber("4".into())),
                     )),
                 )),
             ),
@@ -58,14 +58,14 @@ fn parses_all_statement_kinds_with_expression_values() {
                 data_type: None,
                 value: Expression::Add(
                     Box::new(Expression::Identifier("a".into())),
-                    Box::new(Expression::LiteralNumber(1.0)),
+                    Box::new(Expression::LiteralNumber("1".into())),
                 ),
             },
             ASTNode::Assignment {
                 name: "y".into(),
                 value: Expression::Multiply(
                     Box::new(Expression::Identifier("x".into())),
-                    Box::new(Expression::LiteralNumber(2.0)),
+                    Box::new(Expression::LiteralNumber("2".into())),
                 ),
             },
             ASTNode::CompileTimeConstant {
@@ -74,9 +74,9 @@ fn parses_all_statement_kinds_with_expression_values() {
                 value: Expression::Remainder(
                     Box::new(Expression::Subtract(
                         Box::new(Expression::Identifier("y".into())),
-                        Box::new(Expression::LiteralNumber(3.0)),
+                        Box::new(Expression::LiteralNumber("3".into())),
                     )),
-                    Box::new(Expression::LiteralNumber(2.0)),
+                    Box::new(Expression::LiteralNumber("2".into())),
                 ),
             },
         ]
@@ -127,7 +127,7 @@ fn parses_explicit_and_inferred_types() {
             vec![ASTNode::VariableDefinition {
                 name: "value".into(),
                 data_type: Some(data_type),
-                value: Expression::LiteralNumber(1.0),
+                value: Expression::LiteralNumber("1".into()),
             }]
         );
     }
@@ -191,8 +191,8 @@ fn parses_comparison_and_logical_precedence() {
                         Box::new(Expression::Add(
                             Box::new(Expression::Identifier("a".into())),
                             Box::new(Expression::Multiply(
-                                Box::new(Expression::LiteralNumber(2.0)),
-                                Box::new(Expression::LiteralNumber(3.0)),
+                                Box::new(Expression::LiteralNumber("2".into())),
+                                Box::new(Expression::LiteralNumber("3".into())),
                             )),
                         )),
                         Box::new(Expression::Identifier("b".into())),
