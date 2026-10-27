@@ -11,7 +11,7 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Lower `while` and `do-while` into CFG blocks for basic loop bodies.
 - [ ] Lower `for` over arrays and slices.
 - [ ] Lower `break` and `continue` when the parser exposes them.
-- [ ] Lower `defer` at each scope exit and return path.
+- [x] Lower `defer` at each scope exit and return path in LIFO order.
 - [ ] Lower `match` and `if-let`, including enum payload bindings.
 
 ## Values and Memory

@@ -118,6 +118,7 @@ struct Builder {
     blocks: Vec<MirBlock>,
     current: BlockId,
     variables: std::collections::HashMap<String, ValueId>,
+    defer_scopes: Vec<Vec<Expression>>,
 }
 
 impl Builder {
@@ -295,49 +296,55 @@ impl Builder {
             }
             Expression::Block(items) => {
                 let outer_variables = self.variables.clone();
-                let mut result = None;
-                for item in items {
-                    match item {
-                        crate::parser::ASTNode::VariableDefinition { name, value, .. }
-                        | crate::parser::ASTNode::CompileTimeConstant { name, value, .. } => {
-                            let Some(value) = self.expression(value) else {
-                                self.variables = outer_variables;
-                                return None;
-                            };
-                            self.variables.insert(name.clone(), value);
+                self.defer_scopes.push(Vec::new());
+                let result = (|| {
+                    let mut result = None;
+                    for item in items {
+                        match item {
+                            crate::parser::ASTNode::VariableDefinition { name, value, .. }
+                            | crate::parser::ASTNode::CompileTimeConstant { name, value, .. } => {
+                                let value = self.expression(value)?;
+                                self.variables.insert(name.clone(), value);
+                            }
+                            crate::parser::ASTNode::Assignment { name, value } => {
+                                let value = self.expression(value)?;
+                                self.variables.insert(name.clone(), value);
+                            }
+                            crate::parser::ASTNode::While { condition, body } => {
+                                self.lower_while(condition, body, false)?;
+                            }
+                            crate::parser::ASTNode::DoWhile { body, condition } => {
+                                self.lower_while(condition, body, true)?;
+                            }
+                            crate::parser::ASTNode::Loop { body } => {
+                                self.lower_loop(body);
+                            }
+                            crate::parser::ASTNode::Defer { body } => {
+                                self.defer_scopes.last_mut()?.push(body.clone());
+                            }
+                            crate::parser::ASTNode::Expression(expression) => {
+                                result = self.expression(expression);
+                            }
+                            crate::parser::ASTNode::Return(value) => {
+                                let value = value
+                                    .as_ref()
+                                    .and_then(|expression| self.expression(expression));
+                                self.run_all_defers();
+                                self.terminate(MirTerminator::Return(value));
+                                break;
+                            }
+                            _ => {}
                         }
-                        crate::parser::ASTNode::Assignment { name, value } => {
-                            let Some(value) = self.expression(value) else {
-                                self.variables = outer_variables;
-                                return None;
-                            };
-                            self.variables.insert(name.clone(), value);
-                        }
-                        crate::parser::ASTNode::While { condition, body } => {
-                            self.lower_while(condition, body, false)?;
-                        }
-                        crate::parser::ASTNode::DoWhile { body, condition } => {
-                            self.lower_while(condition, body, true)?;
-                        }
-                        crate::parser::ASTNode::Loop { body } => {
-                            self.lower_loop(body);
-                        }
-                        crate::parser::ASTNode::Expression(expression) => {
-                            result = self.expression(expression);
-                        }
-                        crate::parser::ASTNode::Return(value) => {
-                            let value = value
-                                .as_ref()
-                                .and_then(|expression| self.expression(expression));
-                            self.terminate(MirTerminator::Return(value));
+                        if !self.is_open(self.current) {
                             break;
                         }
-                        _ => {}
                     }
-                    if !self.is_open(self.current) {
-                        break;
-                    }
+                    Some(result).flatten()
+                })();
+                if self.is_open(self.current) {
+                    self.run_scope_defers();
                 }
+                self.defer_scopes.pop();
                 self.variables = outer_variables;
                 result
             }
@@ -365,6 +372,24 @@ impl Builder {
             self.blocks[block.0 as usize].terminator,
             MirTerminator::Unreachable
         )
+    }
+
+    fn run_scope_defers(&mut self) {
+        loop {
+            let deferred = self.defer_scopes.last_mut().and_then(Vec::pop);
+            let Some(deferred) = deferred else {
+                break;
+            };
+            self.expression(&deferred);
+        }
+    }
+
+    fn run_all_defers(&mut self) {
+        for index in (0..self.defer_scopes.len()).rev() {
+            while let Some(deferred) = self.defer_scopes[index].pop() {
+                self.expression(&deferred);
+            }
+        }
     }
 
     fn lower_while(
@@ -472,6 +497,7 @@ fn lower_function(function: &HirFunction) -> MirFunction {
         }],
         current: BlockId(0),
         variables: std::collections::HashMap::new(),
+        defer_scopes: Vec::new(),
     };
     let params = function
         .params

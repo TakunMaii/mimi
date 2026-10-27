@@ -422,21 +422,36 @@ fn builds_and_runs_external_print_with_string_literal() {
         .unwrap();
     let source = std::env::temp_dir().join(format!("mimi_print_source_{}.mi", std::process::id()));
     let path = std::env::temp_dir().join(format!("mimi_print_codegen_{}", std::process::id()));
-    std::fs::write(
-        &source,
-        r#"extern print : fn(str : []u8)void main :: fn () void { print("hello") }"#,
-    )
-    .unwrap();
-    let result = build_file(
-        source.to_str().unwrap(),
-        path.to_str().unwrap(),
-        &[],
-        &[root.join("runtime")],
-        &["print".into()],
-    );
-    assert!(result.is_ok(), "{result:?}");
-    let output = std::process::Command::new(&path).output().unwrap();
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "hello");
+    for (program, expected) in [
+        (
+            r#"extern print : fn(str : []u8)void main :: fn () void { defer { print("a") } defer { print("b") } print("c") }"#,
+            "cba",
+        ),
+        (
+            r#"extern print : fn(str : []u8)void main :: fn () void { defer { print("b") } print("a") return }"#,
+            "ab",
+        ),
+        (
+            r#"extern print : fn(str : []u8)void main :: fn () void { defer { print("a") } { defer { print("b") } print("c") } print("d") }"#,
+            "cbda",
+        ),
+        (
+            r#"extern print : fn(str : []u8)void main :: fn () void { defer { print("a") } { defer { print("b") } return } }"#,
+            "ba",
+        ),
+    ] {
+        std::fs::write(&source, program).unwrap();
+        let result = build_file(
+            source.to_str().unwrap(),
+            path.to_str().unwrap(),
+            &[],
+            &[root.join("runtime")],
+            &["print".into()],
+        );
+        assert!(result.is_ok(), "{result:?}");
+        let output = std::process::Command::new(&path).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+    }
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();
     std::process::Command::new("make")
