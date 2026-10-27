@@ -402,7 +402,7 @@ fn encode_function(
                     if let Some(result) = result
                         && result.0 != 0
                     {
-                        push_word(bytes, 0xaa00_03e0 | (result.0 << 16));
+                        push_word(bytes, 0xaa00_03e0 | result.0);
                     }
                     continue;
                 }

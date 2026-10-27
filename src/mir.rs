@@ -118,7 +118,6 @@ struct Builder {
     blocks: Vec<MirBlock>,
     current: BlockId,
     variables: std::collections::HashMap<String, ValueId>,
-    returned: Option<Option<ValueId>>,
 }
 
 impl Builder {
@@ -191,14 +190,36 @@ impl Builder {
                     else_block,
                 });
                 self.current = then_block;
-                let then_value = self.expression(then_branch)?;
+                let then_value = self.expression(then_branch);
                 let then_end = self.current;
-                self.terminate(MirTerminator::Jump(merge_block));
+                let then_live = self.is_open(then_end);
+                if then_live {
+                    self.terminate(MirTerminator::Jump(merge_block));
+                }
                 self.current = else_block;
-                let else_value = self.expression(else_branch)?;
+                let else_value = self.expression(else_branch);
                 let else_end = self.current;
-                self.terminate(MirTerminator::Jump(merge_block));
+                let else_live = self.is_open(else_end);
+                if else_live {
+                    self.terminate(MirTerminator::Jump(merge_block));
+                }
+                if !then_live && !else_live {
+                    self.current = then_end;
+                    return None;
+                }
                 self.current = merge_block;
+                if !then_live {
+                    return else_value;
+                }
+                if !else_live {
+                    return then_value;
+                }
+                if then_value.is_none() && else_value.is_none() {
+                    return None;
+                }
+                let (Some(then_value), Some(else_value)) = (then_value, else_value) else {
+                    return None;
+                };
                 let result = self.value();
                 self.emit(MirInstruction::Phi {
                     result,
@@ -302,14 +323,16 @@ impl Builder {
                             result = self.expression(expression);
                         }
                         crate::parser::ASTNode::Return(value) => {
-                            self.returned = Some(
-                                value
-                                    .as_ref()
-                                    .and_then(|expression| self.expression(expression)),
-                            );
+                            let value = value
+                                .as_ref()
+                                .and_then(|expression| self.expression(expression));
+                            self.terminate(MirTerminator::Return(value));
                             break;
                         }
                         _ => {}
+                    }
+                    if !self.is_open(self.current) {
+                        break;
                     }
                 }
                 self.variables = outer_variables;
@@ -332,6 +355,13 @@ impl Builder {
         };
         self.emit(instruction);
         Some(result)
+    }
+
+    fn is_open(&self, block: BlockId) -> bool {
+        matches!(
+            self.blocks[block.0 as usize].terminator,
+            MirTerminator::Unreachable
+        )
     }
 
     fn lower_while(
@@ -418,7 +448,6 @@ fn lower_function(function: &HirFunction) -> MirFunction {
         }],
         current: BlockId(0),
         variables: std::collections::HashMap::new(),
-        returned: None,
     };
     let params = function
         .params
@@ -430,21 +459,91 @@ fn lower_function(function: &HirFunction) -> MirFunction {
         })
         .collect();
     let result = builder.expression(&function.body);
-    let result = builder.returned.unwrap_or(result);
     let result = if function.result == HirType::Void {
         None
     } else {
         result
     };
+    if builder.is_open(builder.current) {
+        builder.terminate(MirTerminator::Return(result));
+    }
+    let mut blocks = builder.blocks;
+    prune_unreachable_blocks(&mut blocks);
     MirFunction {
         name: function.name.clone(),
         params,
         result: function.result.clone(),
-        blocks: {
-            builder.terminate(MirTerminator::Return(result));
-            builder.blocks
-        },
+        blocks,
     }
+}
+
+fn prune_unreachable_blocks(blocks: &mut Vec<MirBlock>) {
+    if blocks.is_empty() {
+        return;
+    }
+    let mut reachable = vec![false; blocks.len()];
+    let mut pending = vec![BlockId(0)];
+    while let Some(block_id) = pending.pop() {
+        let index = block_id.0 as usize;
+        if index >= blocks.len() || reachable[index] {
+            continue;
+        }
+        reachable[index] = true;
+        match blocks[index].terminator {
+            MirTerminator::Jump(target) => pending.push(target),
+            MirTerminator::Branch {
+                then_block,
+                else_block,
+                ..
+            } => {
+                pending.push(then_block);
+                pending.push(else_block);
+            }
+            MirTerminator::Return(_) | MirTerminator::Unreachable => {}
+        }
+    }
+    let remap = reachable
+        .iter()
+        .enumerate()
+        .filter_map(|(index, is_reachable)| {
+            is_reachable.then_some((BlockId(index as u32), BlockId(0)))
+        })
+        .enumerate()
+        .map(|(new_index, (old_id, _))| (old_id, BlockId(new_index as u32)))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut retained = Vec::with_capacity(remap.len());
+    for mut block in blocks.drain(..) {
+        let Some(new_id) = remap.get(&block.id).copied() else {
+            continue;
+        };
+        block.id = new_id;
+        match &mut block.terminator {
+            MirTerminator::Jump(target) => *target = remap[target],
+            MirTerminator::Branch {
+                then_block,
+                else_block,
+                ..
+            } => {
+                *then_block = remap[then_block];
+                *else_block = remap[else_block];
+            }
+            MirTerminator::Return(_) | MirTerminator::Unreachable => {}
+        }
+        for instruction in &mut block.instructions {
+            if let MirInstruction::Phi { incoming, .. } = instruction {
+                incoming.retain_mut(|(predecessor, _)| {
+                    if let Some(new_id) = remap.get(predecessor) {
+                        *predecessor = *new_id;
+                        true
+                    } else {
+                        false
+                    }
+                });
+            }
+        }
+        retained.push(block);
+    }
+    *blocks = retained;
 }
 
 pub(crate) fn lower_hir(module: &HirModule) -> MirModule {

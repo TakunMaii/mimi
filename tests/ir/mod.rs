@@ -128,6 +128,64 @@ fn builds_and_runs_while_and_do_while_cfg() {
 }
 
 #[test]
+fn builds_and_runs_early_return_in_if_expression() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_return_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_return_codegen_{}", std::process::id()));
+    for (condition, expected) in [("true", 11), ("false", 5)] {
+        std::fs::write(
+            &source,
+            format!("choose :: fn (condition : bool) i32 {{ value := if condition {{ return 11 }} else {{ 5 }} value }} main :: fn () i32 {{ choose({condition}) }}"),
+        )
+        .unwrap();
+        build_file(
+            source.to_str().unwrap(),
+            path.to_str().unwrap(),
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let status = std::process::Command::new(&path).status().unwrap();
+        assert_eq!(status.code(), Some(expected));
+    }
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn builds_and_runs_if_expression_with_both_branches_returning() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_both_return_source_{}.mi", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("mimi_both_return_codegen_{}", std::process::id()));
+    for (condition, expected) in [("true", 11), ("false", 5)] {
+        std::fs::write(
+            &source,
+            format!("choose :: fn (condition : bool) i32 {{ value := if condition {{ return 11 }} else {{ return 5 }} value }} main :: fn () i32 {{ choose({condition}) }}"),
+        )
+        .unwrap();
+        build_file(
+            source.to_str().unwrap(),
+            path.to_str().unwrap(),
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let status = std::process::Command::new(&path).status().unwrap();
+        assert_eq!(status.code(), Some(expected));
+    }
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn emits_host_assembly_for_integer_function() {
     let ast = parse(tokenize(
         "add :: fn (x : i32, y : i32) i32 { x + y }".chars(),
