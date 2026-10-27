@@ -340,12 +340,39 @@ impl Builder {
 
     fn logical(&mut self, lhs: &Expression, rhs: &Expression, and: bool) -> Option<ValueId> {
         let lhs = self.expression(lhs)?;
-        let rhs = self.expression(rhs)?;
-        let result = self.value();
-        self.emit(if and {
-            MirInstruction::And { result, lhs, rhs }
+        let rhs_block = self.new_block();
+        let short_block = self.new_block();
+        let merge_block = self.new_block();
+        let (then_block, else_block) = if and {
+            (rhs_block, short_block)
         } else {
-            MirInstruction::Or { result, lhs, rhs }
+            (short_block, rhs_block)
+        };
+        self.terminate(MirTerminator::Branch {
+            condition: lhs,
+            then_block,
+            else_block,
+        });
+
+        self.current = short_block;
+        let short_value = self.value();
+        self.emit(MirInstruction::ConstBool {
+            result: short_value,
+            value: !and,
+        });
+        let short_end = self.current;
+        self.terminate(MirTerminator::Jump(merge_block));
+
+        self.current = rhs_block;
+        let rhs = self.expression(rhs)?;
+        let rhs_end = self.current;
+        self.terminate(MirTerminator::Jump(merge_block));
+
+        self.current = merge_block;
+        let result = self.value();
+        self.emit(MirInstruction::Phi {
+            result,
+            incoming: vec![(short_end, short_value), (rhs_end, rhs)],
         });
         Some(result)
     }

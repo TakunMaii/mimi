@@ -84,7 +84,7 @@ fn builds_and_runs_logical_boolean_expressions() {
     let path = std::env::temp_dir().join(format!("mimi_logic_codegen_{}", std::process::id()));
     std::fs::write(
         &source,
-        "main :: fn () i32 { result := if !false && (true || false) { 9 } else { 2 } result }",
+        "main :: fn () i32 { result := if (false && (1 / 0 == 0)) || true { 9 } else { 2 } result }",
     )
     .unwrap();
     build_file(
