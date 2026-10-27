@@ -148,3 +148,76 @@ fn parses_explicit_and_inferred_types() {
         ]
     );
 }
+
+#[test]
+fn tokenizes_comparison_and_logical_operators() {
+    assert_eq!(
+        tokenize("a == b != c < d <= e > f >= g && h || !i".chars()),
+        vec![
+            Token::Identifier("a".into()),
+            Token::EqualEqual,
+            Token::Identifier("b".into()),
+            Token::NotEqual,
+            Token::Identifier("c".into()),
+            Token::LessThan,
+            Token::Identifier("d".into()),
+            Token::LessThanOrEqual,
+            Token::Identifier("e".into()),
+            Token::GreaterThan,
+            Token::Identifier("f".into()),
+            Token::GreaterThanOrEqual,
+            Token::Identifier("g".into()),
+            Token::AndAnd,
+            Token::Identifier("h".into()),
+            Token::OrOr,
+            Token::Bang,
+            Token::Identifier("i".into()),
+        ]
+    );
+}
+
+#[test]
+fn parses_comparison_and_logical_precedence() {
+    assert_eq!(
+        parse(tokenize(
+            "result := a + 2 * 3 >= b && !false || c == d".chars()
+        )),
+        vec![ASTNode::VariableDefinition {
+            name: "result".into(),
+            data_type: None,
+            value: Expression::Or(
+                Box::new(Expression::And(
+                    Box::new(Expression::GreaterThanOrEqual(
+                        Box::new(Expression::Add(
+                            Box::new(Expression::Identifier("a".into())),
+                            Box::new(Expression::Multiply(
+                                Box::new(Expression::LiteralNumber(2.0)),
+                                Box::new(Expression::LiteralNumber(3.0)),
+                            )),
+                        )),
+                        Box::new(Expression::Identifier("b".into())),
+                    )),
+                    Box::new(Expression::Not(Box::new(Expression::LiteralBool(false)))),
+                )),
+                Box::new(Expression::Equal(
+                    Box::new(Expression::Identifier("c".into())),
+                    Box::new(Expression::Identifier("d".into())),
+                )),
+            ),
+        }]
+    );
+}
+
+#[test]
+fn single_equal_remains_assignment() {
+    assert_eq!(
+        parse(tokenize("value = left == right".chars())),
+        vec![ASTNode::Assignment {
+            name: "value".into(),
+            value: Expression::Equal(
+                Box::new(Expression::Identifier("left".into())),
+                Box::new(Expression::Identifier("right".into())),
+            ),
+        }]
+    );
+}

@@ -23,11 +23,37 @@ pub(crate) enum Expression {
     LiteralNumber(f64),
     LiteralBool(bool),
     Negate(Box<Expression>),
+    Not(Box<Expression>),
     Add(Box<Expression>, Box<Expression>),
     Subtract(Box<Expression>, Box<Expression>),
     Multiply(Box<Expression>, Box<Expression>),
     Divide(Box<Expression>, Box<Expression>),
     Remainder(Box<Expression>, Box<Expression>),
+    Equal(Box<Expression>, Box<Expression>),
+    NotEqual(Box<Expression>, Box<Expression>),
+    LessThan(Box<Expression>, Box<Expression>),
+    LessThanOrEqual(Box<Expression>, Box<Expression>),
+    GreaterThan(Box<Expression>, Box<Expression>),
+    GreaterThanOrEqual(Box<Expression>, Box<Expression>),
+    And(Box<Expression>, Box<Expression>),
+    Or(Box<Expression>, Box<Expression>),
+}
+
+#[derive(Clone, Copy)]
+enum BinaryOperator {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
+    Equal,
+    NotEqual,
+    LessThan,
+    LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+    And,
+    Or,
 }
 
 #[derive(Debug, PartialEq)]
@@ -123,7 +149,8 @@ where
         Some(Token::Identifier(name)) => Expression::Identifier(name),
         Some(Token::LiteralNumber(value)) => Expression::LiteralNumber(value),
         Some(Token::LiteralBool(value)) => Expression::LiteralBool(value),
-        Some(Token::Minus) => Expression::Negate(Box::new(parse_expression(tokens, 3))),
+        Some(Token::Minus) => Expression::Negate(Box::new(parse_expression(tokens, 6))),
+        Some(Token::Bang) => Expression::Not(Box::new(parse_expression(tokens, 6))),
         Some(Token::LeftParen) => {
             let expression = parse_expression(tokens, 0);
             match tokens.next() {
@@ -136,11 +163,19 @@ where
 
     loop {
         let (precedence, operator) = match tokens.peek() {
-            Some(Token::Plus) => (1, 0),
-            Some(Token::Minus) => (1, 1),
-            Some(Token::Star) => (2, 2),
-            Some(Token::Slash) => (2, 3),
-            Some(Token::Percent) => (2, 4),
+            Some(Token::OrOr) => (1, BinaryOperator::Or),
+            Some(Token::AndAnd) => (2, BinaryOperator::And),
+            Some(Token::EqualEqual) => (3, BinaryOperator::Equal),
+            Some(Token::NotEqual) => (3, BinaryOperator::NotEqual),
+            Some(Token::LessThan) => (3, BinaryOperator::LessThan),
+            Some(Token::LessThanOrEqual) => (3, BinaryOperator::LessThanOrEqual),
+            Some(Token::GreaterThan) => (3, BinaryOperator::GreaterThan),
+            Some(Token::GreaterThanOrEqual) => (3, BinaryOperator::GreaterThanOrEqual),
+            Some(Token::Plus) => (4, BinaryOperator::Add),
+            Some(Token::Minus) => (4, BinaryOperator::Subtract),
+            Some(Token::Star) => (5, BinaryOperator::Multiply),
+            Some(Token::Slash) => (5, BinaryOperator::Divide),
+            Some(Token::Percent) => (5, BinaryOperator::Remainder),
             _ => break,
         };
         if precedence < min_precedence {
@@ -149,11 +184,23 @@ where
         tokens.next();
         let rhs = parse_expression(tokens, precedence + 1);
         lhs = match operator {
-            0 => Expression::Add(Box::new(lhs), Box::new(rhs)),
-            1 => Expression::Subtract(Box::new(lhs), Box::new(rhs)),
-            2 => Expression::Multiply(Box::new(lhs), Box::new(rhs)),
-            3 => Expression::Divide(Box::new(lhs), Box::new(rhs)),
-            _ => Expression::Remainder(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::Add => Expression::Add(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::Subtract => Expression::Subtract(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::Multiply => Expression::Multiply(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::Divide => Expression::Divide(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::Remainder => Expression::Remainder(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::Equal => Expression::Equal(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::NotEqual => Expression::NotEqual(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::LessThan => Expression::LessThan(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::LessThanOrEqual => {
+                Expression::LessThanOrEqual(Box::new(lhs), Box::new(rhs))
+            }
+            BinaryOperator::GreaterThan => Expression::GreaterThan(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::GreaterThanOrEqual => {
+                Expression::GreaterThanOrEqual(Box::new(lhs), Box::new(rhs))
+            }
+            BinaryOperator::And => Expression::And(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::Or => Expression::Or(Box::new(lhs), Box::new(rhs)),
         };
     }
 

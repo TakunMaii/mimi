@@ -5,6 +5,15 @@ pub(crate) enum Token {
     LiteralBool(bool),
     Colon,
     Equal,
+    EqualEqual,
+    NotEqual,
+    LessThan,
+    LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+    AndAnd,
+    OrOr,
+    Bang,
     Plus,
     Minus,
     Star,
@@ -51,7 +60,46 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
             chars.next();
             match ch {
                 ':' => result.push(Token::Colon),
-                '=' => result.push(Token::Equal),
+                '=' => {
+                    if chars.peek() == Some(&'=') {
+                        chars.next();
+                        result.push(Token::EqualEqual);
+                    } else {
+                        result.push(Token::Equal);
+                    }
+                }
+                '!' => {
+                    if chars.peek() == Some(&'=') {
+                        chars.next();
+                        result.push(Token::NotEqual);
+                    } else {
+                        result.push(Token::Bang);
+                    }
+                }
+                '<' => {
+                    if chars.peek() == Some(&'=') {
+                        chars.next();
+                        result.push(Token::LessThanOrEqual);
+                    } else {
+                        result.push(Token::LessThan);
+                    }
+                }
+                '>' => {
+                    if chars.peek() == Some(&'=') {
+                        chars.next();
+                        result.push(Token::GreaterThanOrEqual);
+                    } else {
+                        result.push(Token::GreaterThan);
+                    }
+                }
+                '&' => {
+                    assert_eq!(chars.next(), Some('&'), "expected '&&'");
+                    result.push(Token::AndAnd);
+                }
+                '|' => {
+                    assert_eq!(chars.next(), Some('|'), "expected '||'");
+                    result.push(Token::OrOr);
+                }
                 '+' => result.push(Token::Plus),
                 '-' => result.push(Token::Minus),
                 '*' => result.push(Token::Star),
