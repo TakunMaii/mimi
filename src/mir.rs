@@ -292,6 +292,12 @@ impl Builder {
                             };
                             self.variables.insert(name.clone(), value);
                         }
+                        crate::parser::ASTNode::While { condition, body } => {
+                            self.lower_while(condition, body, false)?;
+                        }
+                        crate::parser::ASTNode::DoWhile { body, condition } => {
+                            self.lower_while(condition, body, true)?;
+                        }
                         crate::parser::ASTNode::Expression(expression) => {
                             result = self.expression(expression);
                         }
@@ -326,6 +332,40 @@ impl Builder {
         };
         self.emit(instruction);
         Some(result)
+    }
+
+    fn lower_while(
+        &mut self,
+        condition: &Expression,
+        body: &Expression,
+        do_first: bool,
+    ) -> Option<()> {
+        let condition_block = self.new_block();
+        let body_block = self.new_block();
+        let exit_block = self.new_block();
+        if do_first {
+            self.terminate(MirTerminator::Jump(body_block));
+        } else {
+            self.terminate(MirTerminator::Jump(condition_block));
+        }
+        self.current = body_block;
+        self.expression(body);
+        if !matches!(
+            self.blocks[self.current.0 as usize].terminator,
+            MirTerminator::Unreachable
+        ) {
+            return None;
+        }
+        self.terminate(MirTerminator::Jump(condition_block));
+        self.current = condition_block;
+        let condition = self.expression(condition)?;
+        self.terminate(MirTerminator::Branch {
+            condition,
+            then_block: body_block,
+            else_block: exit_block,
+        });
+        self.current = exit_block;
+        Some(())
     }
 
     fn logical(&mut self, lhs: &Expression, rhs: &Expression, and: bool) -> Option<ValueId> {

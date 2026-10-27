@@ -1,0 +1,40 @@
+# Compiler TODO
+
+Items are ordered by dependency: the IR and target foundations come before the
+language features that depend on them. A checked item has an implementation
+and focused regression coverage; it does not imply support on every target.
+
+## IR and Control Flow
+
+- [ ] Correctly lower early `return` from nested blocks and conditional branches.
+- [ ] Lower `loop` into CFG blocks, including loop exits.
+- [x] Lower `while` and `do-while` into CFG blocks for basic loop bodies.
+- [ ] Lower `for` over arrays and slices.
+- [ ] Lower `break` and `continue` when the parser exposes them.
+- [ ] Lower `defer` at each scope exit and return path.
+- [ ] Lower `match` and `if-let`, including enum payload bindings.
+
+## Values and Memory
+
+- [ ] Implement floating-point literals, arithmetic, comparisons, and ABI handling.
+- [ ] Define target data layout and ABI rules for all supported value types.
+- [ ] Implement stack slots, loads/stores, and mutable locals across loops and branches.
+- [ ] Implement struct layout, literals, field access, and default initialization.
+- [ ] Implement enum layout, construction, and payload access.
+- [ ] Implement fixed arrays, array literals, indexing, and pointer arithmetic.
+- [ ] Implement slice representation, indexing, and slicing.
+- [ ] Implement pointer values, address-of, dereference, and pointer member access.
+
+## Functions and Modules
+
+- [ ] Implement function values, indirect calls, and lambda bodies.
+- [ ] Implement instance and static methods in HIR/MIR, including automatic receivers.
+- [ ] Implement general register allocation, stack frames, and argument spilling.
+- [ ] Complete package symbol visibility and cross-package linking behavior.
+
+## Targets and Tooling
+
+- [ ] Make textual assembly emission cover all MIR blocks and supported operations.
+- [ ] Implement x86_64 code generation.
+- [ ] Define target interfaces and add another platform/object format.
+- [ ] Add integration tests that compile, link, and run representative programs per feature.
