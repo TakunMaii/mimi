@@ -378,3 +378,19 @@ fn parses_enum_definition_match_and_if_let() {
         matches!(&nodes[2], ASTNode::IfLet { variant, binding: Some(binding), .. } if variant == "some" && binding == "x")
     );
 }
+
+#[test]
+fn parses_struct_field_defaults_and_mutability() {
+    let nodes = parse(tokenize(
+        "point :: struct { fixed: f32 : 32, mutable: f32 = 3.0, required: i32 }".chars(),
+    ));
+    let ASTNode::StructDefinition { fields, .. } = &nodes[0] else {
+        panic!("expected struct definition");
+    };
+    assert_eq!(fields.len(), 3);
+    assert!(!fields[0].3);
+    assert!(fields[0].2.is_some());
+    assert!(fields[1].3);
+    assert!(fields[1].2.is_some());
+    assert!(fields[2].2.is_none());
+}

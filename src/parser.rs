@@ -22,7 +22,7 @@ pub(crate) enum DataType {
     Enum(&'static str),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Expression {
     Identifier(String),
     LiteralNumber(String),
@@ -88,7 +88,7 @@ enum BinaryOperator {
     Or,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ASTNode {
     VariableDefinition {
         name: String,
@@ -114,7 +114,7 @@ pub(crate) enum ASTNode {
     Return(Option<Expression>),
     StructDefinition {
         name: &'static str,
-        fields: Vec<(String, DataType)>,
+        fields: Vec<(String, DataType, Option<Expression>, bool)>,
     },
     If {
         condition: Expression,
@@ -149,7 +149,7 @@ pub(crate) enum ASTNode {
     },
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Pattern {
     Variant {
         name: String,
@@ -505,7 +505,18 @@ where
             "expected ':' after field name"
         );
         let field_type = parse_type(tokens);
-        fields.push((field_name, field_type));
+        let (default, mutable) = match tokens.peek() {
+            Some(Token::Equal) => {
+                tokens.next();
+                (Some(parse_expression(tokens, 0)), true)
+            }
+            Some(Token::Colon) => {
+                tokens.next();
+                (Some(parse_expression(tokens, 0)), false)
+            }
+            _ => (None, true),
+        };
+        fields.push((field_name, field_type, default, mutable));
         if matches!(tokens.peek(), Some(Token::Comma)) {
             tokens.next();
         } else if !matches!(tokens.peek(), Some(Token::RightBrace)) {
@@ -789,8 +800,11 @@ where
     if !matches!(lookahead.next(), Some(Token::LeftBrace)) {
         return false;
     }
-    matches!(lookahead.next(), Some(Token::Identifier(_)))
-        && matches!(lookahead.next(), Some(Token::Equal))
+    match lookahead.next() {
+        Some(Token::RightBrace) => true,
+        Some(Token::Identifier(_)) => matches!(lookahead.next(), Some(Token::Equal)),
+        _ => false,
+    }
 }
 
 fn parse_struct_fields<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<(String, Expression)>

@@ -227,3 +227,40 @@ fn checks_enum_construction_if_let_and_match() {
     let types = check(&ast).unwrap();
     assert_eq!(types["selected"], DataType::F32);
 }
+
+#[test]
+fn struct_literals_may_omit_fields_with_defaults() {
+    let ast = parse(tokenize(
+        "point :: struct { fixed: f32 : 32, mutable: f32 = 3.0, required: i32 } value := point { required = 7 }"
+            .chars(),
+    ));
+    let types = check(&ast).unwrap();
+    assert_eq!(types["value"], DataType::Struct("point"));
+}
+
+#[test]
+fn struct_literals_require_fields_without_defaults() {
+    let ast = parse(tokenize(
+        "point :: struct { fixed: f32 : 32, required: i32 } value := point {}".chars(),
+    ));
+    let errors = check(&ast).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0]
+            .message
+            .contains("missing required field 'required'")
+    );
+}
+
+#[test]
+fn compile_time_field_defaults_must_be_constant() {
+    let ast = parse(tokenize(
+        "point :: struct { base: f32 = 2.0, fixed: f32 : base } value := point {}".chars(),
+    ));
+    let errors = check(&ast).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("must be constant"))
+    );
+}

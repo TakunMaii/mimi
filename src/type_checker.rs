@@ -20,8 +20,14 @@ struct Function {
 }
 
 struct StructInfo {
-    fields: HashMap<String, DataType>,
+    fields: HashMap<String, FieldInfo>,
     variants: HashMap<String, Option<DataType>>,
+}
+
+struct FieldInfo {
+    data_type: DataType,
+    default: Option<Expression>,
+    mutable: bool,
 }
 
 pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<TypeError>> {
@@ -42,7 +48,7 @@ pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<
         }
         if let ASTNode::StructDefinition { name, fields } = node {
             let mut field_names = std::collections::HashSet::new();
-            for (field_name, _) in fields {
+            for (field_name, _, _, _) in fields {
                 if !field_names.insert(field_name) {
                     errors.push(error(format!(
                         "duplicate field '{field_name}' in struct '{name}'"
@@ -53,7 +59,19 @@ pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<
                 .insert(
                     *name,
                     StructInfo {
-                        fields: fields.iter().cloned().collect(),
+                        fields: fields
+                            .iter()
+                            .map(|(name, data_type, default, mutable)| {
+                                (
+                                    name.clone(),
+                                    FieldInfo {
+                                        data_type: *data_type,
+                                        default: default.clone(),
+                                        mutable: *mutable,
+                                    },
+                                )
+                            })
+                            .collect(),
                         variants: HashMap::new(),
                     },
                 )
@@ -505,20 +523,44 @@ fn infer_expression(
             let info = structs
                 .get(struct_name)
                 .ok_or_else(|| error(format!("undefined struct type '{struct_name}'")))?;
-            if fields.len() != info.fields.len() {
-                return Err(error(format!(
-                    "struct '{struct_name}' expects {} fields, got {}",
-                    info.fields.len(),
-                    fields.len()
-                )));
-            }
+            let mut provided = HashSet::new();
             for (field_name, value) in fields {
                 let field_type = info.fields.get(field_name).ok_or_else(|| {
                     error(format!(
                         "unknown field '{field_name}' in struct '{struct_name}'"
                     ))
                 })?;
-                infer_expression(value, scopes, functions, structs, Some(*field_type))?;
+                if !provided.insert(field_name) {
+                    return Err(error(format!(
+                        "field '{field_name}' provided more than once"
+                    )));
+                }
+                infer_expression(
+                    value,
+                    scopes,
+                    functions,
+                    structs,
+                    Some(field_type.data_type),
+                )?;
+            }
+            for (field_name, field) in &info.fields {
+                if let Some(default) = &field.default {
+                    if !field.mutable && !is_constant_expression(default) {
+                        return Err(error(format!(
+                            "compile-time default for '{field_name}' must be constant"
+                        )));
+                    }
+                    infer_expression(default, scopes, functions, structs, Some(field.data_type))?;
+                }
+            }
+            for (field_name, field) in &info.fields {
+                if !provided.contains(field_name) {
+                    if field.default.is_none() {
+                        return Err(error(format!(
+                            "missing required field '{field_name}' in '{struct_name}'"
+                        )));
+                    }
+                }
             }
             Ok(result)
         }
@@ -530,7 +572,7 @@ fn infer_expression(
             };
             structs
                 .get(struct_name)
-                .and_then(|info| info.fields.get(member).copied())
+                .and_then(|info| info.fields.get(member).map(|field| field.data_type))
                 .ok_or_else(|| {
                     error(format!(
                         "unknown field '{member}' in struct '{struct_name}'"
@@ -653,6 +695,27 @@ fn infer_expression(
             }
             Ok(result.unwrap_or(DataType::Void))
         }
+    }
+}
+
+fn is_constant_expression(expression: &Expression) -> bool {
+    match expression {
+        Expression::LiteralNumber(_) | Expression::LiteralBool(_) => true,
+        Expression::Negate(value) | Expression::Not(value) => is_constant_expression(value),
+        Expression::Add(lhs, rhs)
+        | Expression::Subtract(lhs, rhs)
+        | Expression::Multiply(lhs, rhs)
+        | Expression::Divide(lhs, rhs)
+        | Expression::Remainder(lhs, rhs)
+        | Expression::Equal(lhs, rhs)
+        | Expression::NotEqual(lhs, rhs)
+        | Expression::LessThan(lhs, rhs)
+        | Expression::LessThanOrEqual(lhs, rhs)
+        | Expression::GreaterThan(lhs, rhs)
+        | Expression::GreaterThanOrEqual(lhs, rhs)
+        | Expression::And(lhs, rhs)
+        | Expression::Or(lhs, rhs) => is_constant_expression(lhs) && is_constant_expression(rhs),
+        _ => false,
     }
 }
 
