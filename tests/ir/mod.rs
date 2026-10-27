@@ -153,3 +153,29 @@ fn builds_and_runs_integer_comparison() {
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn builds_and_runs_functions_with_locals_assignment_and_return() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_local_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_local_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { value := 2 value = value + 3 return value }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(5));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}

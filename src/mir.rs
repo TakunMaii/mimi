@@ -109,6 +109,7 @@ struct Builder {
     next_value: u32,
     instructions: Vec<MirInstruction>,
     variables: std::collections::HashMap<String, ValueId>,
+    returned: Option<Option<ValueId>>,
 }
 
 impl Builder {
@@ -203,13 +204,43 @@ impl Builder {
                 });
                 Some(result)
             }
-            Expression::Block(items) => items.iter().rev().find_map(|item| match item {
-                crate::parser::ASTNode::Expression(value) => self.expression(value),
-                crate::parser::ASTNode::Return(value) => {
-                    value.as_ref().and_then(|value| self.expression(value))
+            Expression::Block(items) => {
+                let outer_variables = self.variables.clone();
+                let mut result = None;
+                for item in items {
+                    match item {
+                        crate::parser::ASTNode::VariableDefinition { name, value, .. }
+                        | crate::parser::ASTNode::CompileTimeConstant { name, value, .. } => {
+                            let Some(value) = self.expression(value) else {
+                                self.variables = outer_variables;
+                                return None;
+                            };
+                            self.variables.insert(name.clone(), value);
+                        }
+                        crate::parser::ASTNode::Assignment { name, value } => {
+                            let Some(value) = self.expression(value) else {
+                                self.variables = outer_variables;
+                                return None;
+                            };
+                            self.variables.insert(name.clone(), value);
+                        }
+                        crate::parser::ASTNode::Expression(expression) => {
+                            result = self.expression(expression);
+                        }
+                        crate::parser::ASTNode::Return(value) => {
+                            self.returned = Some(
+                                value
+                                    .as_ref()
+                                    .and_then(|expression| self.expression(expression)),
+                            );
+                            break;
+                        }
+                        _ => {}
+                    }
                 }
-                _ => None,
-            }),
+                self.variables = outer_variables;
+                result
+            }
             _ => None,
         }
     }
@@ -235,6 +266,7 @@ fn lower_function(function: &HirFunction) -> MirFunction {
         next_value: 0,
         instructions: Vec::new(),
         variables: std::collections::HashMap::new(),
+        returned: None,
     };
     let params = function
         .params
@@ -246,6 +278,7 @@ fn lower_function(function: &HirFunction) -> MirFunction {
         })
         .collect();
     let result = builder.expression(&function.body);
+    let result = builder.returned.unwrap_or(result);
     let result = if function.result == HirType::Void {
         None
     } else {
