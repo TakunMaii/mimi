@@ -197,7 +197,7 @@ fn rejects_invalid_struct_fields_and_ambiguous_struct_literals() {
 #[test]
 fn checks_control_flow_conditions() {
     let ast = parse(tokenize(
-        "values := 1 if true { value := 1 } while false { defer { loop {} } } for item in values { item }"
+        "values := [1, 2] if true { value := 1 } while false { defer { loop {} } } for item in values { item }"
             .chars(),
     ));
     check(&ast).unwrap();
@@ -209,4 +209,14 @@ fn rejects_non_boolean_if_and_while_conditions() {
     let errors = check(&ast).unwrap_err();
     assert_eq!(errors.len(), 2);
     assert!(errors.iter().all(|error| error.message.contains("bool")));
+}
+
+#[test]
+fn checks_arrays_indexing_and_slices() {
+    let ast = parse(tokenize(
+        "values : [3]i32 = [1, 2, 3] first := values[0] part : []i32 = values[1:3]".chars(),
+    ));
+    let types = check(&ast).unwrap();
+    assert_eq!(types["first"], DataType::I32);
+    assert!(matches!(types["part"], DataType::Slice(element) if *element == DataType::I32));
 }

@@ -17,6 +17,8 @@ pub(crate) enum DataType {
     Bool,
     Void,
     Struct(&'static str),
+    Array(u64, &'static DataType),
+    Slice(&'static DataType),
 }
 
 #[derive(Debug, PartialEq)]
@@ -51,6 +53,16 @@ pub(crate) enum Expression {
     MemberAccess {
         object: Box<Expression>,
         member: String,
+    },
+    ArrayLiteral(Vec<Expression>),
+    Index {
+        object: Box<Expression>,
+        index: Box<Expression>,
+    },
+    Slice {
+        object: Box<Expression>,
+        start: Option<Box<Expression>>,
+        end: Option<Box<Expression>>,
     },
 }
 
@@ -253,6 +265,24 @@ where
                     _ => panic!("expected '=' or ':' after type"),
                 }
             }
+            Some(Token::LeftBracket) => {
+                let mut type_tokens = vec![Token::LeftBracket];
+                while let Some(token) = tokens.next() {
+                    let done = matches!(token, Token::Identifier(_) | Token::RightBracket)
+                        && matches!(tokens.peek(), Some(Token::Equal | Token::Colon));
+                    type_tokens.push(token);
+                    if done {
+                        break;
+                    }
+                }
+                let mut type_iter = type_tokens.into_iter().peekable();
+                let data_type = parse_type(&mut type_iter);
+                match tokens.next() {
+                    Some(Token::Equal) => (1, Some(data_type)),
+                    Some(Token::Colon) => (2, Some(data_type)),
+                    _ => panic!("expected '=' or ':' after type"),
+                }
+            }
             _ => panic!("expected ':', '=', or a type after ':'"),
         },
         _ => panic!("expected an operator after identifier"),
@@ -294,11 +324,7 @@ where
                 matches!(tokens.next(), Some(Token::Colon)),
                 "expected ':' after parameter name"
             );
-            let type_name = match tokens.next() {
-                Some(Token::Identifier(name)) => name,
-                _ => panic!("expected parameter type"),
-            };
-            parameters.push((parameter_name, parse_data_type(&type_name)));
+            parameters.push((parameter_name, parse_type(tokens)));
             match tokens.next() {
                 Some(Token::Comma) => continue,
                 Some(Token::RightParen) => break,
@@ -308,10 +334,7 @@ where
     } else {
         tokens.next();
     }
-    let return_type = match tokens.next() {
-        Some(Token::Identifier(name)) => parse_data_type(&name),
-        _ => panic!("expected function return type"),
-    };
+    let return_type = parse_type(tokens);
     let body = match tokens.next() {
         Some(Token::LeftBrace) => Expression::Block(parse_block(tokens)),
         _ => panic!("expected function body"),
@@ -342,10 +365,7 @@ where
             matches!(tokens.next(), Some(Token::Colon)),
             "expected ':' after field name"
         );
-        let field_type = match tokens.next() {
-            Some(Token::Identifier(name)) => parse_data_type(&name),
-            _ => panic!("expected struct field type"),
-        };
+        let field_type = parse_type(tokens);
         fields.push((field_name, field_type));
         if matches!(tokens.peek(), Some(Token::Comma)) {
             tokens.next();
@@ -375,6 +395,37 @@ fn parse_data_type(name: &str) -> DataType {
         "bool" => DataType::Bool,
         "void" => DataType::Void,
         _ => DataType::Struct(Box::leak(name.to_owned().into_boxed_str())),
+    }
+}
+
+fn parse_type<I>(tokens: &mut std::iter::Peekable<I>) -> DataType
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    if matches!(tokens.peek(), Some(Token::LeftBracket)) {
+        tokens.next();
+        let length = match tokens.next() {
+            Some(Token::RightBracket) => None,
+            Some(Token::LiteralNumber(value)) => {
+                let length = value.parse().expect("array length must be an integer");
+                assert!(
+                    matches!(tokens.next(), Some(Token::RightBracket)),
+                    "expected ']' in array type"
+                );
+                Some(length)
+            }
+            _ => panic!("expected array length or ']'"),
+        };
+        let element = parse_type(tokens);
+        let element = Box::leak(Box::new(element));
+        return match length {
+            Some(length) => DataType::Array(length, element),
+            None => DataType::Slice(element),
+        };
+    }
+    match tokens.next() {
+        Some(Token::Identifier(name)) => parse_data_type(&name),
+        _ => panic!("expected type"),
     }
 }
 
@@ -408,6 +459,22 @@ where
             }
         }
         Token::LeftBrace => parse_brace_expression(tokens),
+        Token::LeftBracket => {
+            let mut values = Vec::new();
+            if !matches!(tokens.peek(), Some(Token::RightBracket)) {
+                loop {
+                    values.push(parse_expression(tokens, 0));
+                    match tokens.next() {
+                        Some(Token::Comma) => continue,
+                        Some(Token::RightBracket) => break,
+                        _ => panic!("expected ',' or ']' in array literal"),
+                    }
+                }
+            } else {
+                tokens.next();
+            }
+            Expression::ArrayLiteral(values)
+        }
         _ => panic!("expected an expression"),
     };
 
@@ -440,6 +507,44 @@ where
     }
 
     loop {
+        if matches!(tokens.peek(), Some(Token::LeftBracket)) {
+            tokens.next();
+            let start = if matches!(
+                tokens.peek(),
+                Some(Token::Colon | Token::DotDot | Token::RightBracket)
+            ) {
+                None
+            } else {
+                Some(Box::new(parse_expression(tokens, 0)))
+            };
+            if matches!(tokens.peek(), Some(Token::Colon)) {
+                tokens.next();
+                let end = if matches!(tokens.peek(), Some(Token::RightBracket)) {
+                    None
+                } else {
+                    Some(Box::new(parse_expression(tokens, 0)))
+                };
+                assert!(
+                    matches!(tokens.next(), Some(Token::RightBracket)),
+                    "expected ']' after slice"
+                );
+                lhs = Expression::Slice {
+                    object: Box::new(lhs),
+                    start,
+                    end,
+                };
+            } else {
+                assert!(
+                    matches!(tokens.next(), Some(Token::RightBracket)),
+                    "expected ']' after index"
+                );
+                lhs = Expression::Index {
+                    object: Box::new(lhs),
+                    index: start.expect("expected index"),
+                };
+            }
+            continue;
+        }
         if matches!(tokens.peek(), Some(Token::Dot)) {
             tokens.next();
             let member = match tokens.next() {

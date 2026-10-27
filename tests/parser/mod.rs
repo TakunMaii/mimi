@@ -345,3 +345,25 @@ fn parses_control_flow_statements() {
     assert!(matches!(&nodes[1], ASTNode::While { .. }));
     assert!(matches!(&nodes[2], ASTNode::For { binding, .. } if binding == "item"));
 }
+
+#[test]
+fn parses_array_types_literals_indexing_and_slices() {
+    let nodes = parse(tokenize(
+        "values : [3]i32 = [1, 2, 3] first := values[0] part : []i32 = values[1:3]".chars(),
+    ));
+    assert_eq!(nodes.len(), 3);
+    assert!(matches!(
+        &nodes[1],
+        ASTNode::VariableDefinition {
+            value: Expression::Index { .. },
+            ..
+        }
+    ));
+    assert!(matches!(
+        &nodes[2],
+        ASTNode::VariableDefinition {
+            value: Expression::Slice { .. },
+            ..
+        }
+    ));
+}

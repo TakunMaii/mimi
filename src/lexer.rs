@@ -35,6 +35,9 @@ pub(crate) enum Token {
     RightParen,
     LeftBrace,
     RightBrace,
+    LeftBracket,
+    RightBracket,
+    DotDot,
 }
 
 pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
@@ -84,7 +87,14 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
             match ch {
                 ':' => result.push(Token::Colon),
                 ',' => result.push(Token::Comma),
-                '.' => result.push(Token::Dot),
+                '.' => {
+                    if chars.peek() == Some(&'.') {
+                        chars.next();
+                        result.push(Token::DotDot);
+                    } else {
+                        result.push(Token::Dot);
+                    }
+                }
                 '=' => {
                     if chars.peek() == Some(&'=') {
                         chars.next();
@@ -152,6 +162,8 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                 ')' => result.push(Token::RightParen),
                 '{' => result.push(Token::LeftBrace),
                 '}' => result.push(Token::RightBrace),
+                '[' => result.push(Token::LeftBracket),
+                ']' => result.push(Token::RightBracket),
                 _ => panic!("unexpected character: {ch}"),
             }
         }

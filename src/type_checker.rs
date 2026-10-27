@@ -236,10 +236,14 @@ fn check_statement(
             body,
         } => {
             let iterable_type = infer_expression(iterable, scopes, functions, structs, None)?;
+            let item_type = match iterable_type {
+                DataType::Array(_, element) | DataType::Slice(element) => *element,
+                _ => return Err(error("for loop requires an array or slice")),
+            };
             scopes.push(HashMap::from([(
                 binding.clone(),
                 Symbol {
-                    data_type: iterable_type,
+                    data_type: item_type,
                     mutable: false,
                 },
             )]));
@@ -447,6 +451,72 @@ fn infer_expression(
                         "unknown field '{member}' in struct '{struct_name}'"
                     ))
                 })
+        }
+        Expression::ArrayLiteral(values) => {
+            let expected_element = match expected {
+                Some(DataType::Array(_, element)) | Some(DataType::Slice(element)) => {
+                    Some(*element)
+                }
+                _ => None,
+            };
+            let mut element_type = expected_element;
+            for value in values {
+                let value_type = infer_expression(value, scopes, functions, structs, element_type)?;
+                if let Some(existing) = element_type {
+                    require_compatible(value_type, Some(existing))?;
+                } else {
+                    element_type = Some(value_type);
+                }
+            }
+            let element_type =
+                element_type.ok_or_else(|| error("cannot infer empty array type"))?;
+            match expected {
+                Some(DataType::Array(length, element)) => {
+                    if length != values.len() as u64 {
+                        return Err(error(format!(
+                            "array expects {length} elements, got {}",
+                            values.len()
+                        )));
+                    }
+                    require_compatible(element_type, Some(*element))?;
+                    Ok(DataType::Array(length, element))
+                }
+                Some(DataType::Slice(element)) => {
+                    require_compatible(element_type, Some(*element))?;
+                    Ok(DataType::Slice(element))
+                }
+                None => Ok(DataType::Array(
+                    values.len() as u64,
+                    Box::leak(Box::new(element_type)),
+                )),
+                _ => Err(error("array value requires an array or slice type")),
+            }
+        }
+        Expression::Index { object, index } => {
+            let object_type = infer_expression(object, scopes, functions, structs, None)?;
+            let index_type = infer_expression(index, scopes, functions, structs, None)?;
+            if !index_type.is_integer() {
+                return Err(error("array index must be an integer"));
+            }
+            match object_type {
+                DataType::Array(_, element) | DataType::Slice(element) => Ok(*element),
+                _ => Err(error("indexing requires an array or slice")),
+            }
+        }
+        Expression::Slice { object, start, end } => {
+            let object_type = infer_expression(object, scopes, functions, structs, None)?;
+            for bound in start.iter().chain(end.iter()) {
+                let bound_type = infer_expression(bound, scopes, functions, structs, None)?;
+                if !bound_type.is_integer() {
+                    return Err(error("slice bounds must be integers"));
+                }
+            }
+            match object_type {
+                DataType::Array(_, element) | DataType::Slice(element) => {
+                    Ok(DataType::Slice(element))
+                }
+                _ => Err(error("slicing requires an array or slice")),
+            }
         }
     }
 }
@@ -666,6 +736,7 @@ impl DataType {
             Self::Bool => 1,
             Self::Void => 0,
             Self::Struct(_) => 0,
+            Self::Array(_, _) | Self::Slice(_) => 0,
         }
     }
 
@@ -712,6 +783,8 @@ impl std::fmt::Display for DataType {
             Self::Bool => "bool",
             Self::Void => "void",
             Self::Struct(name) => name,
+            Self::Array(length, element) => return write!(formatter, "[{length}]{element}"),
+            Self::Slice(element) => return write!(formatter, "[]{element}"),
         };
         formatter.write_str(name)
     }
