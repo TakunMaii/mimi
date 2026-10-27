@@ -460,6 +460,32 @@ fn infer_expression(
             infer_expression(rhs, scopes, functions, structs, Some(DataType::Bool))?;
             Ok(DataType::Bool)
         }
+        Expression::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            infer_expression(condition, scopes, functions, structs, Some(DataType::Bool))?;
+            let then_type = infer_expression(then_branch, scopes, functions, structs, expected)?;
+            let else_type = infer_expression(
+                else_branch,
+                scopes,
+                functions,
+                structs,
+                expected.or(Some(then_type)),
+            )?;
+            let result_type = if then_type == else_type {
+                then_type
+            } else if let Some(common) = common_numeric_type(then_type, else_type) {
+                common
+            } else {
+                return Err(error(format!(
+                    "if branches have incompatible types {then_type} and {else_type}"
+                )));
+            };
+            require_compatible(result_type, expected)?;
+            Ok(result_type)
+        }
         Expression::Add(lhs, rhs)
         | Expression::Subtract(lhs, rhs)
         | Expression::Multiply(lhs, rhs)

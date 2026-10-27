@@ -46,6 +46,11 @@ pub(crate) enum Expression {
     GreaterThanOrEqual(Box<Expression>, Box<Expression>),
     And(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
+    If {
+        condition: Box<Expression>,
+        then_branch: Box<Expression>,
+        else_branch: Box<Expression>,
+    },
     Block(Vec<ASTNode>),
     Call {
         name: String,
@@ -414,6 +419,24 @@ where
 {
     ASTNode::Defer {
         body: parse_block_expression(tokens),
+    }
+}
+
+fn parse_if_expression<I>(tokens: &mut std::iter::Peekable<I>) -> Expression
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let condition = parse_expression(tokens, 0);
+    let then_branch = parse_block_expression(tokens);
+    assert!(
+        matches!(tokens.next(), Some(Token::Else)),
+        "if expression requires an else branch"
+    );
+    let else_branch = parse_block_expression(tokens);
+    Expression::If {
+        condition: Box::new(condition),
+        then_branch: Box::new(then_branch),
+        else_branch: Box::new(else_branch),
     }
 }
 
@@ -806,6 +829,7 @@ where
             Expression::ArrayLiteral(values)
         }
         Token::Match => parse_match(tokens),
+        Token::If => parse_if_expression(tokens),
         Token::Fn => parse_lambda(tokens),
         _ => panic!("expected an expression"),
     };

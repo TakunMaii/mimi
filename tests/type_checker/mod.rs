@@ -215,6 +215,24 @@ fn checks_do_while_conditions_as_booleans() {
 }
 
 #[test]
+fn infers_value_from_if_else_expression() {
+    let ast = parse(tokenize(
+        "value := if true { 1 } else { 2 } flag := if false { true } else { false }".chars(),
+    ));
+    let types = check(&ast).unwrap();
+    assert_eq!(types["value"], DataType::I32);
+    assert_eq!(types["flag"], DataType::Bool);
+}
+
+#[test]
+fn rejects_if_else_expressions_with_incompatible_branches() {
+    let ast = parse(tokenize("value := if true { 1 } else { false }".chars()));
+    let errors = check(&ast).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].message.contains("bool") || errors[0].message.contains("incompatible"));
+}
+
+#[test]
 fn rejects_non_boolean_if_and_while_conditions() {
     let ast = parse(tokenize("if 1 {} while 2 {}".chars()));
     let errors = check(&ast).unwrap_err();
