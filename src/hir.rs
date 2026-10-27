@@ -83,10 +83,17 @@ pub(crate) struct HirExternalFunction {
     pub(crate) result: HirType,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HirEnum {
+    pub(crate) name: String,
+    pub(crate) variants: Vec<(String, bool)>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct HirModule {
     pub(crate) functions: Vec<HirFunction>,
     pub(crate) extern_functions: Vec<HirExternalFunction>,
+    pub(crate) enums: Vec<HirEnum>,
 }
 
 pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
@@ -123,6 +130,15 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                 name: name.clone(),
                 params: parameters.iter().map(|(_, ty)| (*ty).into()).collect(),
                 result: (*return_type).into(),
+            });
+        }
+        if let ASTNode::EnumDefinition { name, variants } = node {
+            module.enums.push(HirEnum {
+                name: (*name).to_string(),
+                variants: variants
+                    .iter()
+                    .map(|(variant, payload)| (variant.clone(), payload.is_some()))
+                    .collect(),
             });
         }
     }

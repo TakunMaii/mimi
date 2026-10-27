@@ -312,6 +312,33 @@ fn builds_and_runs_pointer_reads_and_writes() {
 }
 
 #[test]
+fn builds_and_runs_match_and_if_let_for_payloadless_enums() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_enum_match_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_enum_match_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "gender :: enum { male, female } identity :: fn (value : gender) gender { value } choose :: fn (value : gender) i32 { match value { male => 1, female => 4 } } detect :: fn (value : gender) i32 { result := 0 if male := identity(value) { result = 3 } else { result = 7 } result } main :: fn () i32 { choose(male) + choose(female) + detect(male) + detect(female) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(15));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_for_loops_over_fixed_arrays() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

@@ -149,6 +149,7 @@ struct Builder {
     current: BlockId,
     variables: std::collections::HashMap<String, Variable>,
     array_lengths: std::collections::HashMap<String, u64>,
+    enum_tags: std::collections::HashMap<String, u64>,
     defer_scopes: Vec<Vec<Expression>>,
     loop_targets: Vec<LoopTargets>,
 }
@@ -201,11 +202,20 @@ impl Builder {
 
     fn expression(&mut self, expression: &Expression) -> Option<ValueId> {
         match expression {
-            Expression::Identifier(name) => match self.variables.get(name).copied()? {
-                Variable::Value(value) => Some(value),
-                Variable::Slot(slot) => {
+            Expression::Identifier(name) => match self.variables.get(name).copied() {
+                Some(Variable::Value(value)) => Some(value),
+                Some(Variable::Slot(slot)) => {
                     let result = self.value();
                     self.emit(MirInstruction::LoadSlot { result, slot });
+                    Some(result)
+                }
+                None => {
+                    let tag = *self.enum_tags.get(name)?;
+                    let result = self.value();
+                    self.emit(MirInstruction::ConstInt {
+                        result,
+                        value: tag as i128,
+                    });
                     Some(result)
                 }
             },
@@ -347,6 +357,7 @@ impl Builder {
                 });
                 Some(result)
             }
+            Expression::Match { value, arms } => self.lower_match(value, arms),
             Expression::Call { name, arguments } => {
                 let mut args = Vec::new();
                 for argument in arguments {
@@ -499,6 +510,31 @@ impl Builder {
                             } => {
                                 let expression = Expression::If {
                                     condition: Box::new(condition.clone()),
+                                    then_branch: Box::new(then_branch.clone()),
+                                    else_branch: Box::new(
+                                        else_branch
+                                            .clone()
+                                            .unwrap_or_else(|| Expression::Block(Vec::new())),
+                                    ),
+                                };
+                                self.expression(&expression);
+                            }
+                            crate::parser::ASTNode::IfLet {
+                                variant,
+                                binding,
+                                value,
+                                then_branch,
+                                else_branch,
+                            } => {
+                                if binding.is_some() {
+                                    return None;
+                                }
+                                let tag = *self.enum_tags.get(variant)?;
+                                let expression = Expression::If {
+                                    condition: Box::new(Expression::Equal(
+                                        Box::new(value.clone()),
+                                        Box::new(Expression::LiteralNumber(tag.to_string())),
+                                    )),
                                     then_branch: Box::new(then_branch.clone()),
                                     else_branch: Box::new(
                                         else_branch
@@ -911,9 +947,92 @@ impl Builder {
         });
         Some(result)
     }
+
+    fn lower_match(
+        &mut self,
+        value: &Expression,
+        arms: &[(crate::parser::Pattern, Expression)],
+    ) -> Option<ValueId> {
+        if arms.is_empty()
+            || arms.iter().any(|(pattern, _)| {
+                matches!(
+                    pattern,
+                    crate::parser::Pattern::Variant {
+                        binding: Some(_),
+                        ..
+                    }
+                )
+            })
+        {
+            return None;
+        }
+        let value = self.expression(value)?;
+        let merge_block = self.new_block();
+        let mut incoming = Vec::new();
+        let mut test_block = self.current;
+
+        for (index, (pattern, body)) in arms.iter().enumerate() {
+            let crate::parser::Pattern::Variant { name, .. } = pattern;
+            let arm_block = self.new_block();
+            self.current = test_block;
+            if index + 1 == arms.len() {
+                self.terminate(MirTerminator::Jump(arm_block));
+            } else {
+                let tag = *self.enum_tags.get(name)?;
+                let expected = self.value();
+                self.emit(MirInstruction::ConstInt {
+                    result: expected,
+                    value: tag as i128,
+                });
+                let condition = self.value();
+                self.emit(MirInstruction::Compare {
+                    result: condition,
+                    lhs: value,
+                    rhs: expected,
+                    kind: CompareKind::Equal,
+                });
+                let next_test = self.new_block();
+                self.terminate(MirTerminator::Branch {
+                    condition,
+                    then_block: arm_block,
+                    else_block: next_test,
+                });
+                test_block = next_test;
+            }
+
+            self.current = arm_block;
+            let result = self.expression(body);
+            let end_block = self.current;
+            if self.is_open(end_block) {
+                self.terminate(MirTerminator::Jump(merge_block));
+                incoming.push((end_block, result));
+            }
+        }
+
+        self.current = merge_block;
+        if incoming.is_empty() || incoming.iter().any(|(_, value)| value.is_none()) {
+            return None;
+        }
+        let values = incoming
+            .into_iter()
+            .map(|(block, value)| (block, value.unwrap()))
+            .collect::<Vec<_>>();
+        if values.len() == 1 {
+            return Some(values[0].1);
+        }
+        let result = self.value();
+        self.emit(MirInstruction::Phi {
+            result,
+            incoming: values,
+        });
+        Some(result)
+    }
 }
 
-fn lower_function(function: &HirFunction) -> MirFunction {
+fn lower_function(
+    function: &HirFunction,
+    enum_tags: &std::collections::HashMap<String, u64>,
+) -> MirFunction {
     let mut builder = Builder {
         next_value: 0,
         next_slot: 0,
@@ -925,6 +1044,7 @@ fn lower_function(function: &HirFunction) -> MirFunction {
         current: BlockId(0),
         variables: std::collections::HashMap::new(),
         array_lengths: std::collections::HashMap::new(),
+        enum_tags: enum_tags.clone(),
         defer_scopes: Vec::new(),
         loop_targets: Vec::new(),
     };
@@ -1035,7 +1155,22 @@ fn prune_unreachable_blocks(blocks: &mut Vec<MirBlock>) {
 }
 
 pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
+    let enum_tags = module
+        .enums
+        .iter()
+        .flat_map(|enumeration| {
+            enumeration
+                .variants
+                .iter()
+                .enumerate()
+                .map(|(tag, (variant, _))| (variant.clone(), tag as u64))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
     MirModule {
-        functions: module.functions.iter().map(lower_function).collect(),
+        functions: module
+            .functions
+            .iter()
+            .map(|function| lower_function(function, &enum_tags))
+            .collect(),
     }
 }

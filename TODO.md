@@ -14,7 +14,8 @@ and focused regression coverage; it does not imply support on every target.
 - [ ] Lower `for` over slice values and string slices.
 - [x] Lower `break` and `continue`, including loop-body `defer` exits.
 - [x] Lower `defer` at each scope exit and return path in LIFO order.
-- [ ] Lower `match` and `if-let`, including enum payload bindings.
+- [x] Lower `match` and `if-let` for payloadless enums.
+- [ ] Lower enum payloads and bind them in `match` and `if-let`.
 
 ## Values and Memory
 
