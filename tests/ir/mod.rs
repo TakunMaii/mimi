@@ -67,3 +67,29 @@ fn builds_and_runs_a_minimal_host_executable() {
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn builds_and_runs_an_internal_function_call() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_call_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_call_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "add :: fn (x : i32, y : i32) i32 { x + y } main :: fn () i32 { add(2, 3) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(5));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}

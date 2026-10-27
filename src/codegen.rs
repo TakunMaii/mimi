@@ -78,16 +78,65 @@ pub(crate) fn compile_executable_with_options(
 }
 
 fn encode_module(module: &LirModule) -> Result<(Vec<u8>, Vec<(String, u64)>), String> {
+    let mut offsets = std::collections::HashMap::new();
+    let mut offset = 0u64;
+    for function in &module.functions {
+        offsets.insert(format!("_{}", function.name), offset);
+        offset += encoded_function_size(function)? as u64;
+    }
     let mut text = Vec::new();
     let mut symbols = Vec::new();
     for function in &module.functions {
-        symbols.push((format!("_{}", function.name), text.len() as u64));
-        encode_function(function, &mut text)?;
+        let base = text.len() as u64;
+        symbols.push((format!("_{}", function.name), base));
+        encode_function(function, &mut text, &offsets)?;
     }
     Ok((text, symbols))
 }
 
-fn encode_function(function: &LirFunction, bytes: &mut Vec<u8>) -> Result<(), String> {
+fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
+    let mut size = 0;
+    for instruction in &function.instructions {
+        size += match instruction {
+            LirInstruction::LoadImmediate { value, .. } => {
+                let mut chunks = 0;
+                for shift in 0..4 {
+                    if ((*value as u64 >> (shift * 16)) & 0xffff) != 0 {
+                        chunks += 1;
+                    }
+                }
+                if chunks == 0 { 1 } else { chunks }
+            }
+            LirInstruction::Add { .. }
+            | LirInstruction::Sub { .. }
+            | LirInstruction::Mul { .. }
+            | LirInstruction::Div { .. } => 1,
+            LirInstruction::Call { args, result, .. } => {
+                args.iter()
+                    .enumerate()
+                    .filter(|(index, argument)| argument.0 != *index as u32)
+                    .count()
+                    + 1
+                    + usize::from(result.is_some_and(|value| value.0 != 0))
+            }
+        } * 4;
+    }
+    if matches!(function.terminator, MirTerminator::Return(Some(value)) if value.0 != 0) {
+        size += 4;
+    }
+    size += if function.name == "main" {
+        8 + usize::from(matches!(function.terminator, MirTerminator::Return(None))) * 4
+    } else {
+        4
+    };
+    Ok(size)
+}
+
+fn encode_function(
+    function: &LirFunction,
+    bytes: &mut Vec<u8>,
+    offsets: &std::collections::HashMap<String, u64>,
+) -> Result<(), String> {
     if function.params.len() > 8 {
         return Err("ARM64 backend currently supports at most 8 integer parameters".into());
     }
@@ -125,10 +174,27 @@ fn encode_function(function: &LirFunction, bytes: &mut Vec<u8>) -> Result<(), St
                 lhs,
                 rhs,
             } => 0x9ac0_0c00 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
-            LirInstruction::Call { name, .. } => {
-                return Err(format!(
-                    "external call '{name}' is not yet supported by the ARM64 machine-code emitter"
-                ));
+            LirInstruction::Call { result, name, args } => {
+                for (index, argument) in args.iter().enumerate() {
+                    if argument.0 != index as u32 {
+                        push_word(bytes, 0xaa00_03e0 | (argument.0 << 16) | index as u32);
+                    }
+                }
+                let target = offsets
+                    .get(&format!("_{name}"))
+                    .ok_or_else(|| format!("external call '{name}' requires symbol relocation"))?;
+                let call_address = bytes.len() as u64;
+                let delta = (*target as i64 - call_address as i64) / 4;
+                if !(-(1 << 25)..(1 << 25)).contains(&delta) {
+                    return Err(format!("call target '{name}' is out of ARM64 branch range"));
+                }
+                push_word(bytes, 0x9400_0000 | (delta as u32 & 0x03ff_ffff));
+                if let Some(result) = result
+                    && result.0 != 0
+                {
+                    push_word(bytes, 0xaa00_03e0 | (result.0 << 16));
+                }
+                continue;
             }
         };
         push_word(bytes, word);
