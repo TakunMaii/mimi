@@ -777,7 +777,7 @@ where
         _ => panic!("expected an expression"),
     };
 
-    if let Expression::Identifier(name) = lhs {
+    if let Expression::Identifier(name) = lhs.clone() {
         let mut is_static = false;
         if matches!(tokens.peek(), Some(Token::Colon)) {
             let mut lookahead = tokens.clone();
@@ -798,7 +798,10 @@ where
         }
         if is_static && matches!(tokens.peek(), Some(Token::LeftParen)) {
             let arguments = parse_arguments(tokens);
-            lhs = Expression::CallValue { callee: Box::new(lhs), arguments };
+            lhs = Expression::CallValue {
+                callee: Box::new(lhs),
+                arguments,
+            };
         } else if is_static {
         } else if matches!(tokens.peek(), Some(Token::LeftParen)) {
             tokens.next();
@@ -819,11 +822,11 @@ where
         } else if brace_starts_struct_literal(tokens) {
             tokens.next();
             lhs = Expression::StructLiteral {
-                type_name: Some(Box::leak(name.into_boxed_str())),
+                type_name: Some(Box::leak(name.clone().into_boxed_str())),
                 fields: parse_struct_fields(tokens),
             };
         } else {
-            lhs = Expression::Identifier(name);
+            lhs = Expression::Identifier(name.clone());
         }
     }
 
@@ -945,15 +948,23 @@ where
 }
 
 fn parse_arguments<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<Expression>
-where I: Iterator<Item = Token> + Clone {
+where
+    I: Iterator<Item = Token> + Clone,
+{
     assert!(matches!(tokens.next(), Some(Token::LeftParen)));
     let mut arguments = Vec::new();
     if !matches!(tokens.peek(), Some(Token::RightParen)) {
         loop {
             arguments.push(parse_expression(tokens, 0));
-            match tokens.next() { Some(Token::Comma) => continue, Some(Token::RightParen) => break, _ => panic!("expected ',' or ')' after argument") }
+            match tokens.next() {
+                Some(Token::Comma) => continue,
+                Some(Token::RightParen) => break,
+                _ => panic!("expected ',' or ')' after argument"),
+            }
         }
-    } else { tokens.next(); }
+    } else {
+        tokens.next();
+    }
     arguments
 }
 

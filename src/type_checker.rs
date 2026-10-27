@@ -713,9 +713,7 @@ fn infer_expression(
             let info = structs
                 .get(type_name.as_str())
                 .ok_or_else(|| error(format!("unknown type '{type_name}'")))?;
-            let method = info
-                .methods
-                .get(member);
+            let method = info.methods.get(member);
             if let Some(method) = method {
                 return Ok(DataType::Function(
                     Box::leak(method.parameters.clone().into_boxed_slice()),

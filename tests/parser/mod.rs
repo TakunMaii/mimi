@@ -414,5 +414,11 @@ fn parses_function_values_and_static_method_access() {
             .chars(),
     ));
     assert!(matches!(&nodes[0], ASTNode::FunctionDefinition { .. }));
-    assert!(matches!(&nodes[2], ASTNode::VariableDefinition { value: Expression::CallValue { .. }, .. }));
+    assert!(matches!(
+        &nodes[3],
+        ASTNode::VariableDefinition {
+            value: Expression::CallValue { .. },
+            ..
+        }
+    ));
 }
