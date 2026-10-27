@@ -448,6 +448,25 @@ fn parses_array_types_literals_indexing_and_slices() {
 }
 
 #[test]
+fn parses_fixed_array_element_assignment() {
+    let nodes = parse(tokenize("main :: fn () void { values[1] = 9 }".chars()));
+    assert!(matches!(
+        &nodes[0],
+        ASTNode::FunctionDefinition {
+            body: Expression::Block(items),
+            ..
+        } if matches!(
+            items.as_slice(),
+            [ASTNode::IndexAssignment {
+                object: Expression::Identifier(name),
+                index: Expression::LiteralNumber(index),
+                value: Expression::LiteralNumber(value),
+            }] if name == "values" && index == "1" && value == "9"
+        )
+    ));
+}
+
+#[test]
 fn parses_enum_definition_match_and_if_let() {
     let nodes = parse(tokenize("result :: enum { some(f32), error, none, } value := some(1.0) if some(x) := value { x } match value { some(x) => x, error => 0.0, none => 0.0 }".chars()));
     assert!(

@@ -122,6 +122,11 @@ pub(crate) enum ASTNode {
         name: String,
         value: Expression,
     },
+    IndexAssignment {
+        object: Expression,
+        index: Expression,
+        value: Expression,
+    },
     CompileTimeConstant {
         name: String,
         data_type: Option<DataType>,
@@ -225,6 +230,9 @@ where
             tokens.next().expect("expected declaration after 'pub'"),
             tokens,
         ))),
+        Token::Identifier(name) if matches!(tokens.peek(), Some(Token::LeftBracket)) => {
+            parse_index_assignment_or_expression(name, tokens)
+        }
         Token::Identifier(name) => parse_statement_after_name(name, tokens),
         Token::Extern => parse_external_function(tokens),
         Token::If => parse_if(tokens),
@@ -594,6 +602,29 @@ where
             data_type,
             value,
         },
+    }
+}
+
+fn parse_index_assignment_or_expression<I>(
+    name: String,
+    tokens: &mut std::iter::Peekable<I>,
+) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let target = parse_expression_from(Token::Identifier(name), tokens, 0);
+    if !matches!(tokens.peek(), Some(Token::Equal)) {
+        return ASTNode::Expression(target);
+    }
+    tokens.next();
+    let value = parse_expression(tokens, 0);
+    match target {
+        Expression::Index { object, index } => ASTNode::IndexAssignment {
+            object: *object,
+            index: *index,
+            value,
+        },
+        _ => panic!("indexed assignment requires an array index"),
     }
 }
 
@@ -1280,6 +1311,9 @@ where
                 if matches!(tokens.peek(), Some(Token::Equal | Token::Colon)) =>
             {
                 parse_statement_after_name(name, tokens)
+            }
+            Token::Identifier(name) if matches!(tokens.peek(), Some(Token::LeftBracket)) => {
+                parse_index_assignment_or_expression(name, tokens)
             }
             Token::Identifier(name) => {
                 ASTNode::Expression(parse_expression_from(Token::Identifier(name), tokens, 0))

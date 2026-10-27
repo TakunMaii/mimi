@@ -326,6 +326,28 @@ fn checks_arrays_indexing_and_slices() {
 }
 
 #[test]
+fn checks_fixed_array_element_assignment() {
+    let valid = parse(tokenize(
+        "main :: fn () i32 { values := [1, 2] values[1] = 7 values[0] + values[1] }".chars(),
+    ));
+    check(&valid).unwrap();
+
+    let invalid = parse(tokenize(
+        "values : [2]i32 : [1, 2] values[0] = true".chars(),
+    ));
+    let errors = check(&invalid).unwrap_err();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].message.contains("constant 'values'"));
+
+    let invalid_value = parse(tokenize(
+        "main :: fn () void { values := [1] values[0] = true }".chars(),
+    ));
+    let errors = check(&invalid_value).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].message.contains("expected i32, found bool"));
+}
+
+#[test]
 fn checks_enum_construction_if_let_and_match() {
     let ast = parse(tokenize("result :: enum { some(f32), error, none, } value := some(1.0) selected := match value { some(x) => x, error => 0.0, none => 0.0 }".chars()));
     let types = check(&ast).unwrap();

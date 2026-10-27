@@ -7,7 +7,7 @@ and focused regression coverage; it does not imply support on every target.
 ## IR and Control Flow
 
 - [x] Correctly lower early `return` from nested blocks and conditional branches.
-- [x] Lower unconditional `loop` bodies into CFG backedges; `break` remains pending.
+- [x] Lower unconditional `loop` bodies into CFG backedges.
 - [x] Lower `while` and `do-while` into CFG blocks for basic loop bodies.
 - [x] Lower `for` over fixed-size scalar arrays.
 - [ ] Lower `for` over slices.
@@ -23,7 +23,8 @@ and focused regression coverage; it does not imply support on every target.
 - [ ] Implement struct layout, literals, field access, and default initialization.
 - [ ] Implement enum layout, construction, and payload access.
 - [x] Implement fixed-size scalar array literals, stack layout, indexing, and reads.
-- [ ] Implement array element writes and layouts beyond 64-bit scalar slots.
+- [x] Store indexed elements in fixed-size scalar arrays.
+- [ ] Support array element layouts beyond the current 64-bit scalar slots.
 - [ ] Implement slice representation, indexing, and slicing.
 - [ ] Implement pointer values, address-of, dereference, general pointer arithmetic, and pointer member access.
 

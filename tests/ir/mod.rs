@@ -257,6 +257,34 @@ fn builds_and_runs_fixed_array_literals_and_indexing() {
 }
 
 #[test]
+fn builds_and_runs_fixed_array_element_assignment() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_array_store_source_{}.mi", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("mimi_array_store_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { values := [2, 4, 6] values[1] = 9 values[0] + values[1] + values[2] }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(17));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_for_loops_over_fixed_arrays() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

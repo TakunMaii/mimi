@@ -103,6 +103,10 @@ pub(crate) enum MirInstruction {
         result: ValueId,
         address: ValueId,
     },
+    StoreIndirect {
+        address: ValueId,
+        value: ValueId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -423,6 +427,22 @@ impl Builder {
                                         self.variables.insert(name.clone(), Variable::Value(value));
                                     }
                                 }
+                            }
+                            crate::parser::ASTNode::IndexAssignment {
+                                object,
+                                index,
+                                value,
+                            } => {
+                                let base = self.expression(object)?;
+                                let index = self.expression(index)?;
+                                let value = self.expression(value)?;
+                                let address = self.value();
+                                self.emit(MirInstruction::IndexAddress {
+                                    result: address,
+                                    base,
+                                    index,
+                                });
+                                self.emit(MirInstruction::StoreIndirect { address, value });
                             }
                             crate::parser::ASTNode::While { condition, body } => {
                                 self.lower_while(condition, body, false)?;

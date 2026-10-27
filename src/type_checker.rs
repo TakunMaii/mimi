@@ -440,6 +440,33 @@ fn check_statement(
                 }
             }
         },
+        ASTNode::IndexAssignment {
+            object,
+            index,
+            value,
+        } => {
+            let Expression::Identifier(name) = object else {
+                return Err(error(
+                    "indexed assignment target must be a mutable array variable",
+                ));
+            };
+            let symbol = lookup(scopes, name).copied().ok_or_else(|| {
+                error(format!("cannot assign through undefined variable '{name}'"))
+            })?;
+            if !symbol.mutable {
+                return Err(error(format!("cannot assign through constant '{name}'")));
+            }
+            let element_type = match symbol.data_type {
+                DataType::Array(_, element) => *element,
+                _ => return Err(error("indexed assignment requires a fixed-size array")),
+            };
+            let index_type = infer_expression(index, scopes, functions, structs, None)?;
+            if !index_type.is_integer() {
+                return Err(error("array index must be an integer"));
+            }
+            infer_expression(value, scopes, functions, structs, Some(element_type))?;
+            Ok(())
+        }
         ASTNode::Expression(_) => Err(error("expression statements are only valid inside blocks")),
         ASTNode::FunctionDefinition { .. } => {
             Err(error("nested function definitions are unsupported"))

@@ -177,7 +177,9 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 | LirInstruction::Neg { .. } => 1,
                 LirInstruction::LoadSlot { .. } | LirInstruction::StoreSlot { .. } => 1,
                 LirInstruction::SlotAddress { slot, .. } => slot_address_words(*slot),
-                LirInstruction::IndexAddress { .. } | LirInstruction::LoadIndirect { .. } => 1,
+                LirInstruction::IndexAddress { .. }
+                | LirInstruction::LoadIndirect { .. }
+                | LirInstruction::StoreIndirect { .. } => 1,
                 LirInstruction::Not { .. } => 2,
                 LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
                 LirInstruction::Phi { .. } => 0,
@@ -383,6 +385,9 @@ fn encode_function(
                     destination,
                     address,
                 } => 0xf940_0000 | (address.0 << 5) | destination.0,
+                LirInstruction::StoreIndirect { address, value } => {
+                    0xf900_0000 | (address.0 << 5) | value.0
+                }
                 LirInstruction::StoreSlot { slot, value } => {
                     let offset = slot.0 * 8;
                     if offset > 32760 {
@@ -549,7 +554,9 @@ fn block_encoded_size(
             | LirInstruction::Neg { .. } => 1,
             LirInstruction::LoadSlot { .. } | LirInstruction::StoreSlot { .. } => 1,
             LirInstruction::SlotAddress { slot, .. } => slot_address_words(*slot),
-            LirInstruction::IndexAddress { .. } | LirInstruction::LoadIndirect { .. } => 1,
+            LirInstruction::IndexAddress { .. }
+            | LirInstruction::LoadIndirect { .. }
+            | LirInstruction::StoreIndirect { .. } => 1,
             LirInstruction::Not { .. } => 2,
             LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
             LirInstruction::Phi { .. } => 0,
@@ -642,6 +649,7 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
             destination,
             address,
         } => vec![*destination, *address],
+        LirInstruction::StoreIndirect { address, value } => vec![*address, *value],
         LirInstruction::Call { result, args, .. } => {
             result.iter().copied().chain(args.iter().copied()).collect()
         }
@@ -1003,6 +1011,9 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                 address,
             } => {
                 assembly.push_str(&format!("    ldr x{}, [x{}]\n", destination.0, address.0));
+            }
+            LirInstruction::StoreIndirect { address, value } => {
+                assembly.push_str(&format!("    str x{}, [x{}]\n", value.0, address.0));
             }
             LirInstruction::Compare {
                 destination,

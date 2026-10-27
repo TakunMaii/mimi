@@ -293,6 +293,7 @@ fn instruction_uses_defs(instruction: &LirInstruction) -> (Vec<ValueId>, Vec<Val
             destination,
             address,
         } => (vec![*address], vec![*destination]),
+        LirInstruction::StoreIndirect { address, value } => (vec![*address, *value], Vec::new()),
     }
 }
 
@@ -388,6 +389,10 @@ fn rewrite_function(
                 } => {
                     map_value(destination)?;
                     map_value(address)?;
+                }
+                LirInstruction::StoreIndirect { address, value } => {
+                    map_value(address)?;
+                    map_value(value)?;
                 }
             }
         }
