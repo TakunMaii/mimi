@@ -221,3 +221,36 @@ fn single_equal_remains_assignment() {
         }]
     );
 }
+
+#[test]
+fn parses_blocks_with_statements_and_a_final_expression() {
+    let nodes = parse(tokenize("result := { inner := 2 inner + 3 }".chars()));
+    let ASTNode::VariableDefinition {
+        value: Expression::Block(items),
+        ..
+    } = &nodes[0]
+    else {
+        panic!("expected a block expression");
+    };
+
+    assert_eq!(items.len(), 2);
+    assert!(matches!(items[0], ASTNode::VariableDefinition { .. }));
+    assert!(matches!(
+        items[1],
+        ASTNode::Expression(Expression::Add(_, _))
+    ));
+}
+
+#[test]
+fn parses_an_operator_after_a_block_expression() {
+    let nodes = parse(tokenize("result := { 1 } + 2".chars()));
+
+    assert!(matches!(
+        &nodes[0],
+        ASTNode::VariableDefinition {
+            value: Expression::Add(lhs, rhs),
+            ..
+        } if matches!(lhs.as_ref(), Expression::Block(_))
+            && matches!(rhs.as_ref(), Expression::LiteralNumber(value) if value == "2")
+    ));
+}

@@ -15,6 +15,7 @@ pub(crate) enum DataType {
     F32,
     F64,
     Bool,
+    Void,
 }
 
 #[derive(Debug, PartialEq)]
@@ -37,6 +38,7 @@ pub(crate) enum Expression {
     GreaterThanOrEqual(Box<Expression>, Box<Expression>),
     And(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
+    Block(Vec<ASTNode>),
 }
 
 #[derive(Clone, Copy)]
@@ -72,6 +74,7 @@ pub(crate) enum ASTNode {
         data_type: Option<DataType>,
         value: Expression,
     },
+    Expression(Expression),
 }
 
 pub(crate) fn parse(tokens: Vec<Token>) -> Vec<ASTNode> {
@@ -84,42 +87,49 @@ pub(crate) fn parse(tokens: Vec<Token>) -> Vec<ASTNode> {
             _ => panic!("expected an identifier at the start of a statement"),
         };
 
-        let (node_kind, data_type) = match tokens.next() {
-            Some(Token::Equal) => (0, None),
-            Some(Token::Colon) => match tokens.next() {
-                Some(Token::Equal) => (1, None),
-                Some(Token::Colon) => (2, None),
-                Some(Token::Identifier(type_name)) => {
-                    let data_type = parse_data_type(&type_name);
-                    match tokens.next() {
-                        Some(Token::Equal) => (1, Some(data_type)),
-                        Some(Token::Colon) => (2, Some(data_type)),
-                        _ => panic!("expected '=' or ':' after type"),
-                    }
-                }
-                _ => panic!("expected ':', '=', or a type after ':'"),
-            },
-            _ => panic!("expected an operator after identifier"),
-        };
-
-        let value = parse_expression(&mut tokens, 0);
-
-        nodes.push(match node_kind {
-            0 => ASTNode::Assignment { name, value },
-            1 => ASTNode::VariableDefinition {
-                name,
-                data_type,
-                value,
-            },
-            _ => ASTNode::CompileTimeConstant {
-                name,
-                data_type,
-                value,
-            },
-        });
+        nodes.push(parse_statement_after_name(name, &mut tokens));
     }
 
     nodes
+}
+
+fn parse_statement_after_name<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token>,
+{
+    let (node_kind, data_type) = match tokens.next() {
+        Some(Token::Equal) => (0, None),
+        Some(Token::Colon) => match tokens.next() {
+            Some(Token::Equal) => (1, None),
+            Some(Token::Colon) => (2, None),
+            Some(Token::Identifier(type_name)) => {
+                let data_type = parse_data_type(&type_name);
+                match tokens.next() {
+                    Some(Token::Equal) => (1, Some(data_type)),
+                    Some(Token::Colon) => (2, Some(data_type)),
+                    _ => panic!("expected '=' or ':' after type"),
+                }
+            }
+            _ => panic!("expected ':', '=', or a type after ':'"),
+        },
+        _ => panic!("expected an operator after identifier"),
+    };
+
+    let value = parse_expression(tokens, 0);
+
+    match node_kind {
+        0 => ASTNode::Assignment { name, value },
+        1 => ASTNode::VariableDefinition {
+            name,
+            data_type,
+            value,
+        },
+        _ => ASTNode::CompileTimeConstant {
+            name,
+            data_type,
+            value,
+        },
+    }
 }
 
 fn parse_data_type(name: &str) -> DataType {
@@ -137,6 +147,7 @@ fn parse_data_type(name: &str) -> DataType {
         "f32" => DataType::F32,
         "f64" => DataType::F64,
         "bool" => DataType::Bool,
+        "void" => DataType::Void,
         _ => panic!("unknown data type: {name}"),
     }
 }
@@ -145,19 +156,32 @@ fn parse_expression<I>(tokens: &mut std::iter::Peekable<I>, min_precedence: u8) 
 where
     I: Iterator<Item = Token>,
 {
-    let mut lhs = match tokens.next() {
-        Some(Token::Identifier(name)) => Expression::Identifier(name),
-        Some(Token::LiteralNumber(value)) => Expression::LiteralNumber(value),
-        Some(Token::LiteralBool(value)) => Expression::LiteralBool(value),
-        Some(Token::Minus) => Expression::Negate(Box::new(parse_expression(tokens, 6))),
-        Some(Token::Bang) => Expression::Not(Box::new(parse_expression(tokens, 6))),
-        Some(Token::LeftParen) => {
+    let first = tokens.next().expect("expected an expression");
+    parse_expression_from(first, tokens, min_precedence)
+}
+
+fn parse_expression_from<I>(
+    first: Token,
+    tokens: &mut std::iter::Peekable<I>,
+    min_precedence: u8,
+) -> Expression
+where
+    I: Iterator<Item = Token>,
+{
+    let mut lhs = match first {
+        Token::Identifier(name) => Expression::Identifier(name),
+        Token::LiteralNumber(value) => Expression::LiteralNumber(value),
+        Token::LiteralBool(value) => Expression::LiteralBool(value),
+        Token::Minus => Expression::Negate(Box::new(parse_expression(tokens, 6))),
+        Token::Bang => Expression::Not(Box::new(parse_expression(tokens, 6))),
+        Token::LeftParen => {
             let expression = parse_expression(tokens, 0);
             match tokens.next() {
                 Some(Token::RightParen) => expression,
                 _ => panic!("expected ')' after expression"),
             }
         }
+        Token::LeftBrace => Expression::Block(parse_block(tokens)),
         _ => panic!("expected an expression"),
     };
 
@@ -205,4 +229,36 @@ where
     }
 
     lhs
+}
+
+fn parse_block<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<ASTNode>
+where
+    I: Iterator<Item = Token>,
+{
+    let mut items = Vec::new();
+
+    loop {
+        match tokens.peek() {
+            Some(Token::RightBrace) => {
+                tokens.next();
+                return items;
+            }
+            None => panic!("expected '}}' to close block"),
+            _ => {}
+        }
+
+        let first = tokens.next().unwrap();
+        let item = match first {
+            Token::Identifier(name)
+                if matches!(tokens.peek(), Some(Token::Equal | Token::Colon)) =>
+            {
+                parse_statement_after_name(name, tokens)
+            }
+            Token::Identifier(name) => {
+                ASTNode::Expression(parse_expression_from(Token::Identifier(name), tokens, 0))
+            }
+            first => ASTNode::Expression(parse_expression_from(first, tokens, 0)),
+        };
+        items.push(item);
+    }
 }

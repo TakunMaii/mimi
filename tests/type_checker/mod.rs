@@ -85,3 +85,46 @@ fn rejects_undefined_identifiers_and_duplicate_definitions() {
     assert!(errors[0].message.contains("undefined identifier 'absent'"));
     assert!(errors[1].message.contains("'second' is already defined"));
 }
+
+#[test]
+fn block_value_comes_from_its_final_item() {
+    let ast = parse(tokenize(
+        "value := { local := 2 local + 3 } unit := { local := true } empty := {}".chars(),
+    ));
+
+    let types = check(&ast).unwrap();
+    assert_eq!(types["value"], DataType::I32);
+    assert_eq!(types["unit"], DataType::Void);
+    assert_eq!(types["empty"], DataType::Void);
+    assert!(!types.contains_key("local"));
+}
+
+#[test]
+fn block_scope_can_read_and_shadow_outer_names() {
+    let ast = parse(tokenize(
+        "outer := 5 shadow := { outer := true outer } after := outer".chars(),
+    ));
+
+    let types = check(&ast).unwrap();
+    assert_eq!(types["outer"], DataType::I32);
+    assert_eq!(types["shadow"], DataType::Bool);
+    assert_eq!(types["after"], DataType::I32);
+    assert!(!types.contains_key("local"));
+}
+
+#[test]
+fn block_assignments_can_update_outer_variables() {
+    let ast = parse(tokenize("outer := 1 result := { outer = 2 outer }".chars()));
+
+    let types = check(&ast).unwrap();
+    assert_eq!(types["outer"], DataType::I32);
+    assert_eq!(types["result"], DataType::I32);
+}
+
+#[test]
+fn supports_explicit_void_values() {
+    let ast = parse(tokenize("unit : void = {}".chars()));
+
+    let types = check(&ast).unwrap();
+    assert_eq!(types["unit"], DataType::Void);
+}

@@ -21,6 +21,8 @@ pub(crate) enum Token {
     Percent,
     LeftParen,
     RightParen,
+    LeftBrace,
+    RightBrace,
 }
 
 pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
@@ -106,6 +108,8 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                 '%' => result.push(Token::Percent),
                 '(' => result.push(Token::LeftParen),
                 ')' => result.push(Token::RightParen),
+                '{' => result.push(Token::LeftBrace),
+                '}' => result.push(Token::RightBrace),
                 _ => panic!("unexpected character: {ch}"),
             }
         }
