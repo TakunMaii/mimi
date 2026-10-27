@@ -150,6 +150,7 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
         .iter()
         .flat_map(|block| &block.instructions)
         .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
+    let frame_size = stack_frame_size(function);
     for block in &function.blocks {
         for instruction in &block.instructions {
             size += match instruction {
@@ -168,6 +169,7 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 | LirInstruction::Mul { .. }
                 | LirInstruction::Div { .. }
                 | LirInstruction::Neg { .. } => 1,
+                LirInstruction::LoadSlot { .. } | LirInstruction::StoreSlot { .. } => 1,
                 LirInstruction::Not { .. } => 2,
                 LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
                 LirInstruction::Phi { .. } => 0,
@@ -187,7 +189,9 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                     + if function.name == "main" {
                         8 + usize::from(value.is_none()) * 4
                     } else {
-                        4 + usize::from(has_calls) * 4
+                        (1 + usize::from(has_calls || frame_size != 0)
+                            + stack_adjust_words(frame_size))
+                            * 4
                     }
             }
             MirTerminator::Jump(target) => 4 + phi_copies(function, block.id, target).len() * 4,
@@ -205,10 +209,19 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
             }
         };
     }
-    if has_calls && function.name != "main" {
+    if function.name != "main" && (has_calls || frame_size != 0) {
         size += 4;
     }
+    size += stack_adjust_words(frame_size) * 4;
     Ok(size)
+}
+
+fn stack_frame_size(function: &LirFunction) -> u32 {
+    function.slot_count.saturating_mul(8).next_multiple_of(16)
+}
+
+fn stack_adjust_words(size: u32) -> usize {
+    size.div_ceil(4095) as usize
 }
 
 fn phi_copies(
@@ -270,16 +283,14 @@ fn encode_function(
         .iter()
         .flat_map(|block| &block.instructions)
         .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
-    if has_calls && function.name != "main" {
+    let frame_size = stack_frame_size(function);
+    let save_frame = function.name != "main" && (has_calls || frame_size != 0);
+    if save_frame {
         push_word(bytes, 0xa9bf_7bfd);
     }
+    encode_stack_adjust(bytes, frame_size, true)?;
     let mut block_offsets = std::collections::HashMap::new();
-    let has_calls = function
-        .blocks
-        .iter()
-        .flat_map(|block| &block.instructions)
-        .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
-    let mut cursor = bytes.len() + usize::from(has_calls && function.name != "main") * 4;
+    let mut cursor = bytes.len();
     for block in &function.blocks {
         block_offsets.insert(block.id, cursor);
         cursor += block_encoded_size(function, block)?;
@@ -340,6 +351,22 @@ fn encode_function(
                 }
                 LirInstruction::Neg { destination, value } => {
                     push_word(bytes, 0xcb00_03e0 | (value.0 << 16) | destination.0);
+                    continue;
+                }
+                LirInstruction::LoadSlot { destination, slot } => {
+                    let offset = slot.0 * 8;
+                    if offset > 32760 {
+                        return Err("ARM64 stack slot offset exceeds the load/store range".into());
+                    }
+                    push_word(bytes, 0xf940_03e0 | ((offset / 8) << 10) | destination.0);
+                    continue;
+                }
+                LirInstruction::StoreSlot { slot, value } => {
+                    let offset = slot.0 * 8;
+                    if offset > 32760 {
+                        return Err("ARM64 stack slot offset exceeds the load/store range".into());
+                    }
+                    push_word(bytes, 0xf900_03e0 | ((offset / 8) << 10) | value.0);
                     continue;
                 }
                 LirInstruction::Rem {
@@ -450,7 +477,8 @@ fn encode_function(
                     encode_immediate(16, 1, bytes)?;
                     push_word(bytes, 0xd400_1001);
                 } else {
-                    if has_calls {
+                    encode_stack_adjust(bytes, frame_size, false)?;
+                    if save_frame {
                         push_word(bytes, 0xa8c1_7bfd);
                     }
                     push_word(bytes, 0xd65f_03c0);
@@ -501,6 +529,7 @@ fn block_encoded_size(
             | LirInstruction::Mul { .. }
             | LirInstruction::Div { .. }
             | LirInstruction::Neg { .. } => 1,
+            LirInstruction::LoadSlot { .. } | LirInstruction::StoreSlot { .. } => 1,
             LirInstruction::Not { .. } => 2,
             LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
             LirInstruction::Phi { .. } => 0,
@@ -516,17 +545,18 @@ fn block_encoded_size(
     }
     size += match block.terminator {
         MirTerminator::Return(value) => {
+            let has_calls = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
+            let frame_size = stack_frame_size(function);
             usize::from(value.is_some_and(|v| v.0 != 0)) * 4
                 + if function.name == "main" {
                     8 + usize::from(value.is_none()) * 4
                 } else {
-                    4 + usize::from(
-                        function
-                            .blocks
-                            .iter()
-                            .flat_map(|b| &b.instructions)
-                            .any(|i| matches!(i, LirInstruction::Call { .. })),
-                    ) * 4
+                    (1 + usize::from(has_calls || frame_size != 0) + stack_adjust_words(frame_size))
+                        * 4
                 }
         }
         MirTerminator::Jump(target) => 4 + phi_copies(function, block.id, target).len() * 4,
@@ -585,6 +615,8 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
         }
         LirInstruction::Neg { destination, value } => vec![*destination, *value],
         LirInstruction::Not { destination, value } => vec![*destination, *value],
+        LirInstruction::LoadSlot { destination, .. } => vec![*destination],
+        LirInstruction::StoreSlot { value, .. } => vec![*value],
         LirInstruction::Call { result, args, .. } => {
             result.iter().copied().chain(args.iter().copied()).collect()
         }
@@ -595,6 +627,17 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
             .chain(incoming.iter().map(|(_, value)| *value))
             .collect(),
     }
+}
+
+fn encode_stack_adjust(bytes: &mut Vec<u8>, size: u32, subtract: bool) -> Result<(), String> {
+    let mut remaining = size;
+    while remaining != 0 {
+        let immediate = remaining.min(4095);
+        let opcode = if subtract { 0xd100_03ff } else { 0x9100_03ff };
+        push_word(bytes, opcode | (immediate << 10));
+        remaining -= immediate;
+    }
+    Ok(())
 }
 
 fn encode_immediate(register: u32, value: u64, bytes: &mut Vec<u8>) -> Result<(), String> {
@@ -768,6 +811,13 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
     }
     let label = format!("_{}", function.name);
     assembly.push_str(&format!(".globl {label}\n{label}:\n"));
+    let frame_size = stack_frame_size(function);
+    if frame_size > 4095 {
+        return Err("textual ARM64 emitter supports stack frames up to 4095 bytes".into());
+    }
+    if frame_size != 0 {
+        assembly.push_str(&format!("    sub sp, sp, #{frame_size}\n"));
+    }
     for instruction in &function.blocks[0].instructions {
         match instruction {
             LirInstruction::LoadImmediate { register, value } => {
@@ -832,6 +882,16 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     value.0, destination.0
                 ));
             }
+            LirInstruction::LoadSlot { destination, slot } => {
+                assembly.push_str(&format!(
+                    "    ldr x{}, [sp, #{}]\n",
+                    destination.0,
+                    slot.0 * 8
+                ));
+            }
+            LirInstruction::StoreSlot { slot, value } => {
+                assembly.push_str(&format!("    str x{}, [sp, #{}]\n", value.0, slot.0 * 8));
+            }
             LirInstruction::Rem {
                 destination,
                 lhs,
@@ -875,6 +935,9 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
         if value.0 != 0 {
             assembly.push_str(&format!("    mov x0, x{}\n", value.0));
         }
+    }
+    if frame_size != 0 {
+        assembly.push_str(&format!("    add sp, sp, #{frame_size}\n"));
     }
     assembly.push_str("    ret\n");
     Ok(())

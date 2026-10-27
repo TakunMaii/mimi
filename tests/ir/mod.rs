@@ -178,6 +178,51 @@ fn builds_and_runs_while_body_with_early_return() {
 }
 
 #[test]
+fn builds_and_runs_mutable_locals_across_loops() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_mutable_loop_source_{}.mi",
+        std::process::id()
+    ));
+    let path =
+        std::env::temp_dir().join(format!("mimi_mutable_loop_codegen_{}", std::process::id()));
+    for (program, expected) in [
+        (
+            "main :: fn () i32 { i := 0 while i < 5 { i = i + 1 } i }",
+            5,
+        ),
+        (
+            "main :: fn () i32 { i := 0 do { i = i + 1 } while i < 3 i }",
+            3,
+        ),
+        (
+            "bump :: fn (i : i32) i32 { i = i + 1 i } main :: fn () i32 { bump(4) }",
+            5,
+        ),
+        (
+            "update :: fn (condition : bool) i32 { count := 0 value := if condition == true { count = 5 count } else { count = 8 count } count } main :: fn () i32 { update(false) }",
+            8,
+        ),
+    ] {
+        std::fs::write(&source, program).unwrap();
+        build_file(
+            source.to_str().unwrap(),
+            path.to_str().unwrap(),
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let status = std::process::Command::new(&path).status().unwrap();
+        assert_eq!(status.code(), Some(expected));
+    }
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_early_return_in_if_expression() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
@@ -245,7 +290,9 @@ fn emits_host_assembly_for_integer_function() {
     let lir = lir::lower_mir(&mir, &lir::HostTarget);
     if cfg!(target_arch = "aarch64") {
         let assembly = codegen::emit_assembly(&lir).unwrap();
-        assert!(assembly.contains("add x2, x0, x1"));
+        assert!(assembly.contains("add x"));
+        assert!(assembly.contains("ldr x"));
+        assert!(assembly.contains("str x"));
         assert!(assembly.contains("ret"));
     }
 }

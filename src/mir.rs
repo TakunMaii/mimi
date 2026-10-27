@@ -7,6 +7,9 @@ pub(crate) struct ValueId(pub(crate) u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct BlockId(pub(crate) u32);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct SlotId(pub(crate) u32);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompareKind {
     Equal,
@@ -79,6 +82,14 @@ pub(crate) enum MirInstruction {
         name: String,
         args: Vec<ValueId>,
     },
+    LoadSlot {
+        result: ValueId,
+        slot: SlotId,
+    },
+    StoreSlot {
+        slot: SlotId,
+        value: ValueId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -105,6 +116,7 @@ pub(crate) struct MirFunction {
     pub(crate) name: String,
     pub(crate) params: Vec<(String, HirType, ValueId)>,
     pub(crate) result: HirType,
+    pub(crate) slot_count: u32,
     pub(crate) blocks: Vec<MirBlock>,
 }
 
@@ -115,10 +127,17 @@ pub(crate) struct MirModule {
 
 struct Builder {
     next_value: u32,
+    next_slot: u32,
     blocks: Vec<MirBlock>,
     current: BlockId,
-    variables: std::collections::HashMap<String, ValueId>,
+    variables: std::collections::HashMap<String, Variable>,
     defer_scopes: Vec<Vec<Expression>>,
+}
+
+#[derive(Clone, Copy)]
+enum Variable {
+    Value(ValueId),
+    Slot(SlotId),
 }
 
 impl Builder {
@@ -126,6 +145,12 @@ impl Builder {
         let value = ValueId(self.next_value);
         self.next_value += 1;
         value
+    }
+
+    fn slot(&mut self) -> SlotId {
+        let slot = SlotId(self.next_slot);
+        self.next_slot += 1;
+        slot
     }
 
     fn emit(&mut self, instruction: MirInstruction) {
@@ -150,7 +175,14 @@ impl Builder {
 
     fn expression(&mut self, expression: &Expression) -> Option<ValueId> {
         match expression {
-            Expression::Identifier(name) => self.variables.get(name).copied(),
+            Expression::Identifier(name) => match self.variables.get(name).copied()? {
+                Variable::Value(value) => Some(value),
+                Variable::Slot(slot) => {
+                    let result = self.value();
+                    self.emit(MirInstruction::LoadSlot { result, slot });
+                    Some(result)
+                }
+            },
             Expression::LiteralNumber(text) => {
                 let result = self.value();
                 let value = text.parse().ok()?;
@@ -301,14 +333,26 @@ impl Builder {
                     let mut result = None;
                     for item in items {
                         match item {
-                            crate::parser::ASTNode::VariableDefinition { name, value, .. }
-                            | crate::parser::ASTNode::CompileTimeConstant { name, value, .. } => {
+                            crate::parser::ASTNode::VariableDefinition { name, value, .. } => {
                                 let value = self.expression(value)?;
-                                self.variables.insert(name.clone(), value);
+                                let slot = self.slot();
+                                self.emit(MirInstruction::StoreSlot { slot, value });
+                                self.variables.insert(name.clone(), Variable::Slot(slot));
+                            }
+                            crate::parser::ASTNode::CompileTimeConstant { name, value, .. } => {
+                                let value = self.expression(value)?;
+                                self.variables.insert(name.clone(), Variable::Value(value));
                             }
                             crate::parser::ASTNode::Assignment { name, value } => {
                                 let value = self.expression(value)?;
-                                self.variables.insert(name.clone(), value);
+                                match self.variables.get(name).copied() {
+                                    Some(Variable::Slot(slot)) => {
+                                        self.emit(MirInstruction::StoreSlot { slot, value });
+                                    }
+                                    _ => {
+                                        self.variables.insert(name.clone(), Variable::Value(value));
+                                    }
+                                }
                             }
                             crate::parser::ASTNode::While { condition, body } => {
                                 self.lower_while(condition, body, false)?;
@@ -490,6 +534,7 @@ impl Builder {
 fn lower_function(function: &HirFunction) -> MirFunction {
     let mut builder = Builder {
         next_value: 0,
+        next_slot: 0,
         blocks: vec![MirBlock {
             id: BlockId(0),
             instructions: Vec::new(),
@@ -503,9 +548,14 @@ fn lower_function(function: &HirFunction) -> MirFunction {
         .params
         .iter()
         .map(|(name, ty)| {
-            let value = builder.value();
-            builder.variables.insert(name.clone(), value);
-            (name.clone(), ty.clone(), value)
+            let incoming = builder.value();
+            let slot = builder.slot();
+            builder.variables.insert(name.clone(), Variable::Slot(slot));
+            builder.emit(MirInstruction::StoreSlot {
+                slot,
+                value: incoming,
+            });
+            (name.clone(), ty.clone(), incoming)
         })
         .collect();
     let result = builder.expression(&function.body);
@@ -523,6 +573,7 @@ fn lower_function(function: &HirFunction) -> MirFunction {
         name: function.name.clone(),
         params,
         result: function.result.clone(),
+        slot_count: builder.next_slot,
         blocks,
     }
 }

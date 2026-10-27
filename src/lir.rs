@@ -1,4 +1,6 @@
-use crate::mir::{CompareKind, MirFunction, MirInstruction, MirModule, MirTerminator, ValueId};
+use crate::mir::{
+    CompareKind, MirFunction, MirInstruction, MirModule, MirTerminator, SlotId, ValueId,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TargetArch {
@@ -86,12 +88,21 @@ pub(crate) enum LirInstruction {
         destination: ValueId,
         incoming: Vec<(crate::mir::BlockId, ValueId)>,
     },
+    LoadSlot {
+        destination: ValueId,
+        slot: SlotId,
+    },
+    StoreSlot {
+        slot: SlotId,
+        value: ValueId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LirFunction {
     pub(crate) name: String,
     pub(crate) params: Vec<ValueId>,
+    pub(crate) slot_count: u32,
     pub(crate) blocks: Vec<LirBlock>,
 }
 
@@ -205,6 +216,14 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                             name: name.clone(),
                             args: args.clone(),
                         },
+                        MirInstruction::LoadSlot { result, slot } => LirInstruction::LoadSlot {
+                            destination: *result,
+                            slot: *slot,
+                        },
+                        MirInstruction::StoreSlot { slot, value } => LirInstruction::StoreSlot {
+                            slot: *slot,
+                            value: *value,
+                        },
                     })
                 })
                 .collect();
@@ -218,6 +237,7 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
     LirFunction {
         name: function.name.clone(),
         params: function.params.iter().map(|(_, _, value)| *value).collect(),
+        slot_count: function.slot_count,
         blocks,
     }
 }
