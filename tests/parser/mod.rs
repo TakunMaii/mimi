@@ -316,7 +316,7 @@ fn parses_struct_definition_literals_and_member_access() {
             .chars(),
     ));
     assert!(
-        matches!(&nodes[0], ASTNode::StructDefinition { name, fields }
+        matches!(&nodes[0], ASTNode::StructDefinition { name, fields, .. }
         if *name == "pos" && fields.len() == 2)
     );
     assert!(
@@ -393,4 +393,26 @@ fn parses_struct_field_defaults_and_mutability() {
     assert!(fields[1].3);
     assert!(fields[1].2.is_some());
     assert!(fields[2].2.is_none());
+}
+
+#[test]
+fn parses_struct_methods_and_function_types() {
+    let nodes = parse(tokenize(
+        "pos :: struct { x : i32, getX() :: fn (self : Self) i32 { self.x } }".chars(),
+    ));
+    let ASTNode::StructDefinition { methods, .. } = &nodes[0] else {
+        panic!("expected struct definition");
+    };
+    assert_eq!(methods.len(), 1);
+    assert_eq!(methods[0].name, "getX");
+}
+
+#[test]
+fn parses_function_values_and_static_method_access() {
+    let nodes = parse(tokenize(
+        "apply :: fn (f : fn(i32)i32, value : i32) i32 { f(value) } pos :: struct { x : i32, getX() :: fn (self : Self) i32 { self.x } } point : pos = pos { x = 1 } result := point.getX()"
+            .chars(),
+    ));
+    assert!(matches!(&nodes[0], ASTNode::FunctionDefinition { .. }));
+    assert!(matches!(&nodes[2], ASTNode::VariableDefinition { value: Expression::CallValue { .. }, .. }));
 }

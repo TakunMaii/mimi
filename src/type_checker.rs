@@ -22,12 +22,21 @@ struct Function {
 struct StructInfo {
     fields: HashMap<String, FieldInfo>,
     variants: HashMap<String, Option<DataType>>,
+    methods: HashMap<String, Function>,
 }
 
 struct FieldInfo {
     data_type: DataType,
     default: Option<Expression>,
     mutable: bool,
+}
+
+fn resolve_self(data_type: DataType, owner: &'static str) -> DataType {
+    if matches!(data_type, DataType::SelfType) {
+        DataType::Struct(owner)
+    } else {
+        data_type
+    }
 }
 
 pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<TypeError>> {
@@ -43,10 +52,16 @@ pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<
                 StructInfo {
                     fields: HashMap::new(),
                     variants: variants.iter().cloned().collect(),
+                    methods: HashMap::new(),
                 },
             );
         }
-        if let ASTNode::StructDefinition { name, fields } = node {
+        if let ASTNode::StructDefinition {
+            name,
+            fields,
+            methods,
+        } = node
+        {
             let mut field_names = std::collections::HashSet::new();
             for (field_name, _, _, _) in fields {
                 if !field_names.insert(field_name) {
@@ -73,6 +88,22 @@ pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<
                             })
                             .collect(),
                         variants: HashMap::new(),
+                        methods: methods
+                            .iter()
+                            .map(|method| {
+                                (
+                                    method.name.clone(),
+                                    Function {
+                                        parameters: method
+                                            .parameters
+                                            .iter()
+                                            .map(|(_, ty)| resolve_self(*ty, *name))
+                                            .collect(),
+                                        return_type: resolve_self(method.return_type, *name),
+                                    },
+                                )
+                            })
+                            .collect(),
                     },
                 )
                 .is_some()
@@ -104,7 +135,32 @@ pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<
 
     for node in nodes {
         match node {
-            ASTNode::StructDefinition { .. } => {}
+            ASTNode::StructDefinition { name, methods, .. } => {
+                for method in methods {
+                    let mut method_scopes = vec![HashMap::new()];
+                    for (parameter_name, data_type) in &method.parameters {
+                        method_scopes[0].insert(
+                            parameter_name.clone(),
+                            Symbol {
+                                data_type: resolve_self(*data_type, name),
+                                mutable: true,
+                            },
+                        );
+                    }
+                    if let Err(err) = infer_expression(
+                        &method.body,
+                        &mut method_scopes,
+                        &functions,
+                        &structs,
+                        Some(resolve_self(method.return_type, name)),
+                    ) {
+                        errors.push(error(format!(
+                            "method '{}::{}': {}",
+                            name, method.name, err.message
+                        )));
+                    }
+                }
+            }
             ASTNode::FunctionDefinition {
                 name,
                 parameters,
@@ -340,6 +396,11 @@ fn infer_expression(
         Expression::Identifier(name) => {
             let data_type = if let Some(symbol) = lookup(scopes, name) {
                 symbol.data_type
+            } else if let Some(function) = functions.get(name) {
+                DataType::Function(
+                    Box::leak(function.parameters.clone().into_boxed_slice()),
+                    Box::leak(Box::new(function.return_type)),
+                )
             } else {
                 let matches: Vec<_> = structs
                     .iter()
@@ -470,6 +531,20 @@ fn infer_expression(
             result
         }
         Expression::Call { name, arguments } => {
+            if let Some(Symbol {
+                data_type: DataType::Function(parameters, return_type),
+                ..
+            }) = lookup(scopes, name).copied()
+            {
+                if arguments.len() != parameters.len() {
+                    return Err(error("wrong number of function arguments"));
+                }
+                for (argument, parameter_type) in arguments.iter().zip(parameters.iter()) {
+                    infer_expression(argument, scopes, functions, structs, Some(*parameter_type))?;
+                }
+                require_compatible(*return_type, expected)?;
+                return Ok(*return_type);
+            }
             for (enum_name, info) in structs {
                 if let Some(payload) = info.variants.get(name) {
                     if arguments.len() != usize::from(payload.is_some()) {
@@ -570,14 +645,89 @@ fn infer_expression(
                 DataType::Struct(name) => name,
                 _ => return Err(error("member access requires a struct value")),
             };
-            structs
-                .get(struct_name)
-                .and_then(|info| info.fields.get(member).map(|field| field.data_type))
-                .ok_or_else(|| {
-                    error(format!(
-                        "unknown field '{member}' in struct '{struct_name}'"
-                    ))
-                })
+            if let Some(info) = structs.get(struct_name) {
+                if let Some(field) = info.fields.get(member) {
+                    return Ok(field.data_type);
+                }
+                if let Some(method) = info.methods.get(member) {
+                    let params = method
+                        .parameters
+                        .iter()
+                        .skip(1)
+                        .copied()
+                        .collect::<Vec<_>>();
+                    return Ok(DataType::Function(
+                        Box::leak(params.into_boxed_slice()),
+                        Box::leak(Box::new(method.return_type)),
+                    ));
+                }
+            }
+            Err(error(format!(
+                "unknown member '{member}' in '{struct_name}'"
+            )))
+        }
+        Expression::CallValue { callee, arguments } => {
+            let function_type = infer_expression(callee, scopes, functions, structs, None)?;
+            let (parameters, return_type) = match function_type {
+                DataType::Function(p, r) => (p, r),
+                _ => return Err(error("value is not callable")),
+            };
+            if arguments.len() != parameters.len() {
+                return Err(error("wrong number of function arguments"));
+            }
+            for (argument, expected_type) in arguments.iter().zip(parameters.iter()) {
+                infer_expression(argument, scopes, functions, structs, Some(*expected_type))?;
+            }
+            require_compatible(*return_type, expected)?;
+            Ok(*return_type)
+        }
+        Expression::Lambda {
+            parameters,
+            return_type,
+            body,
+        } => {
+            let parameter_types: Vec<_> = parameters.iter().map(|(_, ty)| *ty).collect();
+            scopes.push(HashMap::new());
+            for (index, (name, data_type)) in parameters.iter().enumerate() {
+                if let Some(name) = name {
+                    scopes.last_mut().unwrap().insert(
+                        name.clone(),
+                        Symbol {
+                            data_type: *data_type,
+                            mutable: true,
+                        },
+                    );
+                }
+                let _ = index;
+            }
+            let body_result =
+                infer_expression(body, scopes, functions, structs, Some(*return_type));
+            scopes.pop();
+            body_result?;
+            Ok(DataType::Function(
+                Box::leak(parameter_types.into_boxed_slice()),
+                Box::leak(Box::new(*return_type)),
+            ))
+        }
+        Expression::StaticAccess { type_name, member } => {
+            let info = structs
+                .get(type_name.as_str())
+                .ok_or_else(|| error(format!("unknown type '{type_name}'")))?;
+            let method = info
+                .methods
+                .get(member);
+            if let Some(method) = method {
+                return Ok(DataType::Function(
+                    Box::leak(method.parameters.clone().into_boxed_slice()),
+                    Box::leak(Box::new(method.return_type)),
+                ));
+            }
+            if let Some(field) = info.fields.get(member) {
+                if !field.mutable && field.default.is_some() {
+                    return Ok(field.data_type);
+                }
+            }
+            Err(error("unknown static member"))
         }
         Expression::ArrayLiteral(values) => {
             let expected_element = match expected {
@@ -937,6 +1087,7 @@ impl DataType {
             Self::Struct(_) => 0,
             Self::Array(_, _) | Self::Slice(_) => 0,
             Self::Enum(_) => 0,
+            Self::Function(_, _) | Self::SelfType => 0,
         }
     }
 
@@ -986,6 +1137,10 @@ impl std::fmt::Display for DataType {
             Self::Array(length, element) => return write!(formatter, "[{length}]{element}"),
             Self::Slice(element) => return write!(formatter, "[]{element}"),
             Self::Enum(name) => name,
+            Self::SelfType => "Self",
+            Self::Function(parameters, return_type) => {
+                return write!(formatter, "fn({parameters:?}){return_type}");
+            }
         };
         formatter.write_str(name)
     }

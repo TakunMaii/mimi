@@ -20,6 +20,8 @@ pub(crate) enum DataType {
     Array(u64, &'static DataType),
     Slice(&'static DataType),
     Enum(&'static str),
+    Function(&'static [DataType], &'static DataType),
+    SelfType,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -69,6 +71,19 @@ pub(crate) enum Expression {
         value: Box<Expression>,
         arms: Vec<(Pattern, Expression)>,
     },
+    Lambda {
+        parameters: Vec<(Option<String>, DataType)>,
+        return_type: DataType,
+        body: Box<Expression>,
+    },
+    CallValue {
+        callee: Box<Expression>,
+        arguments: Vec<Expression>,
+    },
+    StaticAccess {
+        type_name: String,
+        member: String,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -115,6 +130,7 @@ pub(crate) enum ASTNode {
     StructDefinition {
         name: &'static str,
         fields: Vec<(String, DataType, Option<Expression>, bool)>,
+        methods: Vec<MethodDefinition>,
     },
     If {
         condition: Expression,
@@ -147,6 +163,14 @@ pub(crate) enum ASTNode {
         then_branch: Expression,
         else_branch: Option<Expression>,
     },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MethodDefinition {
+    pub(crate) name: String,
+    pub(crate) parameters: Vec<(String, DataType)>,
+    pub(crate) return_type: DataType,
+    pub(crate) body: Expression,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -495,7 +519,48 @@ where
         "expected '{{' after struct"
     );
     let mut fields = Vec::new();
+    let mut methods = Vec::new();
     while !matches!(tokens.peek(), Some(Token::RightBrace)) {
+        if struct_member_starts_method(tokens) {
+            let method_name = match tokens.next() {
+                Some(Token::Identifier(name)) => name,
+                _ => unreachable!(),
+            };
+            assert!(matches!(tokens.next(), Some(Token::LeftParen)));
+            assert!(
+                matches!(tokens.next(), Some(Token::RightParen)),
+                "method member declaration uses empty parentheses"
+            );
+            assert!(
+                matches!(tokens.next(), Some(Token::Colon))
+                    && matches!(tokens.next(), Some(Token::Colon)),
+                "expected '::' after method name"
+            );
+            assert!(
+                matches!(tokens.next(), Some(Token::Fn)),
+                "expected fn after '::'"
+            );
+            let method = parse_function(method_name, tokens);
+            let ASTNode::FunctionDefinition {
+                name,
+                parameters,
+                return_type,
+                body,
+            } = method
+            else {
+                unreachable!()
+            };
+            methods.push(MethodDefinition {
+                name,
+                parameters,
+                return_type,
+                body,
+            });
+            if matches!(tokens.peek(), Some(Token::Comma)) {
+                tokens.next();
+            }
+            continue;
+        }
         let field_name = match tokens.next() {
             Some(Token::Identifier(name)) => name,
             _ => panic!("expected struct field name"),
@@ -525,7 +590,24 @@ where
     }
     tokens.next();
     let name = Box::leak(name.into_boxed_str());
-    ASTNode::StructDefinition { name, fields }
+    ASTNode::StructDefinition {
+        name,
+        fields,
+        methods,
+    }
+}
+
+fn struct_member_starts_method<I>(tokens: &std::iter::Peekable<I>) -> bool
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let mut lookahead = tokens.clone();
+    matches!(lookahead.next(), Some(Token::Identifier(_)))
+        && matches!(lookahead.next(), Some(Token::LeftParen))
+        && matches!(lookahead.next(), Some(Token::RightParen))
+        && matches!(lookahead.next(), Some(Token::Colon))
+        && matches!(lookahead.next(), Some(Token::Colon))
+        && matches!(lookahead.next(), Some(Token::Fn))
 }
 
 fn parse_enum_definition<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
@@ -583,6 +665,7 @@ fn parse_data_type(name: &str) -> DataType {
         "f64" => DataType::F64,
         "bool" => DataType::Bool,
         "void" => DataType::Void,
+        "Self" => DataType::SelfType,
         _ => DataType::Struct(Box::leak(name.to_owned().into_boxed_str())),
     }
 }
@@ -591,6 +674,31 @@ fn parse_type<I>(tokens: &mut std::iter::Peekable<I>) -> DataType
 where
     I: Iterator<Item = Token> + Clone,
 {
+    if matches!(tokens.peek(), Some(Token::Fn)) {
+        tokens.next();
+        assert!(
+            matches!(tokens.next(), Some(Token::LeftParen)),
+            "expected '(' in function type"
+        );
+        let mut parameters = Vec::new();
+        if !matches!(tokens.peek(), Some(Token::RightParen)) {
+            loop {
+                parameters.push(parse_type(tokens));
+                match tokens.next() {
+                    Some(Token::Comma) => continue,
+                    Some(Token::RightParen) => break,
+                    _ => panic!("expected ',' or ')' in function type"),
+                }
+            }
+        } else {
+            tokens.next();
+        }
+        let return_type = parse_type(tokens);
+        return DataType::Function(
+            Box::leak(parameters.into_boxed_slice()),
+            Box::leak(Box::new(return_type)),
+        );
+    }
     if matches!(tokens.peek(), Some(Token::LeftBracket)) {
         tokens.next();
         let length = match tokens.next() {
@@ -665,11 +773,34 @@ where
             Expression::ArrayLiteral(values)
         }
         Token::Match => parse_match(tokens),
+        Token::Fn => parse_lambda(tokens),
         _ => panic!("expected an expression"),
     };
 
     if let Expression::Identifier(name) = lhs {
-        if matches!(tokens.peek(), Some(Token::LeftParen)) {
+        let mut is_static = false;
+        if matches!(tokens.peek(), Some(Token::Colon)) {
+            let mut lookahead = tokens.clone();
+            lookahead.next();
+            if matches!(lookahead.next(), Some(Token::Colon)) {
+                tokens.next();
+                tokens.next();
+                let member = match tokens.next() {
+                    Some(Token::Identifier(member)) => member,
+                    _ => panic!("expected static member"),
+                };
+                lhs = Expression::StaticAccess {
+                    type_name: name.clone(),
+                    member,
+                };
+                is_static = true;
+            }
+        }
+        if is_static && matches!(tokens.peek(), Some(Token::LeftParen)) {
+            let arguments = parse_arguments(tokens);
+            lhs = Expression::CallValue { callee: Box::new(lhs), arguments };
+        } else if is_static {
+        } else if matches!(tokens.peek(), Some(Token::LeftParen)) {
             tokens.next();
             let mut arguments = Vec::new();
             if !matches!(tokens.peek(), Some(Token::RightParen)) {
@@ -697,6 +828,27 @@ where
     }
 
     loop {
+        if matches!(tokens.peek(), Some(Token::LeftParen)) {
+            tokens.next();
+            let mut arguments = Vec::new();
+            if !matches!(tokens.peek(), Some(Token::RightParen)) {
+                loop {
+                    arguments.push(parse_expression(tokens, 0));
+                    match tokens.next() {
+                        Some(Token::Comma) => continue,
+                        Some(Token::RightParen) => break,
+                        _ => panic!("expected ',' or ')' after argument"),
+                    }
+                }
+            } else {
+                tokens.next();
+            }
+            lhs = Expression::CallValue {
+                callee: Box::new(lhs),
+                arguments,
+            };
+            continue;
+        }
         if matches!(tokens.peek(), Some(Token::LeftBracket)) {
             tokens.next();
             let start = if matches!(
@@ -790,6 +942,57 @@ where
     }
 
     lhs
+}
+
+fn parse_arguments<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<Expression>
+where I: Iterator<Item = Token> + Clone {
+    assert!(matches!(tokens.next(), Some(Token::LeftParen)));
+    let mut arguments = Vec::new();
+    if !matches!(tokens.peek(), Some(Token::RightParen)) {
+        loop {
+            arguments.push(parse_expression(tokens, 0));
+            match tokens.next() { Some(Token::Comma) => continue, Some(Token::RightParen) => break, _ => panic!("expected ',' or ')' after argument") }
+        }
+    } else { tokens.next(); }
+    arguments
+}
+
+fn parse_lambda<I>(tokens: &mut std::iter::Peekable<I>) -> Expression
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    assert!(
+        matches!(tokens.next(), Some(Token::LeftParen)),
+        "expected '(' after fn"
+    );
+    let mut parameters = Vec::new();
+    if !matches!(tokens.peek(), Some(Token::RightParen)) {
+        loop {
+            let name = match tokens.next() {
+                Some(Token::Identifier(name)) => Some(name),
+                _ => None,
+            };
+            assert!(
+                matches!(tokens.next(), Some(Token::Colon)),
+                "expected ':' in lambda parameter"
+            );
+            parameters.push((name, parse_type(tokens)));
+            match tokens.next() {
+                Some(Token::Comma) => continue,
+                Some(Token::RightParen) => break,
+                _ => panic!("expected ',' or ')' in lambda"),
+            }
+        }
+    } else {
+        tokens.next();
+    }
+    let return_type = parse_type(tokens);
+    let body = parse_block_expression(tokens);
+    Expression::Lambda {
+        parameters,
+        return_type,
+        body: Box::new(body),
+    }
 }
 
 fn brace_starts_struct_literal<I>(tokens: &std::iter::Peekable<I>) -> bool

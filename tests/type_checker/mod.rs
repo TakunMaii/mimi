@@ -264,3 +264,23 @@ fn compile_time_field_defaults_must_be_constant() {
             .any(|error| error.message.contains("must be constant"))
     );
 }
+
+#[test]
+fn checks_struct_method_self_and_method_access() {
+    let ast = parse(tokenize(
+        "pos :: struct { x : i32, getX() :: fn (self : Self) i32 { self.x } } point : pos = pos { x = 4 } value := point.getX()"
+            .chars(),
+    ));
+    let types = check(&ast).unwrap();
+    assert_eq!(types["value"], DataType::I32);
+}
+
+#[test]
+fn checks_function_values_and_static_methods() {
+    let ast = parse(tokenize(
+        "apply :: fn (f : fn(i32)i32, value : i32) i32 { f(value) } pos :: struct { x : i32, getX() :: fn (self : Self) i32 { self.x } } point : pos = pos { x = 1 } result := apply(fn(x : i32) i32 { x + 1 }, 2)"
+            .chars(),
+    ));
+    let types = check(&ast).unwrap();
+    assert_eq!(types["result"], DataType::I32);
+}
