@@ -425,6 +425,13 @@ impl Builder {
                             crate::parser::ASTNode::Loop { body } => {
                                 self.lower_loop(body);
                             }
+                            crate::parser::ASTNode::For {
+                                binding,
+                                iterable,
+                                body,
+                            } => {
+                                self.lower_for(binding, iterable, body)?;
+                            }
                             crate::parser::ASTNode::Defer { body } => {
                                 self.defer_scopes.last_mut()?.push(body.clone());
                             }
@@ -552,6 +559,137 @@ impl Builder {
             self.terminate(MirTerminator::Jump(loop_block));
         }
         self.current = self.new_block();
+    }
+
+    fn lower_for(&mut self, binding: &str, iterable: &Expression, body: &Expression) -> Option<()> {
+        let length = match iterable {
+            Expression::ArrayLiteral(values) => values.len() as u64,
+            Expression::Identifier(name) => *self.array_lengths.get(name)?,
+            _ => return None,
+        };
+        let array = self.expression(iterable)?;
+        let array_slot = self.slot();
+        self.emit(MirInstruction::StoreSlot {
+            slot: array_slot,
+            value: array,
+        });
+
+        let index_slot = self.slot();
+        let zero = self.value();
+        self.emit(MirInstruction::ConstInt {
+            result: zero,
+            value: 0,
+        });
+        self.emit(MirInstruction::StoreSlot {
+            slot: index_slot,
+            value: zero,
+        });
+        let length_slot = self.slot();
+        let length_value = self.value();
+        self.emit(MirInstruction::ConstInt {
+            result: length_value,
+            value: length as i128,
+        });
+        self.emit(MirInstruction::StoreSlot {
+            slot: length_slot,
+            value: length_value,
+        });
+        let binding_slot = self.slot();
+        let previous_binding = self
+            .variables
+            .insert(binding.to_string(), Variable::Slot(binding_slot));
+        let previous_length = self.array_lengths.remove(binding);
+
+        let condition_block = self.new_block();
+        let body_block = self.new_block();
+        let exit_block = self.new_block();
+        self.terminate(MirTerminator::Jump(condition_block));
+
+        self.current = condition_block;
+        let index = self.value();
+        self.emit(MirInstruction::LoadSlot {
+            result: index,
+            slot: index_slot,
+        });
+        let length = self.value();
+        self.emit(MirInstruction::LoadSlot {
+            result: length,
+            slot: length_slot,
+        });
+        let condition = self.value();
+        self.emit(MirInstruction::Compare {
+            result: condition,
+            lhs: index,
+            rhs: length,
+            kind: CompareKind::Less,
+        });
+        self.terminate(MirTerminator::Branch {
+            condition,
+            then_block: body_block,
+            else_block: exit_block,
+        });
+
+        self.current = body_block;
+        let index = self.value();
+        self.emit(MirInstruction::LoadSlot {
+            result: index,
+            slot: index_slot,
+        });
+        let array = self.value();
+        self.emit(MirInstruction::LoadSlot {
+            result: array,
+            slot: array_slot,
+        });
+        let address = self.value();
+        self.emit(MirInstruction::IndexAddress {
+            result: address,
+            base: array,
+            index,
+        });
+        let item = self.value();
+        self.emit(MirInstruction::LoadIndirect {
+            result: item,
+            address,
+        });
+        self.emit(MirInstruction::StoreSlot {
+            slot: binding_slot,
+            value: item,
+        });
+        self.expression(body);
+        if self.is_open(self.current) {
+            let index = self.value();
+            self.emit(MirInstruction::LoadSlot {
+                result: index,
+                slot: index_slot,
+            });
+            let one = self.value();
+            self.emit(MirInstruction::ConstInt {
+                result: one,
+                value: 1,
+            });
+            let next_index = self.value();
+            self.emit(MirInstruction::Add {
+                result: next_index,
+                lhs: index,
+                rhs: one,
+            });
+            self.emit(MirInstruction::StoreSlot {
+                slot: index_slot,
+                value: next_index,
+            });
+            self.terminate(MirTerminator::Jump(condition_block));
+        }
+
+        self.current = exit_block;
+        if let Some(previous) = previous_binding {
+            self.variables.insert(binding.to_string(), previous);
+        } else {
+            self.variables.remove(binding);
+        }
+        if let Some(length) = previous_length {
+            self.array_lengths.insert(binding.to_string(), length);
+        }
+        Some(())
     }
 
     fn logical(&mut self, lhs: &Expression, rhs: &Expression, and: bool) -> Option<ValueId> {

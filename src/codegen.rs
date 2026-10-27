@@ -3,6 +3,7 @@ use std::process::Command;
 
 use crate::lir::{LirFunction, LirInstruction, LirModule, TargetArch};
 use crate::mir::{CompareKind, MirTerminator, ValueId};
+use crate::regalloc::allocate_registers;
 
 #[derive(Clone, Copy)]
 enum RelocationKind {
@@ -99,16 +100,21 @@ pub(crate) fn compile_executable_with_options(
 fn encode_module(
     module: &LirModule,
 ) -> Result<(Vec<u8>, Vec<u8>, Vec<ObjectSymbol>, Vec<Relocation>), String> {
+    let functions = module
+        .functions
+        .iter()
+        .map(allocate_registers)
+        .collect::<Result<Vec<_>, _>>()?;
     let mut offsets = std::collections::HashMap::new();
     let mut offset = 0u64;
-    for function in &module.functions {
+    for function in &functions {
         offsets.insert(format!("_{}", function.name), offset);
         offset += encoded_function_size(function)? as u64;
     }
     let mut text = Vec::new();
     let mut symbols = Vec::new();
     let mut relocations = Vec::new();
-    for function in &module.functions {
+    for function in &functions {
         symbols.push(ObjectSymbol {
             name: format!("_{}", function.name),
             section: 1,
@@ -176,10 +182,7 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
                 LirInstruction::Phi { .. } => 0,
                 LirInstruction::Call { args, result, .. } => {
-                    args.iter()
-                        .enumerate()
-                        .filter(|(index, argument)| argument.0 != *index as u32)
-                        .count()
+                    argument_moves(args).len()
                         + 1
                         + usize::from(result.is_some_and(|value| value.0 != 0))
                 }
@@ -422,11 +425,7 @@ fn encode_function(
                     continue;
                 }
                 LirInstruction::Call { result, name, args } => {
-                    for (index, argument) in args.iter().enumerate() {
-                        if argument.0 != index as u32 {
-                            push_word(bytes, 0xaa00_03e0 | (argument.0 << 16) | index as u32);
-                        }
-                    }
+                    encode_parallel_argument_moves(args, bytes);
                     let call_address = bytes.len() as u64;
                     let target_name = format!("_{name}");
                     if let Some(target) = offsets.get(&target_name) {
@@ -555,12 +554,7 @@ fn block_encoded_size(
             LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
             LirInstruction::Phi { .. } => 0,
             LirInstruction::Call { args, result, .. } => {
-                args.iter()
-                    .enumerate()
-                    .filter(|(i, a)| a.0 != *i as u32)
-                    .count()
-                    + 1
-                    + usize::from(result.is_some_and(|v| v.0 != 0))
+                argument_moves(args).len() + 1 + usize::from(result.is_some_and(|v| v.0 != 0))
             }
         } * 4;
     }
@@ -718,6 +712,44 @@ fn push_word(bytes: &mut Vec<u8>, word: u32) {
     bytes.extend_from_slice(&word.to_le_bytes());
 }
 
+fn encode_parallel_argument_moves(args: &[ValueId], bytes: &mut Vec<u8>) {
+    for (destination, source) in argument_moves(args) {
+        push_word(bytes, 0xaa00_03e0 | (source << 16) | destination);
+    }
+}
+
+fn argument_moves(args: &[ValueId]) -> Vec<(u32, u32)> {
+    let mut pending = args
+        .iter()
+        .enumerate()
+        .filter_map(|(destination, source)| {
+            (source.0 != destination as u32).then_some((destination as u32, source.0))
+        })
+        .collect::<Vec<_>>();
+    let mut output = Vec::new();
+    while !pending.is_empty() {
+        let sources = pending
+            .iter()
+            .map(|(_, source)| *source)
+            .collect::<std::collections::HashSet<_>>();
+        if let Some(index) = pending
+            .iter()
+            .position(|(destination, _)| !sources.contains(destination))
+        {
+            output.push(pending.remove(index));
+        } else {
+            let source = pending[0].1;
+            output.push((16, source));
+            for (_, pending_source) in &mut pending {
+                if *pending_source == source {
+                    *pending_source = 16;
+                }
+            }
+        }
+    }
+    output
+}
+
 fn write_macho_object(
     text: &[u8],
     data: &[u8],
@@ -846,7 +878,8 @@ fn write_name(output: &mut Vec<u8>, name: &str) {
 fn emit_aarch64(module: &LirModule) -> Result<String, String> {
     let mut assembly = String::from(".text\n");
     for function in &module.functions {
-        emit_function(function, &mut assembly)?;
+        let function = allocate_registers(function)?;
+        emit_function(&function, &mut assembly)?;
     }
     Ok(assembly)
 }

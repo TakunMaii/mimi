@@ -9,7 +9,8 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Correctly lower early `return` from nested blocks and conditional branches.
 - [x] Lower unconditional `loop` bodies into CFG backedges; `break` remains pending.
 - [x] Lower `while` and `do-while` into CFG blocks for basic loop bodies.
-- [ ] Lower `for` over arrays and slices.
+- [x] Lower `for` over fixed-size scalar arrays.
+- [ ] Lower `for` over slices.
 - [ ] Lower `break` and `continue` when the parser exposes them.
 - [x] Lower `defer` at each scope exit and return path in LIFO order.
 - [ ] Lower `match` and `if-let`, including enum payload bindings.
@@ -30,7 +31,8 @@ and focused regression coverage; it does not imply support on every target.
 
 - [ ] Implement function values, indirect calls, and lambda bodies.
 - [ ] Implement instance and static methods in HIR/MIR, including automatic receivers.
-- [ ] Implement general register allocation, stack frames, and argument spilling.
+- [x] Allocate virtual registers with liveness and preserve values live across calls.
+- [ ] Support stack-passed arguments and callee-saved register allocation.
 - [ ] Complete package symbol visibility and cross-package linking behavior.
 
 ## Targets and Tooling

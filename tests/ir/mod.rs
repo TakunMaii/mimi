@@ -202,6 +202,10 @@ fn builds_and_runs_mutable_locals_across_loops() {
             5,
         ),
         (
+            "identity :: fn (value : i32) i32 { value } sum_after_call :: fn (value : i32) i32 { value + identity(4) } main :: fn () i32 { sum_after_call(3) }",
+            7,
+        ),
+        (
             "update :: fn (condition : bool) i32 { count := 0 value := if condition == true { count = 5 count } else { count = 8 count } count } main :: fn () i32 { update(false) }",
             8,
         ),
@@ -247,6 +251,33 @@ fn builds_and_runs_fixed_array_literals_and_indexing() {
         .unwrap();
         let status = std::process::Command::new(&path).status().unwrap();
         assert_eq!(status.code(), Some(expected));
+    }
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn builds_and_runs_for_loops_over_fixed_arrays() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_for_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_for_codegen_{}", std::process::id()));
+    for program in [
+        "main :: fn () i32 { values := [1, 2, 3, 4] sum := 0 for item in values { sum = sum + item } sum }",
+        "main :: fn () i32 { sum := 0 for item in [2, 3, 5] { sum = sum + item } sum }",
+    ] {
+        std::fs::write(&source, program).unwrap();
+        build_file(
+            source.to_str().unwrap(),
+            path.to_str().unwrap(),
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let status = std::process::Command::new(&path).status().unwrap();
+        assert_eq!(status.code(), Some(10));
     }
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();

@@ -4,6 +4,7 @@ mod lexer;
 mod lir;
 mod mir;
 mod parser;
+mod regalloc;
 mod type_checker;
 
 fn main() {

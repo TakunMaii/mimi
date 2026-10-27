@@ -461,7 +461,13 @@ where
         matches!(tokens.next(), Some(Token::In)),
         "expected 'in' after loop binding"
     );
-    let iterable = parse_expression(tokens, 0);
+    let iterable = match tokens.next() {
+        Some(Token::Identifier(name)) if matches!(tokens.peek(), Some(Token::LeftBrace)) => {
+            Expression::Identifier(name)
+        }
+        Some(first) => parse_expression_from(first, tokens, 0),
+        None => panic!("expected iterable after 'in'"),
+    };
     ASTNode::For {
         binding,
         iterable,
