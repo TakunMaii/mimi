@@ -21,9 +21,10 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Implement 64-bit stack slots, loads/stores, and mutable locals across loops and branches.
 - [ ] Implement struct layout, literals, field access, and default initialization.
 - [ ] Implement enum layout, construction, and payload access.
-- [ ] Implement fixed arrays, array literals, indexing, and pointer arithmetic.
+- [x] Implement fixed-size scalar array literals, stack layout, indexing, and reads.
+- [ ] Implement array element writes and layouts beyond 64-bit scalar slots.
 - [ ] Implement slice representation, indexing, and slicing.
-- [ ] Implement pointer values, address-of, dereference, and pointer member access.
+- [ ] Implement pointer values, address-of, dereference, general pointer arithmetic, and pointer member access.
 
 ## Functions and Modules
 

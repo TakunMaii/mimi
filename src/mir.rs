@@ -90,6 +90,19 @@ pub(crate) enum MirInstruction {
         slot: SlotId,
         value: ValueId,
     },
+    SlotAddress {
+        result: ValueId,
+        slot: SlotId,
+    },
+    IndexAddress {
+        result: ValueId,
+        base: ValueId,
+        index: ValueId,
+    },
+    LoadIndirect {
+        result: ValueId,
+        address: ValueId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -131,6 +144,7 @@ struct Builder {
     blocks: Vec<MirBlock>,
     current: BlockId,
     variables: std::collections::HashMap<String, Variable>,
+    array_lengths: std::collections::HashMap<String, u64>,
     defer_scopes: Vec<Vec<Expression>>,
 }
 
@@ -183,6 +197,33 @@ impl Builder {
                     Some(result)
                 }
             },
+            Expression::ArrayLiteral(values) => {
+                let base = self.slot();
+                self.next_slot += values.len().saturating_sub(1) as u32;
+                for (index, expression) in values.iter().enumerate() {
+                    let value = self.expression(expression)?;
+                    self.emit(MirInstruction::StoreSlot {
+                        slot: SlotId(base.0 + index as u32),
+                        value,
+                    });
+                }
+                let result = self.value();
+                self.emit(MirInstruction::SlotAddress { result, slot: base });
+                Some(result)
+            }
+            Expression::Index { object, index } => {
+                let base = self.expression(object)?;
+                let index = self.expression(index)?;
+                let address = self.value();
+                self.emit(MirInstruction::IndexAddress {
+                    result: address,
+                    base,
+                    index,
+                });
+                let result = self.value();
+                self.emit(MirInstruction::LoadIndirect { result, address });
+                Some(result)
+            }
             Expression::LiteralNumber(text) => {
                 let result = self.value();
                 let value = text.parse().ok()?;
@@ -328,16 +369,37 @@ impl Builder {
             }
             Expression::Block(items) => {
                 let outer_variables = self.variables.clone();
+                let outer_array_lengths = self.array_lengths.clone();
                 self.defer_scopes.push(Vec::new());
                 let result = (|| {
                     let mut result = None;
                     for item in items {
                         match item {
-                            crate::parser::ASTNode::VariableDefinition { name, value, .. } => {
+                            crate::parser::ASTNode::VariableDefinition {
+                                name,
+                                data_type,
+                                value,
+                            } => {
+                                let array_length = match data_type {
+                                    Some(crate::parser::DataType::Array(length, _)) => {
+                                        Some(*length)
+                                    }
+                                    _ => match value {
+                                        Expression::ArrayLiteral(values) => {
+                                            Some(values.len() as u64)
+                                        }
+                                        _ => None,
+                                    },
+                                };
                                 let value = self.expression(value)?;
                                 let slot = self.slot();
                                 self.emit(MirInstruction::StoreSlot { slot, value });
                                 self.variables.insert(name.clone(), Variable::Slot(slot));
+                                if let Some(length) = array_length {
+                                    self.array_lengths.insert(name.clone(), length);
+                                } else {
+                                    self.array_lengths.remove(name);
+                                }
                             }
                             crate::parser::ASTNode::CompileTimeConstant { name, value, .. } => {
                                 let value = self.expression(value)?;
@@ -390,6 +452,7 @@ impl Builder {
                 }
                 self.defer_scopes.pop();
                 self.variables = outer_variables;
+                self.array_lengths = outer_array_lengths;
                 result
             }
             _ => None,
@@ -542,6 +605,7 @@ fn lower_function(function: &HirFunction) -> MirFunction {
         }],
         current: BlockId(0),
         variables: std::collections::HashMap::new(),
+        array_lengths: std::collections::HashMap::new(),
         defer_scopes: Vec::new(),
     };
     let params = function
@@ -551,6 +615,9 @@ fn lower_function(function: &HirFunction) -> MirFunction {
             let incoming = builder.value();
             let slot = builder.slot();
             builder.variables.insert(name.clone(), Variable::Slot(slot));
+            if let HirType::Array { length, .. } = ty {
+                builder.array_lengths.insert(name.clone(), *length);
+            }
             builder.emit(MirInstruction::StoreSlot {
                 slot,
                 value: incoming,

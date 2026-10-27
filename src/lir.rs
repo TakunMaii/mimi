@@ -96,6 +96,19 @@ pub(crate) enum LirInstruction {
         slot: SlotId,
         value: ValueId,
     },
+    SlotAddress {
+        destination: ValueId,
+        slot: SlotId,
+    },
+    IndexAddress {
+        destination: ValueId,
+        base: ValueId,
+        index: ValueId,
+    },
+    LoadIndirect {
+        destination: ValueId,
+        address: ValueId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -224,6 +237,27 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                             slot: *slot,
                             value: *value,
                         },
+                        MirInstruction::SlotAddress { result, slot } => {
+                            LirInstruction::SlotAddress {
+                                destination: *result,
+                                slot: *slot,
+                            }
+                        }
+                        MirInstruction::IndexAddress {
+                            result,
+                            base,
+                            index,
+                        } => LirInstruction::IndexAddress {
+                            destination: *result,
+                            base: *base,
+                            index: *index,
+                        },
+                        MirInstruction::LoadIndirect { result, address } => {
+                            LirInstruction::LoadIndirect {
+                                destination: *result,
+                                address: *address,
+                            }
+                        }
                     })
                 })
                 .collect();

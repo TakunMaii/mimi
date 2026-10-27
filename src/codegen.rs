@@ -170,6 +170,8 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 | LirInstruction::Div { .. }
                 | LirInstruction::Neg { .. } => 1,
                 LirInstruction::LoadSlot { .. } | LirInstruction::StoreSlot { .. } => 1,
+                LirInstruction::SlotAddress { slot, .. } => slot_address_words(*slot),
+                LirInstruction::IndexAddress { .. } | LirInstruction::LoadIndirect { .. } => 1,
                 LirInstruction::Not { .. } => 2,
                 LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
                 LirInstruction::Phi { .. } => 0,
@@ -222,6 +224,10 @@ fn stack_frame_size(function: &LirFunction) -> u32 {
 
 fn stack_adjust_words(size: u32) -> usize {
     size.div_ceil(4095) as usize
+}
+
+fn slot_address_words(slot: crate::mir::SlotId) -> usize {
+    (slot.0 * 8).div_ceil(4095).max(1) as usize
 }
 
 fn phi_copies(
@@ -361,6 +367,19 @@ fn encode_function(
                     push_word(bytes, 0xf940_03e0 | ((offset / 8) << 10) | destination.0);
                     continue;
                 }
+                LirInstruction::SlotAddress { destination, slot } => {
+                    encode_slot_address(bytes, destination.0, slot.0 * 8);
+                    continue;
+                }
+                LirInstruction::IndexAddress {
+                    destination,
+                    base,
+                    index,
+                } => 0x8b00_0c00 | (index.0 << 16) | (base.0 << 5) | destination.0,
+                LirInstruction::LoadIndirect {
+                    destination,
+                    address,
+                } => 0xf940_0000 | (address.0 << 5) | destination.0,
                 LirInstruction::StoreSlot { slot, value } => {
                     let offset = slot.0 * 8;
                     if offset > 32760 {
@@ -530,6 +549,8 @@ fn block_encoded_size(
             | LirInstruction::Div { .. }
             | LirInstruction::Neg { .. } => 1,
             LirInstruction::LoadSlot { .. } | LirInstruction::StoreSlot { .. } => 1,
+            LirInstruction::SlotAddress { slot, .. } => slot_address_words(*slot),
+            LirInstruction::IndexAddress { .. } | LirInstruction::LoadIndirect { .. } => 1,
             LirInstruction::Not { .. } => 2,
             LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
             LirInstruction::Phi { .. } => 0,
@@ -617,6 +638,16 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
         LirInstruction::Not { destination, value } => vec![*destination, *value],
         LirInstruction::LoadSlot { destination, .. } => vec![*destination],
         LirInstruction::StoreSlot { value, .. } => vec![*value],
+        LirInstruction::SlotAddress { destination, .. } => vec![*destination],
+        LirInstruction::IndexAddress {
+            destination,
+            base,
+            index,
+        } => vec![*destination, *base, *index],
+        LirInstruction::LoadIndirect {
+            destination,
+            address,
+        } => vec![*destination, *address],
         LirInstruction::Call { result, args, .. } => {
             result.iter().copied().chain(args.iter().copied()).collect()
         }
@@ -638,6 +669,21 @@ fn encode_stack_adjust(bytes: &mut Vec<u8>, size: u32, subtract: bool) -> Result
         remaining -= immediate;
     }
     Ok(())
+}
+
+fn encode_slot_address(bytes: &mut Vec<u8>, destination: u32, offset: u32) {
+    let mut remaining = offset;
+    let first = remaining.min(4095);
+    push_word(bytes, 0x9100_03e0 | (first << 10) | destination);
+    remaining -= first;
+    while remaining != 0 {
+        let immediate = remaining.min(4095);
+        push_word(
+            bytes,
+            0x9100_0000 | (immediate << 10) | (destination << 5) | destination,
+        );
+        remaining -= immediate;
+    }
 }
 
 fn encode_immediate(register: u32, value: u64, bytes: &mut Vec<u8>) -> Result<(), String> {
@@ -901,6 +947,29 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     "    sdiv x16, x{}, x{}\n    msub x{}, x16, x{}, x{}\n",
                     lhs.0, rhs.0, destination.0, rhs.0, lhs.0
                 ));
+            }
+            LirInstruction::SlotAddress { destination, slot } => {
+                assembly.push_str(&format!(
+                    "    add x{}, sp, #{}\n",
+                    destination.0,
+                    slot.0 * 8
+                ));
+            }
+            LirInstruction::IndexAddress {
+                destination,
+                base,
+                index,
+            } => {
+                assembly.push_str(&format!(
+                    "    add x{}, x{}, x{}, lsl #3\n",
+                    destination.0, base.0, index.0
+                ));
+            }
+            LirInstruction::LoadIndirect {
+                destination,
+                address,
+            } => {
+                assembly.push_str(&format!("    ldr x{}, [x{}]\n", destination.0, address.0));
             }
             LirInstruction::Compare {
                 destination,

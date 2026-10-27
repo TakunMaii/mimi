@@ -223,6 +223,36 @@ fn builds_and_runs_mutable_locals_across_loops() {
 }
 
 #[test]
+fn builds_and_runs_fixed_array_literals_and_indexing() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_array_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_array_codegen_{}", std::process::id()));
+    for (program, expected) in [
+        ("main :: fn () i32 { values := [4, 7, 9] values[1] }", 7),
+        (
+            "pick :: fn (values : [3]i32) i32 { values[2] } main :: fn () i32 { pick([1, 2, 6]) }",
+            6,
+        ),
+    ] {
+        std::fs::write(&source, program).unwrap();
+        build_file(
+            source.to_str().unwrap(),
+            path.to_str().unwrap(),
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let status = std::process::Command::new(&path).status().unwrap();
+        assert_eq!(status.code(), Some(expected));
+    }
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_early_return_in_if_expression() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
