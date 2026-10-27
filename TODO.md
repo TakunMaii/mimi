@@ -7,7 +7,7 @@ and focused regression coverage; it does not imply support on every target.
 ## IR and Control Flow
 
 - [x] Correctly lower early `return` from nested blocks and conditional branches.
-- [ ] Lower `loop` into CFG blocks, including loop exits.
+- [x] Lower unconditional `loop` bodies into CFG backedges; `break` remains pending.
 - [x] Lower `while` and `do-while` into CFG blocks for basic loop bodies.
 - [ ] Lower `for` over arrays and slices.
 - [ ] Lower `break` and `continue` when the parser exposes them.

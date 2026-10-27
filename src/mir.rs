@@ -319,6 +319,9 @@ impl Builder {
                         crate::parser::ASTNode::DoWhile { body, condition } => {
                             self.lower_while(condition, body, true)?;
                         }
+                        crate::parser::ASTNode::Loop { body } => {
+                            self.lower_loop(body);
+                        }
                         crate::parser::ASTNode::Expression(expression) => {
                             result = self.expression(expression);
                         }
@@ -378,24 +381,45 @@ impl Builder {
         } else {
             self.terminate(MirTerminator::Jump(condition_block));
         }
+
+        if !do_first {
+            self.current = condition_block;
+            let condition = self.expression(condition)?;
+            self.terminate(MirTerminator::Branch {
+                condition,
+                then_block: body_block,
+                else_block: exit_block,
+            });
+        }
+
         self.current = body_block;
         self.expression(body);
-        if !matches!(
-            self.blocks[self.current.0 as usize].terminator,
-            MirTerminator::Unreachable
-        ) {
-            return None;
+        if self.is_open(self.current) {
+            self.terminate(MirTerminator::Jump(condition_block));
         }
-        self.terminate(MirTerminator::Jump(condition_block));
-        self.current = condition_block;
-        let condition = self.expression(condition)?;
-        self.terminate(MirTerminator::Branch {
-            condition,
-            then_block: body_block,
-            else_block: exit_block,
-        });
+
+        if do_first {
+            self.current = condition_block;
+            let condition = self.expression(condition)?;
+            self.terminate(MirTerminator::Branch {
+                condition,
+                then_block: body_block,
+                else_block: exit_block,
+            });
+        }
         self.current = exit_block;
         Some(())
+    }
+
+    fn lower_loop(&mut self, body: &Expression) {
+        let loop_block = self.new_block();
+        self.terminate(MirTerminator::Jump(loop_block));
+        self.current = loop_block;
+        self.expression(body);
+        if self.is_open(self.current) {
+            self.terminate(MirTerminator::Jump(loop_block));
+        }
+        self.current = self.new_block();
     }
 
     fn logical(&mut self, lhs: &Expression, rhs: &Expression, and: bool) -> Option<ValueId> {

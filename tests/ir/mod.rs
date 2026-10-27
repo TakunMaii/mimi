@@ -128,6 +128,56 @@ fn builds_and_runs_while_and_do_while_cfg() {
 }
 
 #[test]
+fn builds_and_runs_unconditional_loop_with_return() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_loop_return_source_{}.mi", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("mimi_loop_return_codegen_{}", std::process::id()));
+    std::fs::write(&source, "main :: fn () i32 { loop { return 17 } 2 }").unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(17));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn builds_and_runs_while_body_with_early_return() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_while_return_source_{}.mi",
+        std::process::id()
+    ));
+    let path =
+        std::env::temp_dir().join(format!("mimi_while_return_codegen_{}", std::process::id()));
+    std::fs::write(&source, "main :: fn () i32 { while true { return 13 } 2 }").unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(13));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_early_return_in_if_expression() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
