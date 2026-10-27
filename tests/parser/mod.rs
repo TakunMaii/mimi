@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    lexer::{Token, tokenize},
+    parser::{ASTNode, Expression, parse},
+};
 
 #[test]
 fn tokenizes_arithmetic_operators_and_parentheses() {

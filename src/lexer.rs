@@ -1,0 +1,63 @@
+#[derive(Debug, PartialEq)]
+pub(crate) enum Token {
+    Identifier(String),
+    LiteralNumber(f64),
+    Colon,
+    Equal,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    LeftParen,
+    RightParen,
+}
+
+pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
+    let mut result = vec![];
+    let mut chars = code.peekable();
+
+    while let Some(&ch) = chars.peek() {
+        if ch.is_whitespace() {
+            chars.next();
+        } else if ch.is_alphabetic() || ch == '_' {
+            let mut identifier = String::new();
+            while let Some(&ch) = chars.peek() {
+                if ch.is_alphanumeric() || ch == '_' {
+                    identifier.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
+            result.push(Token::Identifier(identifier));
+        } else if ch.is_ascii_digit() {
+            let mut number = String::new();
+            while let Some(&ch) = chars.peek() {
+                if ch.is_ascii_digit() || ch == '.' {
+                    number.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
+            result.push(Token::LiteralNumber(
+                number.parse().expect("invalid number literal"),
+            ));
+        } else {
+            chars.next();
+            match ch {
+                ':' => result.push(Token::Colon),
+                '=' => result.push(Token::Equal),
+                '+' => result.push(Token::Plus),
+                '-' => result.push(Token::Minus),
+                '*' => result.push(Token::Star),
+                '/' => result.push(Token::Slash),
+                '%' => result.push(Token::Percent),
+                '(' => result.push(Token::LeftParen),
+                ')' => result.push(Token::RightParen),
+                _ => panic!("unexpected character: {ch}"),
+            }
+        }
+    }
+
+    result
+}
