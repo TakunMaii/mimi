@@ -219,21 +219,15 @@ fn check_statement(
             else_branch,
         } => {
             infer_expression(condition, scopes, functions, structs, Some(DataType::Bool))?;
-            infer_expression(
-                then_branch,
-                scopes,
-                functions,
-                structs,
-                Some(DataType::Void),
-            )?;
+            infer_expression(then_branch, scopes, functions, structs, None)?;
             if let Some(branch) = else_branch {
-                infer_expression(branch, scopes, functions, structs, Some(DataType::Void))?;
+                infer_expression(branch, scopes, functions, structs, None)?;
             }
             Ok(())
         }
         ASTNode::While { condition, body } => {
             infer_expression(condition, scopes, functions, structs, Some(DataType::Bool))?;
-            infer_expression(body, scopes, functions, structs, Some(DataType::Void))?;
+            infer_expression(body, scopes, functions, structs, None)?;
             Ok(())
         }
         ASTNode::For {
@@ -249,13 +243,13 @@ fn check_statement(
                     mutable: false,
                 },
             )]));
-            let result = infer_expression(body, scopes, functions, structs, Some(DataType::Void));
+            let result = infer_expression(body, scopes, functions, structs, None);
             scopes.pop();
             result?;
             Ok(())
         }
         ASTNode::Loop { body } | ASTNode::Defer { body } => {
-            infer_expression(body, scopes, functions, structs, Some(DataType::Void))?;
+            infer_expression(body, scopes, functions, structs, None)?;
             Ok(())
         }
     }
