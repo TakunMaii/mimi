@@ -141,12 +141,16 @@ fn encode_module(
 }
 
 fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
+    if function.blocks.len() > 1 {
+        return Err("multi-block LIR code generation is not implemented yet".into());
+    }
+    let block = &function.blocks[0];
     let mut size = 0;
-    let has_calls = function
+    let has_calls = block
         .instructions
         .iter()
         .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
-    for instruction in &function.instructions {
+    for instruction in &block.instructions {
         size += match instruction {
             LirInstruction::LoadImmediate { value, .. } => {
                 let mut chunks = 0;
@@ -164,6 +168,7 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
             | LirInstruction::Div { .. }
             | LirInstruction::Neg { .. } => 1,
             LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
+            LirInstruction::Phi { .. } => 0,
             LirInstruction::Call { args, result, .. } => {
                 args.iter()
                     .enumerate()
@@ -174,14 +179,14 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
             }
         } * 4;
     }
-    if matches!(function.terminator, MirTerminator::Return(Some(value)) if value.0 != 0) {
+    if matches!(block.terminator, MirTerminator::Return(Some(value)) if value.0 != 0) {
         size += 4;
     }
     if has_calls && function.name != "main" {
         size += 4;
     }
     size += if function.name == "main" {
-        8 + usize::from(matches!(function.terminator, MirTerminator::Return(None))) * 4
+        8 + usize::from(matches!(block.terminator, MirTerminator::Return(None))) * 4
     } else {
         4 + usize::from(has_calls) * 4
     };
@@ -197,7 +202,8 @@ fn encode_function(
     if function.params.len() > 8 {
         return Err("ARM64 backend currently supports at most 8 integer parameters".into());
     }
-    if function
+    let block = &function.blocks[0];
+    if block
         .instructions
         .iter()
         .flat_map(instruction_registers)
@@ -205,14 +211,14 @@ fn encode_function(
     {
         return Err("ARM64 prototype backend supports virtual registers x0 through x15".into());
     }
-    let has_calls = function
+    let has_calls = block
         .instructions
         .iter()
         .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
     if has_calls && function.name != "main" {
         push_word(bytes, 0xa9bf_7bfd);
     }
-    for instruction in &function.instructions {
+    for instruction in &block.instructions {
         let word = match instruction {
             LirInstruction::LoadImmediate { register, value } => {
                 encode_immediate(register.0, *value as u64, bytes)?;
@@ -325,10 +331,13 @@ fn encode_function(
                 }
                 continue;
             }
+            LirInstruction::Phi { .. } => {
+                return Err("phi nodes require multi-block code generation".into());
+            }
         };
         push_word(bytes, word);
     }
-    let result = match function.terminator {
+    let result = match block.terminator {
         MirTerminator::Return(value) => value,
         _ => return Err("ARM64 backend currently requires a single return block".into()),
     };
@@ -393,6 +402,12 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
         LirInstruction::Call { result, args, .. } => {
             result.iter().copied().chain(args.iter().copied()).collect()
         }
+        LirInstruction::Phi {
+            destination,
+            incoming,
+        } => std::iter::once(*destination)
+            .chain(incoming.iter().map(|(_, value)| *value))
+            .collect(),
     }
 }
 
@@ -567,7 +582,7 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
     }
     let label = format!("_{}", function.name);
     assembly.push_str(&format!(".globl {label}\n{label}:\n"));
-    for instruction in &function.instructions {
+    for instruction in &function.blocks[0].instructions {
         match instruction {
             LirInstruction::LoadImmediate { register, value } => {
                 if !(-4095..=4095).contains(value) {
@@ -659,6 +674,9 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     "external call '{name}' is not yet supported by the ARM64 assembly emitter"
                 ));
             }
+            LirInstruction::Phi { .. } => {
+                return Err("phi nodes require multi-block code generation".into());
+            }
         }
     }
     if let Some(value) = return_value(function) {
@@ -671,7 +689,7 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
 }
 
 fn return_value(function: &LirFunction) -> Option<ValueId> {
-    match function.terminator {
+    match function.blocks.first()?.terminator {
         MirTerminator::Return(value) => value,
         _ => None,
     }

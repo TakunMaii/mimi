@@ -24,10 +24,31 @@ fn lowers_function_through_all_ir_layers() {
         <lir::HostTarget as lir::Target>::arch(&lir::HostTarget)
     );
     assert!(
-        lir.functions[0]
+        lir.functions[0].blocks[0]
             .instructions
             .iter()
             .any(|instruction| matches!(instruction, lir::LirInstruction::Add { .. }))
+    );
+}
+
+#[test]
+fn lowers_dynamic_if_else_to_mir_blocks_and_phi() {
+    let ast = parse(tokenize(
+        "choose :: fn (condition : bool) i32 { value := if condition { 7 } else { 3 } value }"
+            .chars(),
+    ));
+    let mir = mir::lower_hir(&hir::lower_ast(&ast));
+    let function = &mir.functions[0];
+    assert_eq!(function.blocks.len(), 4);
+    assert!(matches!(
+        function.blocks[0].terminator,
+        mir::MirTerminator::Branch { .. }
+    ));
+    assert!(
+        function.blocks[3]
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, mir::MirInstruction::Phi { .. }))
     );
 }
 
@@ -105,7 +126,7 @@ fn lowers_string_literals_to_data_symbols_in_lir() {
         vec![("_mimi_string_0".into(), b"hello".to_vec())]
     );
     assert!(matches!(
-        lir.functions[0].instructions.as_slice(),
+        lir.functions[0].blocks[0].instructions.as_slice(),
         [lir::LirInstruction::LoadAddress { .. }]
     ));
 }
@@ -150,6 +171,32 @@ fn builds_and_runs_integer_comparison() {
     .unwrap();
     let status = std::process::Command::new(&path).status().unwrap();
     assert_eq!(status.code(), Some(1));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn builds_and_runs_constant_if_else_expression() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_if_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_if_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { value := if true { 7 } else { 3 } value }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(7));
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();
 }

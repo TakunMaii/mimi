@@ -66,6 +66,10 @@ pub(crate) enum MirInstruction {
         rhs: ValueId,
         kind: CompareKind,
     },
+    Phi {
+        result: ValueId,
+        incoming: Vec<(BlockId, ValueId)>,
+    },
     Call {
         result: Option<ValueId>,
         name: String,
@@ -107,7 +111,8 @@ pub(crate) struct MirModule {
 
 struct Builder {
     next_value: u32,
-    instructions: Vec<MirInstruction>,
+    blocks: Vec<MirBlock>,
+    current: BlockId,
     variables: std::collections::HashMap<String, ValueId>,
     returned: Option<Option<ValueId>>,
 }
@@ -119,19 +124,38 @@ impl Builder {
         value
     }
 
+    fn emit(&mut self, instruction: MirInstruction) {
+        self.blocks[self.current.0 as usize]
+            .instructions
+            .push(instruction);
+    }
+
+    fn new_block(&mut self) -> BlockId {
+        let id = BlockId(self.blocks.len() as u32);
+        self.blocks.push(MirBlock {
+            id,
+            instructions: Vec::new(),
+            terminator: MirTerminator::Unreachable,
+        });
+        id
+    }
+
+    fn terminate(&mut self, terminator: MirTerminator) {
+        self.blocks[self.current.0 as usize].terminator = terminator;
+    }
+
     fn expression(&mut self, expression: &Expression) -> Option<ValueId> {
         match expression {
             Expression::Identifier(name) => self.variables.get(name).copied(),
             Expression::LiteralNumber(text) => {
                 let result = self.value();
                 let value = text.parse().ok()?;
-                self.instructions
-                    .push(MirInstruction::ConstInt { result, value });
+                self.emit(MirInstruction::ConstInt { result, value });
                 Some(result)
             }
             Expression::LiteralBool(value) => {
                 let result = self.value();
-                self.instructions.push(MirInstruction::ConstBool {
+                self.emit(MirInstruction::ConstBool {
                     result,
                     value: *value,
                 });
@@ -139,9 +163,42 @@ impl Builder {
             }
             Expression::LiteralString(value) => {
                 let result = self.value();
-                self.instructions.push(MirInstruction::ConstString {
+                self.emit(MirInstruction::ConstString {
                     result,
                     bytes: value.as_bytes().to_vec(),
+                });
+                Some(result)
+            }
+            Expression::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                if let Expression::LiteralBool(value) = condition.as_ref() {
+                    return self.expression(if *value { then_branch } else { else_branch });
+                }
+                let condition = self.expression(condition)?;
+                let then_block = self.new_block();
+                let else_block = self.new_block();
+                let merge_block = self.new_block();
+                self.terminate(MirTerminator::Branch {
+                    condition,
+                    then_block,
+                    else_block,
+                });
+                self.current = then_block;
+                let then_value = self.expression(then_branch)?;
+                let then_end = self.current;
+                self.terminate(MirTerminator::Jump(merge_block));
+                self.current = else_block;
+                let else_value = self.expression(else_branch)?;
+                let else_end = self.current;
+                self.terminate(MirTerminator::Jump(merge_block));
+                self.current = merge_block;
+                let result = self.value();
+                self.emit(MirInstruction::Phi {
+                    result,
+                    incoming: vec![(then_end, then_value), (else_end, else_value)],
                 });
                 Some(result)
             }
@@ -152,7 +209,7 @@ impl Builder {
                     args.push(value);
                     if let Expression::LiteralString(text) = argument {
                         let length = self.value();
-                        self.instructions.push(MirInstruction::ConstInt {
+                        self.emit(MirInstruction::ConstInt {
                             result: length,
                             value: text.len() as i128,
                         });
@@ -160,7 +217,7 @@ impl Builder {
                     }
                 }
                 let result = self.value();
-                self.instructions.push(MirInstruction::Call {
+                self.emit(MirInstruction::Call {
                     result: Some(result),
                     name: name.clone(),
                     args,
@@ -175,8 +232,7 @@ impl Builder {
             Expression::Negate(value) => {
                 let value = self.expression(value)?;
                 let result = self.value();
-                self.instructions
-                    .push(MirInstruction::Neg { result, value });
+                self.emit(MirInstruction::Neg { result, value });
                 Some(result)
             }
             Expression::Equal(lhs, rhs)
@@ -196,7 +252,7 @@ impl Builder {
                     _ => CompareKind::GreaterEqual,
                 };
                 let result = self.value();
-                self.instructions.push(MirInstruction::Compare {
+                self.emit(MirInstruction::Compare {
                     result,
                     lhs,
                     rhs,
@@ -256,7 +312,7 @@ impl Builder {
             3 => MirInstruction::Div { result, lhs, rhs },
             _ => MirInstruction::Rem { result, lhs, rhs },
         };
-        self.instructions.push(instruction);
+        self.emit(instruction);
         Some(result)
     }
 }
@@ -264,7 +320,12 @@ impl Builder {
 fn lower_function(function: &HirFunction) -> MirFunction {
     let mut builder = Builder {
         next_value: 0,
-        instructions: Vec::new(),
+        blocks: vec![MirBlock {
+            id: BlockId(0),
+            instructions: Vec::new(),
+            terminator: MirTerminator::Unreachable,
+        }],
+        current: BlockId(0),
         variables: std::collections::HashMap::new(),
         returned: None,
     };
@@ -288,11 +349,10 @@ fn lower_function(function: &HirFunction) -> MirFunction {
         name: function.name.clone(),
         params,
         result: function.result.clone(),
-        blocks: vec![MirBlock {
-            id: BlockId(0),
-            instructions: builder.instructions,
-            terminator: MirTerminator::Return(result),
-        }],
+        blocks: {
+            builder.terminate(MirTerminator::Return(result));
+            builder.blocks
+        },
     }
 }
 

@@ -78,12 +78,22 @@ pub(crate) enum LirInstruction {
         name: String,
         args: Vec<ValueId>,
     },
+    Phi {
+        destination: ValueId,
+        incoming: Vec<(crate::mir::BlockId, ValueId)>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LirFunction {
     pub(crate) name: String,
     pub(crate) params: Vec<ValueId>,
+    pub(crate) blocks: Vec<LirBlock>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LirBlock {
+    pub(crate) id: crate::mir::BlockId,
     pub(crate) instructions: Vec<LirInstruction>,
     pub(crate) terminator: MirTerminator,
 }
@@ -109,76 +119,97 @@ pub(crate) fn lower_mir<T: Target>(module: &MirModule, target: &T) -> LirModule 
 }
 
 fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) -> LirFunction {
-    let mut instructions = Vec::new();
-    for instruction in &function.blocks[0].instructions {
-        instructions.push(match instruction {
-            MirInstruction::ConstInt { result, value } => LirInstruction::LoadImmediate {
-                register: *result,
-                value: *value,
-            },
-            MirInstruction::Add { result, lhs, rhs } => LirInstruction::Add {
-                destination: *result,
-                lhs: *lhs,
-                rhs: *rhs,
-            },
-            MirInstruction::Sub { result, lhs, rhs } => LirInstruction::Sub {
-                destination: *result,
-                lhs: *lhs,
-                rhs: *rhs,
-            },
-            MirInstruction::Mul { result, lhs, rhs } => LirInstruction::Mul {
-                destination: *result,
-                lhs: *lhs,
-                rhs: *rhs,
-            },
-            MirInstruction::Div { result, lhs, rhs } => LirInstruction::Div {
-                destination: *result,
-                lhs: *lhs,
-                rhs: *rhs,
-            },
-            MirInstruction::Rem { result, lhs, rhs } => LirInstruction::Rem {
-                destination: *result,
-                lhs: *lhs,
-                rhs: *rhs,
-            },
-            MirInstruction::Neg { result, value } => LirInstruction::Neg {
-                destination: *result,
-                value: *value,
-            },
-            MirInstruction::Compare {
-                result,
-                lhs,
-                rhs,
-                kind,
-            } => LirInstruction::Compare {
-                destination: *result,
-                lhs: *lhs,
-                rhs: *rhs,
-                kind: *kind,
-            },
-            MirInstruction::ConstBool { result, value } => LirInstruction::LoadImmediate {
-                register: *result,
-                value: i128::from(*value),
-            },
-            MirInstruction::ConstString { result, bytes } => {
-                let symbol = format!("_mimi_string_{}", strings.len());
-                strings.push((symbol.clone(), bytes.clone()));
-                LirInstruction::LoadAddress {
-                    register: *result,
-                    symbol,
-                }
+    let blocks = function
+        .blocks
+        .iter()
+        .map(|block| {
+            let instructions = block
+                .instructions
+                .iter()
+                .filter_map(|instruction| {
+                    Some(match instruction {
+                        MirInstruction::ConstInt { result, value } => {
+                            LirInstruction::LoadImmediate {
+                                register: *result,
+                                value: *value,
+                            }
+                        }
+                        MirInstruction::Add { result, lhs, rhs } => LirInstruction::Add {
+                            destination: *result,
+                            lhs: *lhs,
+                            rhs: *rhs,
+                        },
+                        MirInstruction::Sub { result, lhs, rhs } => LirInstruction::Sub {
+                            destination: *result,
+                            lhs: *lhs,
+                            rhs: *rhs,
+                        },
+                        MirInstruction::Mul { result, lhs, rhs } => LirInstruction::Mul {
+                            destination: *result,
+                            lhs: *lhs,
+                            rhs: *rhs,
+                        },
+                        MirInstruction::Div { result, lhs, rhs } => LirInstruction::Div {
+                            destination: *result,
+                            lhs: *lhs,
+                            rhs: *rhs,
+                        },
+                        MirInstruction::Rem { result, lhs, rhs } => LirInstruction::Rem {
+                            destination: *result,
+                            lhs: *lhs,
+                            rhs: *rhs,
+                        },
+                        MirInstruction::Neg { result, value } => LirInstruction::Neg {
+                            destination: *result,
+                            value: *value,
+                        },
+                        MirInstruction::Compare {
+                            result,
+                            lhs,
+                            rhs,
+                            kind,
+                        } => LirInstruction::Compare {
+                            destination: *result,
+                            lhs: *lhs,
+                            rhs: *rhs,
+                            kind: *kind,
+                        },
+                        MirInstruction::Phi { result, incoming } => LirInstruction::Phi {
+                            destination: *result,
+                            incoming: incoming.clone(),
+                        },
+                        MirInstruction::ConstBool { result, value } => {
+                            LirInstruction::LoadImmediate {
+                                register: *result,
+                                value: i128::from(*value),
+                            }
+                        }
+                        MirInstruction::ConstString { result, bytes } => {
+                            let symbol = format!("_mimi_string_{}", strings.len());
+                            strings.push((symbol.clone(), bytes.clone()));
+                            LirInstruction::LoadAddress {
+                                register: *result,
+                                symbol,
+                            }
+                        }
+                        MirInstruction::Call { result, name, args } => LirInstruction::Call {
+                            result: *result,
+                            name: name.clone(),
+                            args: args.clone(),
+                        },
+                    })
+                })
+                .collect();
+            LirBlock {
+                id: block.id,
+                instructions,
+                terminator: block.terminator.clone(),
             }
-            MirInstruction::Call { result, name, args } => LirInstruction::Call {
-                result: *result,
-                name: name.clone(),
-                args: args.clone(),
-            },
-        });
-    }
+        })
+        .collect();
     LirFunction {
         name: function.name.clone(),
         params: function.params.iter().map(|(_, _, value)| *value).collect(),
-        instructions,
-        terminator: function.blocks[0].terminator.clone(),
+        blocks,
     }
 }
