@@ -281,3 +281,30 @@ fn parses_return_statement() {
             if matches!(&items[0], ASTNode::Return(Some(Expression::Identifier(name))) if name == "x")
     ));
 }
+
+#[test]
+fn ignores_c_style_comments() {
+    assert_eq!(
+        tokenize("x := 1 // line comment\ny := /* block\ncomment */ x + 2".chars()),
+        vec![
+            Token::Identifier("x".into()),
+            Token::Colon,
+            Token::Equal,
+            Token::LiteralNumber("1".into()),
+            Token::Identifier("y".into()),
+            Token::Colon,
+            Token::Equal,
+            Token::Identifier("x".into()),
+            Token::Plus,
+            Token::LiteralNumber("2".into()),
+        ]
+    );
+}
+
+#[test]
+fn comments_can_appear_inside_function_definitions() {
+    let nodes = parse(tokenize(
+        "add :: fn (x : i32, y : i32) i32 { /* add */ x + y } result := add(1, 2) // done".chars(),
+    ));
+    assert_eq!(nodes.len(), 2);
+}

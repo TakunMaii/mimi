@@ -110,7 +110,25 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                 '+' => result.push(Token::Plus),
                 '-' => result.push(Token::Minus),
                 '*' => result.push(Token::Star),
-                '/' => result.push(Token::Slash),
+                '/' => match chars.peek() {
+                    Some('/') => {
+                        chars.next();
+                        while !matches!(chars.next(), None | Some('\n')) {}
+                    }
+                    Some('*') => {
+                        chars.next();
+                        let mut closed = false;
+                        while let Some(comment_char) = chars.next() {
+                            if comment_char == '*' && chars.peek() == Some(&'/') {
+                                chars.next();
+                                closed = true;
+                                break;
+                            }
+                        }
+                        assert!(closed, "unterminated block comment");
+                    }
+                    _ => result.push(Token::Slash),
+                },
                 '%' => result.push(Token::Percent),
                 '(' => result.push(Token::LeftParen),
                 ')' => result.push(Token::RightParen),
