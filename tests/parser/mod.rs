@@ -308,3 +308,23 @@ fn comments_can_appear_inside_function_definitions() {
     ));
     assert_eq!(nodes.len(), 2);
 }
+
+#[test]
+fn parses_struct_definition_literals_and_member_access() {
+    let nodes = parse(tokenize(
+        "pos :: struct { x : f32, y : f32 } point : pos = pos { x = 0, y = 0 } x := point.x"
+            .chars(),
+    ));
+    assert!(
+        matches!(&nodes[0], ASTNode::StructDefinition { name, fields }
+        if *name == "pos" && fields.len() == 2)
+    );
+    assert!(
+        matches!(&nodes[1], ASTNode::VariableDefinition { value: Expression::StructLiteral { type_name: Some("pos"), fields }, .. }
+        if fields.len() == 2)
+    );
+    assert!(
+        matches!(&nodes[2], ASTNode::VariableDefinition { value: Expression::MemberAccess { member, .. }, .. }
+        if member == "x")
+    );
+}

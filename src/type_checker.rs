@@ -19,12 +19,38 @@ struct Function {
     return_type: DataType,
 }
 
+struct StructInfo {
+    fields: HashMap<String, DataType>,
+}
+
 pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<TypeError>> {
     let mut scopes = vec![HashMap::new()];
     let mut functions = HashMap::new();
+    let mut structs = HashMap::new();
     let mut errors = Vec::new();
 
     for node in nodes {
+        if let ASTNode::StructDefinition { name, fields } = node {
+            let mut field_names = std::collections::HashSet::new();
+            for (field_name, _) in fields {
+                if !field_names.insert(field_name) {
+                    errors.push(error(format!(
+                        "duplicate field '{field_name}' in struct '{name}'"
+                    )));
+                }
+            }
+            if structs
+                .insert(
+                    *name,
+                    StructInfo {
+                        fields: fields.iter().cloned().collect(),
+                    },
+                )
+                .is_some()
+            {
+                errors.push(error(format!("struct '{name}' is already defined")));
+            }
+        }
         if let ASTNode::FunctionDefinition {
             name,
             parameters,
@@ -49,6 +75,7 @@ pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<
 
     for node in nodes {
         match node {
+            ASTNode::StructDefinition { .. } => {}
             ASTNode::FunctionDefinition {
                 name,
                 parameters,
@@ -72,15 +99,19 @@ pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<
                         )));
                     }
                 }
-                if let Err(err) =
-                    infer_expression(body, &mut function_scopes, &functions, Some(*return_type))
-                {
+                if let Err(err) = infer_expression(
+                    body,
+                    &mut function_scopes,
+                    &functions,
+                    &structs,
+                    Some(*return_type),
+                ) {
                     errors.push(error(format!("function '{name}': {}", err.message)));
                 }
             }
             ASTNode::Return(_) => errors.push(error("return is only valid inside a function")),
             _ => {
-                if let Err(err) = check_statement(node, &mut scopes, &functions) {
+                if let Err(err) = check_statement(node, &mut scopes, &functions, &structs) {
                     errors.push(err);
                 }
             }
@@ -101,6 +132,7 @@ fn check_statement(
     node: &ASTNode,
     scopes: &mut Vec<HashMap<String, Symbol>>,
     functions: &HashMap<String, Function>,
+    structs: &HashMap<&'static str, StructInfo>,
 ) -> Result<(), TypeError> {
     match node {
         ASTNode::VariableDefinition {
@@ -111,10 +143,12 @@ fn check_statement(
             if scopes.last().unwrap().contains_key(name) {
                 return Err(error(format!("'{name}' is already defined")));
             }
-            match infer_expression(value, scopes, functions, *data_type).and_then(|inferred| {
-                require_compatible(inferred, *data_type)?;
-                Ok(inferred)
-            }) {
+            match infer_expression(value, scopes, functions, structs, *data_type).and_then(
+                |inferred| {
+                    require_compatible(inferred, *data_type)?;
+                    Ok(inferred)
+                },
+            ) {
                 Ok(inferred) => {
                     scopes.last_mut().unwrap().insert(
                         name.clone(),
@@ -136,10 +170,12 @@ fn check_statement(
             if scopes.last().unwrap().contains_key(name) {
                 return Err(error(format!("'{name}' is already defined")));
             }
-            match infer_expression(value, scopes, functions, *data_type).and_then(|inferred| {
-                require_compatible(inferred, *data_type)?;
-                Ok(inferred)
-            }) {
+            match infer_expression(value, scopes, functions, structs, *data_type).and_then(
+                |inferred| {
+                    require_compatible(inferred, *data_type)?;
+                    Ok(inferred)
+                },
+            ) {
                 Ok(inferred) => {
                     scopes.last_mut().unwrap().insert(
                         name.clone(),
@@ -161,8 +197,9 @@ fn check_statement(
                 Err(error(format!("cannot assign to constant '{name}'")))
             }
             Some(symbol) => {
-                if let Err(err) = infer_expression(value, scopes, functions, Some(symbol.data_type))
-                    .and_then(|inferred| require_compatible(inferred, Some(symbol.data_type)))
+                if let Err(err) =
+                    infer_expression(value, scopes, functions, structs, Some(symbol.data_type))
+                        .and_then(|inferred| require_compatible(inferred, Some(symbol.data_type)))
                 {
                     Err(error(format!("assignment to '{name}': {}", err.message)))
                 } else {
@@ -175,6 +212,7 @@ fn check_statement(
             Err(error("nested function definitions are unsupported"))
         }
         ASTNode::Return(_) => Err(error("return is only valid inside a function")),
+        ASTNode::StructDefinition { .. } => Ok(()),
     }
 }
 
@@ -186,6 +224,7 @@ fn infer_expression(
     expression: &Expression,
     scopes: &mut Vec<HashMap<String, Symbol>>,
     functions: &HashMap<String, Function>,
+    structs: &HashMap<&'static str, StructInfo>,
     expected: Option<DataType>,
 ) -> Result<DataType, TypeError> {
     match expression {
@@ -207,7 +246,7 @@ fn infer_expression(
             {
                 return infer_negative_integer(text, expected);
             }
-            let inner_type = infer_expression(inner, scopes, functions, expected)?;
+            let inner_type = infer_expression(inner, scopes, functions, structs, expected)?;
             if inner_type.is_float() || inner_type.is_signed_integer() {
                 Ok(inner_type)
             } else {
@@ -217,12 +256,12 @@ fn infer_expression(
             }
         }
         Expression::Not(inner) => {
-            infer_expression(inner, scopes, functions, Some(DataType::Bool))?;
+            infer_expression(inner, scopes, functions, structs, Some(DataType::Bool))?;
             Ok(DataType::Bool)
         }
         Expression::And(lhs, rhs) | Expression::Or(lhs, rhs) => {
-            infer_expression(lhs, scopes, functions, Some(DataType::Bool))?;
-            infer_expression(rhs, scopes, functions, Some(DataType::Bool))?;
+            infer_expression(lhs, scopes, functions, structs, Some(DataType::Bool))?;
+            infer_expression(rhs, scopes, functions, structs, Some(DataType::Bool))?;
             Ok(DataType::Bool)
         }
         Expression::Add(lhs, rhs)
@@ -230,7 +269,8 @@ fn infer_expression(
         | Expression::Multiply(lhs, rhs)
         | Expression::Divide(lhs, rhs)
         | Expression::Remainder(lhs, rhs) => {
-            let (lhs_type, rhs_type) = infer_numeric_pair(lhs, rhs, scopes, functions, expected)?;
+            let (lhs_type, rhs_type) =
+                infer_numeric_pair(lhs, rhs, scopes, functions, structs, expected)?;
             if matches!(expression, Expression::Remainder(_, _))
                 && (!lhs_type.is_integer() || !rhs_type.is_integer())
             {
@@ -243,10 +283,10 @@ fn infer_expression(
             })
         }
         Expression::Equal(lhs, rhs) | Expression::NotEqual(lhs, rhs) => {
-            let lhs_type = infer_expression(lhs, scopes, functions, None)?;
-            let rhs_type =
-                infer_expression(rhs, scopes, functions, Some(lhs_type)).or_else(|_| {
-                    let rhs_type = infer_expression(rhs, scopes, functions, None)?;
+            let lhs_type = infer_expression(lhs, scopes, functions, structs, None)?;
+            let rhs_type = infer_expression(rhs, scopes, functions, structs, Some(lhs_type))
+                .or_else(|_| {
+                    let rhs_type = infer_expression(rhs, scopes, functions, structs, None)?;
                     common_numeric_type(lhs_type, rhs_type)
                         .map(|_| rhs_type)
                         .ok_or_else(|| error(format!("cannot compare {lhs_type} with {rhs_type}")))
@@ -261,7 +301,8 @@ fn infer_expression(
         | Expression::LessThanOrEqual(lhs, rhs)
         | Expression::GreaterThan(lhs, rhs)
         | Expression::GreaterThanOrEqual(lhs, rhs) => {
-            let (lhs_type, rhs_type) = infer_numeric_pair(lhs, rhs, scopes, functions, None)?;
+            let (lhs_type, rhs_type) =
+                infer_numeric_pair(lhs, rhs, scopes, functions, structs, None)?;
             common_numeric_type(lhs_type, rhs_type)
                 .map(|_| DataType::Bool)
                 .ok_or_else(|| error(format!("cannot order {lhs_type} and {rhs_type}")))
@@ -278,13 +319,14 @@ fn infer_expression(
                                 expression,
                                 scopes,
                                 functions,
+                                structs,
                                 if is_last { expected } else { None },
                             )?;
                         }
                         ASTNode::Return(value) => {
                             let returned_type = match value {
                                 Some(value) => {
-                                    infer_expression(value, scopes, functions, expected)?
+                                    infer_expression(value, scopes, functions, structs, expected)?
                                 }
                                 None => DataType::Void,
                             };
@@ -292,7 +334,7 @@ fn infer_expression(
                             result_type = returned_type;
                         }
                         _ => {
-                            check_statement(item, scopes, functions)?;
+                            check_statement(item, scopes, functions, structs)?;
                             result_type = DataType::Void;
                         }
                     }
@@ -315,11 +357,57 @@ fn infer_expression(
                 )));
             }
             for (argument, parameter_type) in arguments.iter().zip(&function.parameters) {
-                let actual = infer_expression(argument, scopes, functions, Some(*parameter_type))?;
+                let actual =
+                    infer_expression(argument, scopes, functions, structs, Some(*parameter_type))?;
                 require_compatible(actual, Some(*parameter_type))?;
             }
             require_compatible(function.return_type, expected)?;
             Ok(function.return_type)
+        }
+        Expression::StructLiteral { type_name, fields } => {
+            let result = match (type_name, expected) {
+                (Some(name), _) => Ok(DataType::Struct(name)),
+                (None, Some(data_type @ DataType::Struct(_))) => Ok(data_type),
+                (None, _) => Err(error("cannot infer anonymous struct type")),
+            }?;
+            let struct_name = match result {
+                DataType::Struct(name) => name,
+                _ => unreachable!(),
+            };
+            let info = structs
+                .get(struct_name)
+                .ok_or_else(|| error(format!("undefined struct type '{struct_name}'")))?;
+            if fields.len() != info.fields.len() {
+                return Err(error(format!(
+                    "struct '{struct_name}' expects {} fields, got {}",
+                    info.fields.len(),
+                    fields.len()
+                )));
+            }
+            for (field_name, value) in fields {
+                let field_type = info.fields.get(field_name).ok_or_else(|| {
+                    error(format!(
+                        "unknown field '{field_name}' in struct '{struct_name}'"
+                    ))
+                })?;
+                infer_expression(value, scopes, functions, structs, Some(*field_type))?;
+            }
+            Ok(result)
+        }
+        Expression::MemberAccess { object, member } => {
+            let object_type = infer_expression(object, scopes, functions, structs, None)?;
+            let struct_name = match object_type {
+                DataType::Struct(name) => name,
+                _ => return Err(error("member access requires a struct value")),
+            };
+            structs
+                .get(struct_name)
+                .and_then(|info| info.fields.get(member).copied())
+                .ok_or_else(|| {
+                    error(format!(
+                        "unknown field '{member}' in struct '{struct_name}'"
+                    ))
+                })
         }
     }
 }
@@ -329,20 +417,21 @@ fn infer_numeric_pair(
     rhs: &Expression,
     scopes: &mut Vec<HashMap<String, Symbol>>,
     functions: &HashMap<String, Function>,
+    structs: &HashMap<&'static str, StructInfo>,
     expected: Option<DataType>,
 ) -> Result<(DataType, DataType), TypeError> {
     let lhs_is_literal = is_numeric_literal(lhs);
     let rhs_is_literal = is_numeric_literal(rhs);
 
     let (lhs_type, rhs_type) = if lhs_is_literal && !rhs_is_literal {
-        let rhs_type = infer_expression(rhs, scopes, functions, expected)?;
-        let lhs_type = infer_expression(lhs, scopes, functions, Some(rhs_type))
-            .or_else(|_| infer_expression(lhs, scopes, functions, None))?;
+        let rhs_type = infer_expression(rhs, scopes, functions, structs, expected)?;
+        let lhs_type = infer_expression(lhs, scopes, functions, structs, Some(rhs_type))
+            .or_else(|_| infer_expression(lhs, scopes, functions, structs, None))?;
         (lhs_type, rhs_type)
     } else {
-        let lhs_type = infer_expression(lhs, scopes, functions, expected)?;
-        let rhs_type = infer_expression(rhs, scopes, functions, Some(lhs_type))
-            .or_else(|_| infer_expression(rhs, scopes, functions, None))?;
+        let lhs_type = infer_expression(lhs, scopes, functions, structs, expected)?;
+        let rhs_type = infer_expression(rhs, scopes, functions, structs, Some(lhs_type))
+            .or_else(|_| infer_expression(rhs, scopes, functions, structs, None))?;
         (lhs_type, rhs_type)
     };
 
@@ -537,6 +626,7 @@ impl DataType {
             Self::U64 | Self::I64 | Self::F64 => 64,
             Self::Bool => 1,
             Self::Void => 0,
+            Self::Struct(_) => 0,
         }
     }
 
@@ -582,6 +672,7 @@ impl std::fmt::Display for DataType {
             Self::F64 => "f64",
             Self::Bool => "bool",
             Self::Void => "void",
+            Self::Struct(name) => name,
         };
         formatter.write_str(name)
     }

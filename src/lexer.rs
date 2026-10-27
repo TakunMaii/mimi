@@ -1,11 +1,13 @@
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Token {
     Identifier(String),
     LiteralNumber(String),
     LiteralBool(bool),
     Fn,
+    Struct,
     Return,
     Comma,
+    Dot,
     Colon,
     Equal,
     EqualEqual,
@@ -48,6 +50,7 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                 "true" => Token::LiteralBool(true),
                 "false" => Token::LiteralBool(false),
                 "fn" => Token::Fn,
+                "struct" => Token::Struct,
                 "return" => Token::Return,
                 _ => Token::Identifier(identifier),
             });
@@ -67,6 +70,7 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
             match ch {
                 ':' => result.push(Token::Colon),
                 ',' => result.push(Token::Comma),
+                '.' => result.push(Token::Dot),
                 '=' => {
                     if chars.peek() == Some(&'=') {
                         chars.next();

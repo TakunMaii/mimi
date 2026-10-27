@@ -16,6 +16,7 @@ pub(crate) enum DataType {
     F64,
     Bool,
     Void,
+    Struct(&'static str),
 }
 
 #[derive(Debug, PartialEq)]
@@ -42,6 +43,14 @@ pub(crate) enum Expression {
     Call {
         name: String,
         arguments: Vec<Expression>,
+    },
+    StructLiteral {
+        type_name: Option<&'static str>,
+        fields: Vec<(String, Expression)>,
+    },
+    MemberAccess {
+        object: Box<Expression>,
+        member: String,
     },
 }
 
@@ -86,6 +95,10 @@ pub(crate) enum ASTNode {
         body: Expression,
     },
     Return(Option<Expression>),
+    StructDefinition {
+        name: &'static str,
+        fields: Vec<(String, DataType)>,
+    },
 }
 
 pub(crate) fn parse(tokens: Vec<Token>) -> Vec<ASTNode> {
@@ -106,13 +119,17 @@ pub(crate) fn parse(tokens: Vec<Token>) -> Vec<ASTNode> {
 
 fn parse_statement_after_name<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
 where
-    I: Iterator<Item = Token>,
+    I: Iterator<Item = Token> + Clone,
 {
     let (node_kind, data_type) = match tokens.next() {
         Some(Token::Equal) => (0, None),
         Some(Token::Colon) => match tokens.next() {
             Some(Token::Equal) => (1, None),
             Some(Token::Colon) => {
+                if matches!(tokens.peek(), Some(Token::Struct)) {
+                    tokens.next();
+                    return parse_struct_definition(name, tokens);
+                }
                 if matches!(tokens.peek(), Some(Token::Fn)) {
                     tokens.next();
                     return parse_function(name, tokens);
@@ -151,7 +168,7 @@ where
 
 fn parse_function<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
 where
-    I: Iterator<Item = Token>,
+    I: Iterator<Item = Token> + Clone,
 {
     assert!(
         matches!(tokens.next(), Some(Token::LeftParen)),
@@ -198,6 +215,40 @@ where
     }
 }
 
+fn parse_struct_definition<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    assert!(
+        matches!(tokens.next(), Some(Token::LeftBrace)),
+        "expected '{{' after struct"
+    );
+    let mut fields = Vec::new();
+    while !matches!(tokens.peek(), Some(Token::RightBrace)) {
+        let field_name = match tokens.next() {
+            Some(Token::Identifier(name)) => name,
+            _ => panic!("expected struct field name"),
+        };
+        assert!(
+            matches!(tokens.next(), Some(Token::Colon)),
+            "expected ':' after field name"
+        );
+        let field_type = match tokens.next() {
+            Some(Token::Identifier(name)) => parse_data_type(&name),
+            _ => panic!("expected struct field type"),
+        };
+        fields.push((field_name, field_type));
+        if matches!(tokens.peek(), Some(Token::Comma)) {
+            tokens.next();
+        } else if !matches!(tokens.peek(), Some(Token::RightBrace)) {
+            panic!("expected ',' or '}}' after struct field");
+        }
+    }
+    tokens.next();
+    let name = Box::leak(name.into_boxed_str());
+    ASTNode::StructDefinition { name, fields }
+}
+
 fn parse_data_type(name: &str) -> DataType {
     match name {
         "u8" => DataType::U8,
@@ -214,13 +265,13 @@ fn parse_data_type(name: &str) -> DataType {
         "f64" => DataType::F64,
         "bool" => DataType::Bool,
         "void" => DataType::Void,
-        _ => panic!("unknown data type: {name}"),
+        _ => DataType::Struct(Box::leak(name.to_owned().into_boxed_str())),
     }
 }
 
 fn parse_expression<I>(tokens: &mut std::iter::Peekable<I>, min_precedence: u8) -> Expression
 where
-    I: Iterator<Item = Token>,
+    I: Iterator<Item = Token> + Clone,
 {
     let first = tokens.next().expect("expected an expression");
     parse_expression_from(first, tokens, min_precedence)
@@ -232,7 +283,7 @@ fn parse_expression_from<I>(
     min_precedence: u8,
 ) -> Expression
 where
-    I: Iterator<Item = Token>,
+    I: Iterator<Item = Token> + Clone,
 {
     let mut lhs = match first {
         Token::Identifier(name) => Expression::Identifier(name),
@@ -247,7 +298,7 @@ where
                 _ => panic!("expected ')' after expression"),
             }
         }
-        Token::LeftBrace => Expression::Block(parse_block(tokens)),
+        Token::LeftBrace => parse_brace_expression(tokens),
         _ => panic!("expected an expression"),
     };
 
@@ -268,12 +319,30 @@ where
                 tokens.next();
             }
             lhs = Expression::Call { name, arguments };
+        } else if matches!(tokens.peek(), Some(Token::LeftBrace)) {
+            tokens.next();
+            lhs = Expression::StructLiteral {
+                type_name: Some(Box::leak(name.into_boxed_str())),
+                fields: parse_struct_fields(tokens),
+            };
         } else {
             lhs = Expression::Identifier(name);
         }
     }
 
     loop {
+        if matches!(tokens.peek(), Some(Token::Dot)) {
+            tokens.next();
+            let member = match tokens.next() {
+                Some(Token::Identifier(member)) => member,
+                _ => panic!("expected member name after '.'"),
+            };
+            lhs = Expression::MemberAccess {
+                object: Box::new(lhs),
+                member,
+            };
+            continue;
+        }
         let (precedence, operator) = match tokens.peek() {
             Some(Token::OrOr) => (1, BinaryOperator::Or),
             Some(Token::AndAnd) => (2, BinaryOperator::And),
@@ -319,9 +388,66 @@ where
     lhs
 }
 
+fn parse_struct_fields<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<(String, Expression)>
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let mut fields = Vec::new();
+    while !matches!(tokens.peek(), Some(Token::RightBrace)) {
+        let name = match tokens.next() {
+            Some(Token::Identifier(name)) => name,
+            _ => panic!("expected struct field name"),
+        };
+        assert!(
+            matches!(tokens.next(), Some(Token::Equal)),
+            "expected '=' after field name"
+        );
+        fields.push((name, parse_expression(tokens, 0)));
+        if matches!(tokens.peek(), Some(Token::Comma)) {
+            tokens.next();
+        } else if !matches!(tokens.peek(), Some(Token::RightBrace)) {
+            panic!("expected ',' or '}}' after struct field value");
+        }
+    }
+    tokens.next();
+    fields
+}
+
+fn parse_brace_expression<I>(tokens: &mut std::iter::Peekable<I>) -> Expression
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    if matches!(tokens.peek(), Some(Token::RightBrace)) {
+        tokens.next();
+        return Expression::Block(Vec::new());
+    }
+    if let Some(Token::Identifier(name)) = tokens.peek().cloned() {
+        let mut lookahead = tokens.clone();
+        lookahead.next();
+        if matches!(lookahead.next(), Some(Token::Equal)) {
+            tokens.next();
+            tokens.next();
+            let value = parse_expression(tokens, 0);
+            if matches!(tokens.peek(), Some(Token::Comma)) {
+                tokens.next();
+                let mut fields = vec![(name, value)];
+                fields.extend(parse_struct_fields(tokens));
+                return Expression::StructLiteral {
+                    type_name: None,
+                    fields,
+                };
+            }
+            let mut items = vec![ASTNode::Assignment { name, value }];
+            items.extend(parse_block(tokens));
+            return Expression::Block(items);
+        }
+    }
+    Expression::Block(parse_block(tokens))
+}
+
 fn parse_block<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<ASTNode>
 where
-    I: Iterator<Item = Token>,
+    I: Iterator<Item = Token> + Clone,
 {
     let mut items = Vec::new();
 

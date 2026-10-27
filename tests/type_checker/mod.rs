@@ -160,3 +160,36 @@ fn supports_void_functions_with_return() {
     let types = check(&ast).unwrap();
     assert_eq!(types["result"], DataType::Void);
 }
+
+#[test]
+fn infers_and_checks_struct_literals_and_members() {
+    let ast = parse(tokenize(
+        "pos :: struct { x : f32, y : f32, } make :: fn (p : pos) f32 { p.x } point := pos { x = 1, y = 2 } copy : pos = { x = 3, y = 4 } value := make({ x = 5, y = 6 })"
+            .chars(),
+    ));
+
+    let types = check(&ast).unwrap();
+    assert_eq!(types["point"], DataType::Struct("pos"));
+    assert_eq!(types["copy"], DataType::Struct("pos"));
+    assert_eq!(types["value"], DataType::F32);
+}
+
+#[test]
+fn rejects_invalid_struct_fields_and_ambiguous_struct_literals() {
+    let ast = parse(tokenize(
+        "pos :: struct { x : i32, y : bool } bad := pos { x = true, z = 2 } unknown := { x = 1, y = false }"
+            .chars(),
+    ));
+
+    let errors = check(&ast).unwrap_err();
+    assert_eq!(errors.len(), 2);
+    assert!(
+        errors[0].message.contains("expected i32, found bool")
+            || errors[0].message.contains("unknown field 'z'")
+    );
+    assert!(
+        errors[1]
+            .message
+            .contains("cannot infer anonymous struct type")
+    );
+}
