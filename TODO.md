@@ -26,7 +26,8 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Store indexed elements in fixed-size scalar arrays.
 - [ ] Support array element layouts beyond the current 64-bit scalar slots.
 - [ ] Implement slice representation, indexing, and slicing.
-- [ ] Implement pointer values, address-of, dereference, general pointer arithmetic, and pointer member access.
+- [x] Implement local addresses, pointer loads/stores, and pointer type checks.
+- [ ] Implement array/struct pointers, general pointer arithmetic, and pointer member access in MIR.
 
 ## Functions and Modules
 

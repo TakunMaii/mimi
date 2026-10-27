@@ -467,6 +467,14 @@ fn check_statement(
             infer_expression(value, scopes, functions, structs, Some(element_type))?;
             Ok(())
         }
+        ASTNode::PointerAssignment { pointer, value } => {
+            let pointer_type = infer_expression(pointer, scopes, functions, structs, None)?;
+            let DataType::Pointer(element_type) = pointer_type else {
+                return Err(error("dereference assignment requires a pointer"));
+            };
+            infer_expression(value, scopes, functions, structs, Some(*element_type))?;
+            Ok(())
+        }
         ASTNode::Expression(_) => Err(error("expression statements are only valid inside blocks")),
         ASTNode::FunctionDefinition { .. } => {
             Err(error("nested function definitions are unsupported"))
@@ -661,8 +669,19 @@ fn infer_expression(
             }
         }
         Expression::AddressOf(inner) => {
+            if !is_addressable(inner, scopes) {
+                return Err(error(
+                    "address-of requires a mutable variable or array element",
+                ));
+            }
             let inner_type = infer_expression(inner, scopes, functions, structs, None)?;
             Ok(DataType::Pointer(Box::leak(Box::new(inner_type))))
+        }
+        Expression::Dereference(pointer) => {
+            match infer_expression(pointer, scopes, functions, structs, None)? {
+                DataType::Pointer(element) => Ok(*element),
+                _ => Err(error("dereference requires a pointer")),
+            }
         }
         Expression::Not(inner) => {
             infer_expression(inner, scopes, functions, structs, Some(DataType::Bool))?;
@@ -1186,6 +1205,16 @@ fn infer_expression(
             }
             Ok(result.unwrap_or(DataType::Void))
         }
+    }
+}
+
+fn is_addressable(expression: &Expression, scopes: &[HashMap<String, Symbol>]) -> bool {
+    match expression {
+        Expression::Identifier(name) => lookup(scopes, name).is_some_and(|symbol| symbol.mutable),
+        Expression::Index { object, .. } => {
+            matches!(object.as_ref(), Expression::Identifier(name) if lookup(scopes, name).is_some_and(|symbol| symbol.mutable))
+        }
+        _ => false,
     }
 }
 

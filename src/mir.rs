@@ -236,6 +236,40 @@ impl Builder {
                 self.emit(MirInstruction::LoadIndirect { result, address });
                 Some(result)
             }
+            Expression::AddressOf(inner) => {
+                let address = match inner.as_ref() {
+                    Expression::Identifier(name) => {
+                        let Variable::Slot(slot) = self.variables.get(name).copied()? else {
+                            return None;
+                        };
+                        let address = self.value();
+                        self.emit(MirInstruction::SlotAddress {
+                            result: address,
+                            slot,
+                        });
+                        address
+                    }
+                    Expression::Index { object, index } => {
+                        let base = self.expression(object)?;
+                        let index = self.expression(index)?;
+                        let address = self.value();
+                        self.emit(MirInstruction::IndexAddress {
+                            result: address,
+                            base,
+                            index,
+                        });
+                        address
+                    }
+                    _ => return None,
+                };
+                Some(address)
+            }
+            Expression::Dereference(pointer) => {
+                let address = self.expression(pointer)?;
+                let result = self.value();
+                self.emit(MirInstruction::LoadIndirect { result, address });
+                Some(result)
+            }
             Expression::LiteralNumber(text) => {
                 let result = self.value();
                 let value = text.parse().ok()?;
@@ -442,6 +476,11 @@ impl Builder {
                                     base,
                                     index,
                                 });
+                                self.emit(MirInstruction::StoreIndirect { address, value });
+                            }
+                            crate::parser::ASTNode::PointerAssignment { pointer, value } => {
+                                let address = self.expression(pointer)?;
+                                let value = self.expression(value)?;
                                 self.emit(MirInstruction::StoreIndirect { address, value });
                             }
                             crate::parser::ASTNode::While { condition, body } => {

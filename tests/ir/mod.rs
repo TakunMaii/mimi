@@ -285,6 +285,33 @@ fn builds_and_runs_fixed_array_element_assignment() {
 }
 
 #[test]
+fn builds_and_runs_pointer_reads_and_writes() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_pointer_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_pointer_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "get :: fn (pointer : *i32) i32 { *pointer } set :: fn (pointer : *i32) void { *pointer = 9 } main :: fn () i32 { value := 4 set(&value) get(&value) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(9));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_for_loops_over_fixed_arrays() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

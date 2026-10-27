@@ -34,6 +34,7 @@ pub(crate) enum Expression {
     Negate(Box<Expression>),
     Not(Box<Expression>),
     AddressOf(Box<Expression>),
+    Dereference(Box<Expression>),
     Add(Box<Expression>, Box<Expression>),
     Subtract(Box<Expression>, Box<Expression>),
     Multiply(Box<Expression>, Box<Expression>),
@@ -125,6 +126,10 @@ pub(crate) enum ASTNode {
     IndexAssignment {
         object: Expression,
         index: Expression,
+        value: Expression,
+    },
+    PointerAssignment {
+        pointer: Expression,
         value: Expression,
     },
     CompileTimeConstant {
@@ -233,6 +238,7 @@ where
         Token::Identifier(name) if matches!(tokens.peek(), Some(Token::LeftBracket)) => {
             parse_index_assignment_or_expression(name, tokens)
         }
+        Token::Star => parse_pointer_assignment_or_expression(tokens),
         Token::Identifier(name) => parse_statement_after_name(name, tokens),
         Token::Extern => parse_external_function(tokens),
         Token::If => parse_if(tokens),
@@ -941,6 +947,7 @@ where
         Token::Minus => Expression::Negate(Box::new(parse_expression(tokens, 6))),
         Token::Bang => Expression::Not(Box::new(parse_expression(tokens, 6))),
         Token::Ampersand => Expression::AddressOf(Box::new(parse_expression(tokens, 6))),
+        Token::Star => Expression::Dereference(Box::new(parse_expression(tokens, 6))),
         Token::LeftParen => {
             let expression = parse_expression(tokens, 0);
             match tokens.next() {
@@ -1141,6 +1148,25 @@ where
     lhs
 }
 
+fn parse_pointer_assignment_or_expression<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let target = parse_expression_from(Token::Star, tokens, 0);
+    if !matches!(tokens.peek(), Some(Token::Equal)) {
+        return ASTNode::Expression(target);
+    }
+    tokens.next();
+    let value = parse_expression(tokens, 0);
+    match target {
+        Expression::Dereference(pointer) => ASTNode::PointerAssignment {
+            pointer: *pointer,
+            value,
+        },
+        _ => panic!("pointer assignment requires a dereference target"),
+    }
+}
+
 fn parse_arguments<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<Expression>
 where
     I: Iterator<Item = Token> + Clone,
@@ -1298,7 +1324,8 @@ where
             | Token::Loop
             | Token::Defer
             | Token::Break
-            | Token::Continue => parse_statement_token(first, tokens),
+            | Token::Continue
+            | Token::Star => parse_statement_token(first, tokens),
             Token::Return => {
                 let value = if matches!(tokens.peek(), Some(Token::RightBrace)) {
                     None

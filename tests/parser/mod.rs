@@ -96,6 +96,41 @@ fn parses_unary_negation() {
 }
 
 #[test]
+fn parses_pointer_addressing_and_assignment() {
+    let nodes = parse(tokenize(
+        "get :: fn (pointer : *i32) i32 { *pointer } set :: fn (pointer : *i32) void { *pointer = 2 } main :: fn () *i32 { value := 1 &value }".chars(),
+    ));
+    assert!(matches!(
+        &nodes[0],
+        ASTNode::FunctionDefinition {
+            body: Expression::Block(items),
+            ..
+        } if matches!(items.as_slice(), [ASTNode::Expression(Expression::Dereference(pointer))]
+            if matches!(pointer.as_ref(), Expression::Identifier(name) if name == "pointer"))
+    ));
+    assert!(matches!(
+        &nodes[1],
+        ASTNode::FunctionDefinition {
+            body: Expression::Block(items),
+            ..
+        } if matches!(items.as_slice(), [ASTNode::PointerAssignment {
+            pointer: Expression::Identifier(pointer),
+            value: Expression::LiteralNumber(value),
+        }] if pointer == "pointer" && value == "2")
+    ));
+    assert!(matches!(
+        &nodes[2],
+        ASTNode::FunctionDefinition {
+            body: Expression::Block(items),
+            ..
+        } if matches!(items.as_slice(), [
+            ASTNode::VariableDefinition { name, .. },
+            ASTNode::Expression(Expression::AddressOf(inner)),
+        ] if name == "value" && matches!(inner.as_ref(), Expression::Identifier(name) if name == "value"))
+    ));
+}
+
+#[test]
 fn tokenizes_boolean_literals() {
     assert_eq!(
         tokenize("true false".chars()),

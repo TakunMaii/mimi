@@ -348,6 +348,30 @@ fn checks_fixed_array_element_assignment() {
 }
 
 #[test]
+fn checks_address_of_dereference_and_pointer_assignment() {
+    let valid = parse(tokenize(
+        "get :: fn (pointer : *i32) i32 { *pointer } set :: fn (pointer : *i32) void { *pointer = 9 } main :: fn () i32 { value := 1 get(&value) }".chars(),
+    ));
+    check(&valid).unwrap();
+
+    let invalid_value = parse(tokenize(
+        "set :: fn (pointer : *i32) void { *pointer = true }".chars(),
+    ));
+    let errors = check(&invalid_value).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].message.contains("expected i32, found bool"));
+
+    let invalid_address = parse(tokenize("pointer := &1".chars()));
+    let errors = check(&invalid_address).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0]
+            .message
+            .contains("address-of requires a mutable variable")
+    );
+}
+
+#[test]
 fn checks_enum_construction_if_let_and_match() {
     let ast = parse(tokenize("result :: enum { some(f32), error, none, } value := some(1.0) selected := match value { some(x) => x, error => 0.0, none => 0.0 }".chars()));
     let types = check(&ast).unwrap();
