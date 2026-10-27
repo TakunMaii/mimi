@@ -54,7 +54,14 @@ fn builds_and_runs_a_minimal_host_executable() {
     let source = std::env::temp_dir().join(format!("mimi_source_{}.mi", std::process::id()));
     let path = std::env::temp_dir().join(format!("mimi_codegen_{}", std::process::id()));
     std::fs::write(&source, "main :: fn () i32 { 7 }").unwrap();
-    build_file(source.to_str().unwrap(), path.to_str().unwrap()).unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
     let status = std::process::Command::new(&path).status().unwrap();
     assert_eq!(status.code(), Some(7));
     std::fs::remove_file(source).unwrap();

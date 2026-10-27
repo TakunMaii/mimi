@@ -43,10 +43,35 @@ fn resolve_self(data_type: DataType, owner: &'static str) -> DataType {
     }
 }
 
-fn imported_exports(path: &str) -> Result<HashMap<String, DataType>, String> {
-    let mut source_path = PathBuf::from(path);
+fn imported_exports(
+    path: &str,
+    import_paths: &[std::path::PathBuf],
+) -> Result<HashMap<String, DataType>, String> {
+    let requested = PathBuf::from(path);
+    let mut candidates = vec![requested.clone()];
+    candidates.extend(
+        import_paths
+            .iter()
+            .map(|directory| directory.join(&requested)),
+    );
+    let mut source_path = candidates
+        .iter()
+        .find(|candidate| candidate.exists())
+        .cloned()
+        .unwrap_or_else(|| requested.clone());
     if !source_path.exists() && source_path.extension().is_none() {
         source_path.set_extension("mimi");
+        if !source_path.exists() {
+            source_path = import_paths
+                .iter()
+                .map(|directory| {
+                    let mut candidate = directory.join(&requested);
+                    candidate.set_extension("mimi");
+                    candidate
+                })
+                .find(|candidate| candidate.exists())
+                .unwrap_or(source_path);
+        }
     }
     let source = std::fs::read_to_string(&source_path)
         .map_err(|err| format!("cannot read '{}': {err}", source_path.display()))?;
@@ -107,6 +132,13 @@ fn imported_literal_type(expression: &Expression) -> Option<DataType> {
 }
 
 pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<TypeError>> {
+    check_with_import_paths(nodes, &[])
+}
+
+pub(crate) fn check_with_import_paths(
+    nodes: &[ASTNode],
+    import_paths: &[std::path::PathBuf],
+) -> Result<HashMap<String, DataType>, Vec<TypeError>> {
     let mut scopes = vec![HashMap::new()];
     let mut functions = HashMap::new();
     let mut structs = HashMap::new();
@@ -122,7 +154,7 @@ pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<
 
     for node in nodes {
         if let ASTNode::Import { alias, path } = node {
-            match imported_exports(path) {
+            match imported_exports(path, import_paths) {
                 Ok(exports) => {
                     for (name, data_type) in exports {
                         scopes[0].insert(
@@ -225,6 +257,25 @@ pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<
                 errors.push(error(format!("function '{name}' is already defined")));
             }
         }
+        if let ASTNode::ExternalFunction {
+            name,
+            parameters,
+            return_type,
+        } = node
+        {
+            if functions
+                .insert(
+                    name.clone(),
+                    Function {
+                        parameters: parameters.iter().map(|(_, ty)| *ty).collect(),
+                        return_type: *return_type,
+                    },
+                )
+                .is_some()
+            {
+                errors.push(error(format!("function '{name}' is already defined")));
+            }
+        }
     }
 
     for node in nodes {
@@ -288,6 +339,7 @@ pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<
                     errors.push(error(format!("function '{name}': {}", err.message)));
                 }
             }
+            ASTNode::ExternalFunction { .. } => {}
             ASTNode::Return(_) => errors.push(error("return is only valid inside a function")),
             _ => {
                 if let Err(err) = check_statement(node, &mut scopes, &functions, &structs) {
@@ -390,6 +442,7 @@ fn check_statement(
         ASTNode::FunctionDefinition { .. } => {
             Err(error("nested function definitions are unsupported"))
         }
+        ASTNode::ExternalFunction { .. } => Ok(()),
         ASTNode::Return(_) => Err(error("return is only valid inside a function")),
         ASTNode::StructDefinition { .. } => Ok(()),
         ASTNode::EnumDefinition { .. } => Ok(()),
@@ -521,6 +574,11 @@ fn infer_expression(
             Ok(expected.unwrap_or(data_type))
         }
         Expression::LiteralNumber(text) => infer_number(text, expected),
+        Expression::LiteralString(_) => {
+            let string_type = DataType::Slice(Box::leak(Box::new(DataType::U8)));
+            require_compatible(string_type, expected)?;
+            Ok(string_type)
+        }
         Expression::LiteralBool(_) => {
             require_compatible(DataType::Bool, expected)?;
             Ok(DataType::Bool)

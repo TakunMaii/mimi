@@ -251,6 +251,41 @@ fn imports_public_functions_through_package_namespaces() {
 }
 
 #[test]
+fn treats_string_literals_as_byte_slices_for_extern_calls() {
+    let ast = parse(tokenize(
+        "extern print : fn(str : []u8)void main :: fn () void { print(\"hello\") }".chars(),
+    ));
+    check(&ast).unwrap();
+}
+
+#[test]
+fn rejects_string_literals_when_a_non_byte_slice_is_expected() {
+    let ast = parse(tokenize(
+        "extern print : fn(value : i32)void main :: fn () void { print(\"hello\") }".chars(),
+    ));
+    let errors = check(&ast).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].message.contains("[]u8"));
+}
+
+#[test]
+fn resolves_imports_from_search_paths() {
+    let directory = std::env::temp_dir().join(format!("mimi_import_path_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("math.mimi"),
+        "pub add :: fn (a : i32, b : i32) i32 { a + b }",
+    )
+    .unwrap();
+    let ast = parse(tokenize(
+        r#"math :: @import("math") result := math.add(2, 3)"#.chars(),
+    ));
+    let types = super::type_checker::check_with_import_paths(&ast, &[directory.clone()]).unwrap();
+    assert_eq!(types["result"], DataType::I32);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn rejects_non_boolean_if_and_while_conditions() {
     let ast = parse(tokenize("if 1 {} while 2 {}".chars()));
     let errors = check(&ast).unwrap_err();

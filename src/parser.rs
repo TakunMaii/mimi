@@ -29,6 +29,7 @@ pub(crate) enum DataType {
 pub(crate) enum Expression {
     Identifier(String),
     LiteralNumber(String),
+    LiteralString(String),
     LiteralBool(bool),
     Negate(Box<Expression>),
     Not(Box<Expression>),
@@ -133,6 +134,11 @@ pub(crate) enum ASTNode {
         return_type: DataType,
         body: Expression,
     },
+    ExternalFunction {
+        name: String,
+        parameters: Vec<(String, DataType)>,
+        return_type: DataType,
+    },
     Return(Option<Expression>),
     StructDefinition {
         name: &'static str,
@@ -218,6 +224,7 @@ where
             tokens,
         ))),
         Token::Identifier(name) => parse_statement_after_name(name, tokens),
+        Token::Extern => parse_external_function(tokens),
         Token::If => parse_if(tokens),
         Token::Match => ASTNode::Expression(parse_match(tokens)),
         Token::Do => parse_do_while(tokens),
@@ -226,6 +233,55 @@ where
         Token::Loop => parse_loop(tokens),
         Token::Defer => parse_defer(tokens),
         _ => panic!("expected a statement"),
+    }
+}
+
+fn parse_external_function<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let name = match tokens.next() {
+        Some(Token::Identifier(name)) => name,
+        _ => panic!("expected external function name"),
+    };
+    assert!(
+        matches!(tokens.next(), Some(Token::Colon)),
+        "expected ':' after external function name"
+    );
+    assert!(
+        matches!(tokens.next(), Some(Token::Fn)),
+        "expected 'fn' in external function signature"
+    );
+    assert!(
+        matches!(tokens.next(), Some(Token::LeftParen)),
+        "expected '(' in function signature"
+    );
+    let mut parameters = Vec::new();
+    if !matches!(tokens.peek(), Some(Token::RightParen)) {
+        loop {
+            let parameter_name = match tokens.next() {
+                Some(Token::Identifier(name)) => name,
+                _ => panic!("expected external parameter name"),
+            };
+            assert!(
+                matches!(tokens.next(), Some(Token::Colon)),
+                "expected ':' after parameter name"
+            );
+            parameters.push((parameter_name, parse_type(tokens)));
+            match tokens.next() {
+                Some(Token::Comma) => continue,
+                Some(Token::RightParen) => break,
+                _ => panic!("expected ',' or ')' in external function signature"),
+            }
+        }
+    } else {
+        tokens.next();
+    }
+    let return_type = parse_type(tokens);
+    ASTNode::ExternalFunction {
+        name,
+        parameters,
+        return_type,
     }
 }
 
@@ -839,6 +895,7 @@ where
     let mut lhs = match first {
         Token::Identifier(name) => Expression::Identifier(name),
         Token::LiteralNumber(value) => Expression::LiteralNumber(value),
+        Token::LiteralString(value) => Expression::LiteralString(value),
         Token::LiteralBool(value) => Expression::LiteralBool(value),
         Token::Minus => Expression::Negate(Box::new(parse_expression(tokens, 6))),
         Token::Bang => Expression::Not(Box::new(parse_expression(tokens, 6))),

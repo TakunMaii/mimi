@@ -54,6 +54,11 @@ pub(crate) enum LirInstruction {
         lhs: ValueId,
         rhs: ValueId,
     },
+    Call {
+        result: Option<ValueId>,
+        name: String,
+        args: Vec<ValueId>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -109,7 +114,11 @@ fn lower_function(function: &MirFunction) -> LirFunction {
                 register: *result,
                 value: i128::from(*value),
             },
-            MirInstruction::Call { .. } => continue,
+            MirInstruction::Call { result, name, args } => LirInstruction::Call {
+                result: *result,
+                name: name.clone(),
+                args: args.clone(),
+            },
         });
     }
     LirFunction {

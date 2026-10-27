@@ -4,6 +4,12 @@ use std::process::Command;
 use crate::lir::{LirFunction, LirInstruction, LirModule, TargetArch};
 use crate::mir::{MirTerminator, ValueId};
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LinkOptions {
+    pub(crate) library_paths: Vec<std::path::PathBuf>,
+    pub(crate) libraries: Vec<String>,
+}
+
 pub(crate) fn emit_assembly(module: &LirModule) -> Result<String, String> {
     match module.target {
         TargetArch::Aarch64 => emit_aarch64(module),
@@ -12,6 +18,14 @@ pub(crate) fn emit_assembly(module: &LirModule) -> Result<String, String> {
 }
 
 pub(crate) fn compile_executable(module: &LirModule, output: &Path) -> Result<(), String> {
+    compile_executable_with_options(module, output, &LinkOptions::default())
+}
+
+pub(crate) fn compile_executable_with_options(
+    module: &LirModule,
+    output: &Path,
+    options: &LinkOptions,
+) -> Result<(), String> {
     if module.target != TargetArch::Aarch64 {
         return Err("machine code emission is currently implemented for ARM64 only".into());
     }
@@ -29,20 +43,27 @@ pub(crate) fn compile_executable(module: &LirModule, output: &Path) -> Result<()
         return Err(String::from_utf8_lossy(&sdk.stderr).into_owned());
     }
     let sdk_path = String::from_utf8_lossy(&sdk.stdout).trim().to_string();
-    let result = Command::new("ld")
-        .args([
-            "-arch",
-            "arm64",
-            "-platform_version",
-            "macos",
-            "15.0",
-            "15.0",
-            "-e",
-            "_main",
-            "-syslibroot",
-            &sdk_path,
-            "-lSystem",
-        ])
+    let mut command = Command::new("ld");
+    command.args([
+        "-arch",
+        "arm64",
+        "-platform_version",
+        "macos",
+        "15.0",
+        "15.0",
+        "-e",
+        "_main",
+        "-syslibroot",
+        &sdk_path,
+        "-lSystem",
+    ]);
+    for path in &options.library_paths {
+        command.arg("-L").arg(path);
+    }
+    for library in &options.libraries {
+        command.arg(format!("-l{library}"));
+    }
+    let result = command
         .arg(&object_path)
         .arg("-o")
         .arg(output)
@@ -104,6 +125,11 @@ fn encode_function(function: &LirFunction, bytes: &mut Vec<u8>) -> Result<(), St
                 lhs,
                 rhs,
             } => 0x9ac0_0c00 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+            LirInstruction::Call { name, .. } => {
+                return Err(format!(
+                    "external call '{name}' is not yet supported by the ARM64 machine-code emitter"
+                ));
+            }
         };
         push_word(bytes, word);
     }
@@ -151,6 +177,9 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
             lhs,
             rhs,
         } => vec![*destination, *lhs, *rhs],
+        LirInstruction::Call { result, args, .. } => {
+            result.iter().copied().chain(args.iter().copied()).collect()
+        }
     }
 }
 
@@ -321,6 +350,11 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                 assembly.push_str(&format!(
                     "    sdiv x{}, x{}, x{}\n",
                     destination.0, lhs.0, rhs.0
+                ));
+            }
+            LirInstruction::Call { name, .. } => {
+                return Err(format!(
+                    "external call '{name}' is not yet supported by the ARM64 assembly emitter"
                 ));
             }
         }

@@ -107,6 +107,19 @@ impl Builder {
                 });
                 Some(result)
             }
+            Expression::Call { name, arguments } => {
+                let args = arguments
+                    .iter()
+                    .map(|argument| self.expression(argument))
+                    .collect::<Option<Vec<_>>>()?;
+                let result = self.value();
+                self.instructions.push(MirInstruction::Call {
+                    result: Some(result),
+                    name: name.clone(),
+                    args,
+                });
+                Some(result)
+            }
             Expression::Add(lhs, rhs) => self.binary(lhs, rhs, 0),
             Expression::Subtract(lhs, rhs) => self.binary(lhs, rhs, 1),
             Expression::Multiply(lhs, rhs) => self.binary(lhs, rhs, 2),

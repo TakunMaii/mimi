@@ -142,6 +142,21 @@ fn parses_import_alias_and_public_declaration() {
 }
 
 #[test]
+fn parses_external_function_declarations_with_named_parameters() {
+    assert_eq!(
+        parse(tokenize("extern print : fn(str : []u8)void".chars())),
+        vec![ASTNode::ExternalFunction {
+            name: "print".into(),
+            parameters: vec![(
+                "str".into(),
+                DataType::Slice(Box::leak(Box::new(DataType::U8))),
+            )],
+            return_type: DataType::Void,
+        }]
+    );
+}
+
+#[test]
 fn parses_explicit_and_inferred_types() {
     let type_cases = [
         ("u8", DataType::U8),
