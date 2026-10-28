@@ -38,7 +38,8 @@ and focused regression coverage; it does not imply support on every target.
   - [x] Pack `u8` arrays and support byte reads and writes across slot and slice boundaries.
   - [x] Pack scalar elements at their 1-, 2-, 4-, or 8-byte target widths.
   - [x] Lay out fixed arrays of structs inline, including indexing, field reads and writes, and value copies.
-  - [ ] Lay out nested arrays and multi-slot enum elements inline.
+  - [x] Lay out nested arrays inline, including arrays of structs and array fields.
+  - [ ] Lay out multi-slot enum elements inline.
 - [x] Represent local slices with pointer/length slots; support indexing, slicing, and parameter passing.
 - [x] Lower local slice reassignment with updated pointer, length, and element scale.
 - [x] Return slices from Mimi functions as pointer in x0 and length in x1; reject C extern slice returns.

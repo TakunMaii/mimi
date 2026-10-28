@@ -524,6 +524,35 @@ fn parses_member_assignment_on_fixed_array_element() {
 }
 
 #[test]
+fn parses_index_assignment_through_struct_array_field() {
+    let nodes = parse(tokenize(
+        "main :: fn () void { value.cells[1][2] = 9 }".chars(),
+    ));
+    assert!(matches!(
+        &nodes[0],
+        ASTNode::FunctionDefinition {
+            body: Expression::Block(items),
+            ..
+        } if matches!(
+            items.as_slice(),
+            [ASTNode::IndexAssignment {
+                object: Expression::Index { object, index },
+                index: Expression::LiteralNumber(last_index),
+                value: Expression::LiteralNumber(value),
+            }] if matches!(
+                object.as_ref(),
+                Expression::MemberAccess { object, member }
+                    if matches!(object.as_ref(), Expression::Identifier(name) if name == "value")
+                        && member == "cells"
+            )
+                && matches!(index.as_ref(), Expression::LiteralNumber(index) if index == "1")
+                && last_index == "2"
+                && value == "9"
+        )
+    ));
+}
+
+#[test]
 fn parses_enum_definition_match_and_if_let() {
     let nodes = parse(tokenize("result :: enum { some(f32), error, none, } value := some(1.0) if some(x) := value { x } match value { some(x) => x, error => 0.0, none => 0.0 }".chars()));
     assert!(

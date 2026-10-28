@@ -348,20 +348,18 @@ impl Builder {
                     .as_ref()
                     .and_then(scalar_storage_size)
                     .filter(|size| *size < 8);
-                let element_slots = match expected_element.as_ref() {
-                    Some(HirType::Named(name)) if self.struct_fields.contains_key(name) => {
-                        self.struct_slot_count(name)?
-                    }
-                    _ => 1,
-                };
+                let element_stride = expected_element
+                    .as_ref()
+                    .map(|data_type| self.element_stride(data_type))
+                    .unwrap_or(8);
+                let total_bytes = (values.len() as u64).checked_mul(element_stride)?;
+                let slot_count = u32::try_from(total_bytes.div_ceil(8)).ok()?;
+                let inline_elements = expected_element
+                    .as_ref()
+                    .is_some_and(|data_type| self.is_inline_aggregate(data_type));
                 let base = self.slot();
-                let slot_count = if let Some(size) = packed_size {
-                    (values.len() * usize::from(size)).div_ceil(8)
-                } else {
-                    values.len().checked_mul(element_slots as usize)?
-                };
                 self.next_slot += slot_count.saturating_sub(1) as u32;
-                let packed_base = if packed_size.is_some() {
+                let storage_base = if packed_size.is_some() || inline_elements {
                     let address = self.value();
                     self.emit(MirInstruction::SlotAddress {
                         result: address,
@@ -372,28 +370,21 @@ impl Builder {
                     None
                 };
                 for (index, expression) in values.iter().enumerate() {
-                    if let Some(HirType::Named(name)) = expected_element.as_ref()
-                        && self.struct_fields.contains_key(name)
-                    {
-                        let element_base = SlotId(
-                            base.0
-                                .checked_add((index as u32).checked_mul(element_slots)?)?,
-                        );
-                        if let Expression::StructLiteral { fields, .. } = expression {
-                            self.lower_struct_fields_into(name, fields, element_base)?;
-                        } else {
-                            let value =
-                                self.expression_expected(expression, expected_element.as_ref()?)?;
-                            let destination = self.slot_address_value(element_base);
-                            self.copy_struct_to_address(name, value, destination)?;
-                        }
+                    if inline_elements {
+                        let offset = (index as u64).checked_mul(element_stride)?;
+                        let destination = self.byte_offset_address(storage_base?, offset);
+                        self.lower_inline_value_into(
+                            expected_element.as_ref()?,
+                            expression,
+                            destination,
+                        )?;
                         continue;
                     }
                     let value = match expected_element.as_ref() {
                         Some(data_type) => self.expression_expected(expression, data_type)?,
                         None => self.expression(expression)?,
                     };
-                    if let Some(base) = packed_base {
+                    if let Some(base) = storage_base {
                         let index_value = self.value();
                         self.emit(MirInstruction::ConstInt {
                             result: index_value,
@@ -423,7 +414,7 @@ impl Builder {
                         });
                     }
                 }
-                let result = if let Some(base) = packed_base {
+                let result = if let Some(base) = storage_base {
                     base
                 } else {
                     let result = self.value();
@@ -2615,12 +2606,7 @@ impl Builder {
         let fields = self.struct_field_types.get(struct_name)?;
         let mut slot_count = 0u32;
         for (_, field_type) in fields {
-            let field_slots = match field_type {
-                HirType::Named(name) if self.struct_fields.contains_key(name) => {
-                    self.struct_slot_count_inner(name, visiting)?
-                }
-                _ => 1,
-            };
+            let field_slots = self.inline_field_slot_count(field_type, visiting)?;
             slot_count = slot_count.checked_add(field_slots)?;
         }
         visiting.remove(struct_name);
@@ -2636,42 +2622,78 @@ impl Builder {
             if field_name == member {
                 return Some(offset);
             }
-            let field_slots = match field_type {
-                HirType::Named(name) if self.struct_fields.contains_key(name) => {
-                    self.struct_slot_count_inner(name, &mut visiting)?
-                }
-                _ => 1,
-            };
+            let field_slots = self.inline_field_slot_count(field_type, &mut visiting)?;
             offset = offset.checked_add(field_slots)?;
         }
         None
+    }
+
+    fn inline_field_slot_count(
+        &self,
+        data_type: &HirType,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> Option<u32> {
+        match data_type {
+            HirType::Named(name) if self.struct_fields.contains_key(name) => {
+                self.struct_slot_count_inner(name, visiting)
+            }
+            HirType::Array { length, element } => {
+                let bytes = length.checked_mul(self.type_storage_stride(element, visiting)?)?;
+                u32::try_from(bytes.div_ceil(8)).ok()
+            }
+            _ => Some(1),
+        }
+    }
+
+    fn type_storage_stride(
+        &self,
+        data_type: &HirType,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> Option<u64> {
+        if let Some(size) = scalar_storage_size(data_type) {
+            return Some(u64::from(size));
+        }
+        match data_type {
+            HirType::Pointer(_) | HirType::Function { .. } => Some(8),
+            HirType::Array { length, element } => {
+                length.checked_mul(self.type_storage_stride(element, visiting)?)
+            }
+            HirType::Named(name) if self.struct_fields.contains_key(name) => self
+                .struct_slot_count_inner(name, visiting)
+                .map(|slots| u64::from(slots) * 8),
+            _ => Some(8),
+        }
     }
 
     fn is_inline_struct(&self, data_type: &HirType) -> bool {
         matches!(data_type, HirType::Named(name) if self.struct_fields.contains_key(name))
     }
 
+    fn is_inline_aggregate(&self, data_type: &HirType) -> bool {
+        self.is_inline_struct(data_type) || matches!(data_type, HirType::Array { .. })
+    }
+
     fn element_stride(&self, data_type: &HirType) -> u64 {
-        if let HirType::Named(name) = data_type
-            && let Some(slots) = self.struct_slot_count(name)
-        {
-            return u64::from(slots) * 8;
-        }
-        pointer_scale_from_hir_type(data_type)
+        self.type_storage_stride(data_type, &mut std::collections::HashSet::new())
+            .unwrap_or_else(|| pointer_scale_from_hir_type(data_type))
     }
 
     fn inline_field_address(&mut self, base: ValueId, slot_offset: u32) -> ValueId {
+        self.byte_offset_address(base, u64::from(slot_offset) * 8)
+    }
+
+    fn byte_offset_address(&mut self, base: ValueId, offset: u64) -> ValueId {
         let index = self.value();
         self.emit(MirInstruction::ConstInt {
             result: index,
-            value: i128::from(slot_offset),
+            value: offset as i128,
         });
         let address = self.value();
         self.emit(MirInstruction::IndexAddress {
             result: address,
             base,
             index,
-            scale: 8,
+            scale: 1,
         });
         address
     }
@@ -2708,11 +2730,99 @@ impl Builder {
         Some(())
     }
 
+    fn lower_inline_value_into(
+        &mut self,
+        data_type: &HirType,
+        expression: &Expression,
+        destination: ValueId,
+    ) -> Option<()> {
+        match data_type {
+            HirType::Named(name) if self.struct_fields.contains_key(name) => {
+                if let Expression::StructLiteral { fields, .. } = expression {
+                    self.lower_struct_fields_into_address(name, fields, destination)
+                } else {
+                    let value = self.expression_expected(expression, data_type)?;
+                    self.copy_struct_to_address(name, value, destination)
+                }
+            }
+            HirType::Array { length, element } => {
+                if let Expression::ArrayLiteral(values) = expression {
+                    if values.len() as u64 != *length {
+                        return None;
+                    }
+                    for (index, value) in values.iter().enumerate() {
+                        let offset = (index as u64).checked_mul(self.element_stride(element))?;
+                        let element_address = self.byte_offset_address(destination, offset);
+                        self.lower_inline_value_into(element, value, element_address)?;
+                    }
+                    Some(())
+                } else {
+                    let value = self.expression_expected(expression, data_type)?;
+                    self.copy_inline_value_to_address(data_type, value, destination)
+                }
+            }
+            _ => {
+                let value = self.expression_expected(expression, data_type)?;
+                self.emit_store_indirect(destination, value, Some(data_type));
+                Some(())
+            }
+        }
+    }
+
+    fn copy_inline_value_to_address(
+        &mut self,
+        data_type: &HirType,
+        source: ValueId,
+        destination: ValueId,
+    ) -> Option<()> {
+        match data_type {
+            HirType::Named(name) if self.struct_fields.contains_key(name) => {
+                self.copy_struct_to_address(name, source, destination)
+            }
+            HirType::Array { length, element } => {
+                let stride = self.element_stride(element);
+                for index in 0..*length {
+                    let offset = index.checked_mul(stride)?;
+                    let source_address = self.byte_offset_address(source, offset);
+                    let destination_address = self.byte_offset_address(destination, offset);
+                    if self.is_inline_aggregate(element) {
+                        self.copy_inline_value_to_address(
+                            element,
+                            source_address,
+                            destination_address,
+                        )?;
+                    } else {
+                        let value = self.value();
+                        self.emit_load_indirect(value, source_address, Some(element));
+                        self.emit_store_indirect(destination_address, value, Some(element));
+                    }
+                }
+                Some(())
+            }
+            _ => {
+                let value = self.value();
+                self.emit_load_indirect(value, source, Some(data_type));
+                self.emit_store_indirect(destination, value, Some(data_type));
+                Some(())
+            }
+        }
+    }
+
     fn lower_struct_fields_into(
         &mut self,
         struct_name: &str,
         provided: &[(String, Expression)],
         base: SlotId,
+    ) -> Option<()> {
+        let base_address = self.slot_address_value(base);
+        self.lower_struct_fields_into_address(struct_name, provided, base_address)
+    }
+
+    fn lower_struct_fields_into_address(
+        &mut self,
+        struct_name: &str,
+        provided: &[(String, Expression)],
+        base_address: ValueId,
     ) -> Option<()> {
         let fields = self.struct_fields.get(struct_name)?.clone();
         for (field_name, default) in fields {
@@ -2729,26 +2839,14 @@ impl Builder {
                 .1
                 .clone();
             let offset = self.struct_field_offset(struct_name, &field_name)?;
-            let target_slot = SlotId(base.0.checked_add(offset)?);
-            if let HirType::Named(nested_name) = &field_type
-                && self.struct_fields.contains_key(nested_name)
-            {
-                if let Expression::StructLiteral {
-                    fields: nested_fields,
-                    ..
-                } = expression
-                {
-                    self.lower_struct_fields_into(nested_name, nested_fields, target_slot)?;
-                } else {
-                    let value = self.expression_expected(expression, &field_type)?;
-                    let destination = self.slot_address_value(target_slot);
-                    self.copy_struct_to_address(nested_name, value, destination)?;
-                }
+            let target_address = self.inline_field_address(base_address, offset);
+            if self.is_inline_aggregate(&field_type) {
+                self.lower_inline_value_into(&field_type, expression, target_address)?;
             } else {
                 let value = self.expression_expected(expression, &field_type)?;
                 self.value_types.insert(value, field_type);
-                self.emit(MirInstruction::StoreSlot {
-                    slot: target_slot,
+                self.emit(MirInstruction::StoreIndirect {
+                    address: target_address,
                     value,
                 });
             }

@@ -367,6 +367,21 @@ fn checks_fixed_array_element_assignment() {
     let errors = check(&invalid_value).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert!(errors[0].message.contains("expected i32, found bool"));
+
+    let nested_member = parse(tokenize(
+        "matrix :: struct { cells : [2][2]i32 } main :: fn () i32 { value := matrix { cells = [[1, 2], [3, 4]] } value.cells[1][0] = 5 value.cells[1][0] }".chars(),
+    ));
+    check(&nested_member).unwrap();
+
+    let fixed_member = parse(tokenize(
+        "matrix :: struct { cells : [2]i32 : [1, 2] } main :: fn () i32 { value := matrix {} value.cells[0] = 5 0 }".chars(),
+    ));
+    let errors = check(&fixed_member).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].message.contains("fixed field 'cells'"),
+        "{errors:?}"
+    );
 }
 
 #[test]

@@ -487,6 +487,43 @@ fn builds_and_runs_fixed_arrays_of_structs() {
 }
 
 #[test]
+fn builds_and_runs_nested_array_layouts() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_nested_array_source_{}.mi",
+        std::process::id()
+    ));
+    let path =
+        std::env::temp_dir().join(format!("mimi_nested_array_codegen_{}", std::process::id()));
+    for (program, expected) in [
+        (
+            "matrix :: struct { cells : [2][3]i32 } main :: fn () i32 { items := [[1, 2, 3], [4, 5, 6]] copy := matrix { cells = items } items[1][0] = 7 copy.cells[1][2] = 9 items[1][0] + items[0][2] + copy.cells[1][2] + copy.cells[0][0] }",
+            20,
+        ),
+        (
+            "cell :: struct { value : i32 } matrix :: struct { cells : [2][2]cell } main :: fn () i32 { items := [[cell { value = 1 }, cell { value = 2 }], [cell { value = 3 }, cell { value = 4 }]] copy := matrix { cells = items } items[1][0].value = 9 copy.cells[0][1].value = 8 items[1][0].value + items[0][0].value + copy.cells[0][1].value + copy.cells[1][1].value }",
+            22,
+        ),
+    ] {
+        std::fs::write(&source, program).unwrap();
+        build_file(
+            source.to_str().unwrap(),
+            path.to_str().unwrap(),
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let status = std::process::Command::new(&path).status().unwrap();
+        assert_eq!(status.code(), Some(expected));
+    }
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_nested_struct_field_access() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

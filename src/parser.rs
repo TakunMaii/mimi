@@ -1244,6 +1244,11 @@ where
             member,
             value,
         },
+        Expression::Index { object, index } => ASTNode::IndexAssignment {
+            object: *object,
+            index: *index,
+            value,
+        },
         _ => panic!("member assignment requires a field target"),
     }
 }

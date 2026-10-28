@@ -463,20 +463,17 @@ fn check_statement(
             index,
             value,
         } => {
-            let Expression::Identifier(name) = object else {
-                return Err(error(
-                    "indexed assignment target must be a mutable array variable",
-                ));
-            };
-            let symbol = lookup(scopes, name).copied().ok_or_else(|| {
-                error(format!("cannot assign through undefined variable '{name}'"))
-            })?;
-            if !symbol.mutable {
-                return Err(error(format!("cannot assign through constant '{name}'")));
-            }
-            let element_type = match symbol.data_type {
-                DataType::Array(_, element) | DataType::Pointer(element) => *element,
-                _ => return Err(error("indexed assignment requires an array or pointer")),
+            ensure_mutable_index_target(object, scopes, functions, structs)?;
+            let object_type = infer_expression(object, scopes, functions, structs, None)?;
+            let element_type = match object_type {
+                DataType::Array(_, element)
+                | DataType::Slice(element)
+                | DataType::Pointer(element) => *element,
+                _ => {
+                    return Err(error(
+                        "indexed assignment requires an array, slice, or pointer",
+                    ));
+                }
             };
             let index_type = infer_expression(index, scopes, functions, structs, None)?;
             if !index_type.is_integer() {
@@ -648,6 +645,52 @@ fn loop_scope() -> HashMap<String, Symbol> {
 
 fn lookup<'a>(scopes: &'a [HashMap<String, Symbol>], name: &str) -> Option<&'a Symbol> {
     scopes.iter().rev().find_map(|scope| scope.get(name))
+}
+
+fn ensure_mutable_index_target(
+    expression: &Expression,
+    scopes: &mut Vec<HashMap<String, Symbol>>,
+    functions: &HashMap<String, Function>,
+    structs: &HashMap<&'static str, StructInfo>,
+) -> Result<(), TypeError> {
+    match expression {
+        Expression::Identifier(name) => {
+            let symbol = lookup(scopes, name).ok_or_else(|| {
+                error(format!("cannot assign through undefined variable '{name}'"))
+            })?;
+            if symbol.mutable {
+                Ok(())
+            } else {
+                Err(error(format!("cannot assign through constant '{name}'")))
+            }
+        }
+        Expression::MemberAccess { object, member } => {
+            let object_type = infer_expression(object, scopes, functions, structs, None)?;
+            let struct_name = match object_type {
+                DataType::Struct(name) => name,
+                DataType::Pointer(inner) => match *inner {
+                    DataType::Struct(name) => name,
+                    _ => return Err(error("indexed assignment requires a mutable array field")),
+                },
+                _ => return Err(error("indexed assignment requires a mutable array field")),
+            };
+            let field = structs
+                .get(struct_name)
+                .and_then(|info| info.fields.get(member))
+                .ok_or_else(|| error(format!("unknown field '{member}' in '{struct_name}'")))?;
+            if field.mutable {
+                Ok(())
+            } else {
+                Err(error(format!(
+                    "cannot assign through fixed field '{member}'"
+                )))
+            }
+        }
+        Expression::Index { object, .. } => {
+            ensure_mutable_index_target(object, scopes, functions, structs)
+        }
+        _ => Err(error("indexed assignment target is not mutable")),
+    }
 }
 
 fn infer_expression(
@@ -1356,6 +1399,7 @@ fn pointer_stride(data_type: DataType) -> Option<u64> {
 fn is_constant_expression(expression: &Expression) -> bool {
     match expression {
         Expression::LiteralNumber(_) | Expression::LiteralBool(_) => true,
+        Expression::ArrayLiteral(values) => values.iter().all(is_constant_expression),
         Expression::Negate(value) | Expression::Not(value) => is_constant_expression(value),
         Expression::Add(lhs, rhs)
         | Expression::Subtract(lhs, rhs)
