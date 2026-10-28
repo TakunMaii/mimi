@@ -360,4 +360,54 @@ mod tests {
             Some(2)
         );
     }
+
+    #[test]
+    fn classifies_every_supported_scalar_and_pointer_sized_type_on_32_and_64_bit_layouts() {
+        let types = [
+            integer(8),
+            integer(16),
+            integer(32),
+            integer(64),
+            HirType::Float { bits: 16 },
+            HirType::Float { bits: 32 },
+            HirType::Float { bits: 64 },
+            HirType::Bool,
+            HirType::Pointer(Box::new(integer(8))),
+            HirType::Function {
+                params: vec![integer(32)],
+                result: Box::new(integer(32)),
+            },
+            HirType::Slice(Box::new(integer(8))),
+            HirType::Array {
+                length: 3,
+                element: Box::new(integer(16)),
+            },
+        ];
+
+        for (pointer_bytes, stack_slot_bytes) in [(4, 4), (8, 8)] {
+            let layouts = TypeLayouts::new(
+                TargetDataLayout::new(pointer_bytes, stack_slot_bytes),
+                HashMap::new(),
+                HashMap::new(),
+            );
+            for data_type in &types {
+                assert!(layouts.layout(data_type).is_some(), "{data_type:?}");
+                assert!(layouts.abi_class(data_type).is_some(), "{data_type:?}");
+            }
+            assert_eq!(
+                layouts
+                    .layout(&HirType::Pointer(Box::new(integer(8))))
+                    .unwrap()
+                    .size_bytes,
+                pointer_bytes
+            );
+            assert_eq!(
+                layouts
+                    .layout(&HirType::Slice(Box::new(integer(8))))
+                    .unwrap()
+                    .size_bytes,
+                pointer_bytes + stack_slot_bytes
+            );
+        }
+    }
 }
