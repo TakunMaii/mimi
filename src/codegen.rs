@@ -205,54 +205,70 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 LirInstruction::Call {
                     args,
                     result,
+                    result_slice_length,
                     float_args,
                     result_float,
                     ..
-                } => encoded_call_words(args, *result, float_args, *result_float, false)?,
+                } => encoded_call_words(
+                    args,
+                    *result,
+                    *result_slice_length,
+                    float_args,
+                    *result_float,
+                    false,
+                )?,
                 LirInstruction::CallIndirect {
                     args,
                     result,
+                    result_slice_length,
                     float_args,
                     result_float,
                     ..
-                } => encoded_call_words(args, *result, float_args, *result_float, true)?,
+                } => encoded_call_words(
+                    args,
+                    *result,
+                    *result_slice_length,
+                    float_args,
+                    *result_float,
+                    true,
+                )?,
             } * 4;
         }
-        size +=
-            match block.terminator {
-                MirTerminator::Return(value) => {
-                    usize::from(value.is_some_and(|value| {
-                        value.0 != 0 || float_width(&function.result).is_some()
-                    })) * 4
-                        + if function.name == "main" {
-                            8 + usize::from(value.is_none()) * 4
-                        } else {
-                            (1 + usize::from(save_frame)
-                                + saved_registers
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(index, _)| {
-                                        stack_access_words(saved_register_offset(function, index))
-                                    })
-                                    .sum::<usize>()
-                                + stack_adjust_words(frame_size))
-                                * 4
-                        }
-                }
-                MirTerminator::Jump(target) => 4 + phi_move_count(function, block.id, target) * 4,
-                MirTerminator::Branch {
-                    then_block,
-                    else_block,
-                    ..
-                } => {
-                    12 + (phi_move_count(function, block.id, then_block)
-                        + phi_move_count(function, block.id, else_block))
-                        * 4
-                }
-                MirTerminator::Unreachable => {
-                    return Err("unreachable terminator reached ARM64 backend".into());
-                }
-            };
+        size += match block.terminator {
+            MirTerminator::Return {
+                value,
+                slice_length,
+            } => {
+                function_return_moves(value, slice_length, &function.result) * 4
+                    + if function.name == "main" {
+                        8 + usize::from(value.is_none()) * 4
+                    } else {
+                        (1 + usize::from(save_frame)
+                            + saved_registers
+                                .iter()
+                                .enumerate()
+                                .map(|(index, _)| {
+                                    stack_access_words(saved_register_offset(function, index))
+                                })
+                                .sum::<usize>()
+                            + stack_adjust_words(frame_size))
+                            * 4
+                    }
+            }
+            MirTerminator::Jump(target) => 4 + phi_move_count(function, block.id, target) * 4,
+            MirTerminator::Branch {
+                then_block,
+                else_block,
+                ..
+            } => {
+                12 + (phi_move_count(function, block.id, then_block)
+                    + phi_move_count(function, block.id, else_block))
+                    * 4
+            }
+            MirTerminator::Unreachable => {
+                return Err("unreachable terminator reached ARM64 backend".into());
+            }
+        };
     }
     if save_frame {
         size += 4;
@@ -343,6 +359,7 @@ fn integer_arguments(
 fn encoded_call_words(
     args: &[ValueId],
     result: Option<ValueId>,
+    result_slice_length: Option<ValueId>,
     float_args: &[(usize, u16)],
     result_float: Option<u16>,
     indirect: bool,
@@ -361,7 +378,31 @@ fn encoded_call_words(
         + stack_adjust_words(stack_argument_size(integer_args.len())) * 2
         + 1
         + usize::from(indirect)
-        + usize::from(result.is_some_and(|value| value.0 != 0 || result_float.is_some())))
+        + call_result_moves(result, result_slice_length, result_float))
+}
+
+fn call_result_moves(
+    result: Option<ValueId>,
+    result_slice_length: Option<ValueId>,
+    result_float: Option<u16>,
+) -> usize {
+    if let (Some(pointer), Some(length)) = (result, result_slice_length) {
+        parallel_moves(&[(pointer.0, 0), (length.0, 1)]).len()
+    } else {
+        usize::from(result.is_some_and(|value| value.0 != 0 || result_float.is_some()))
+    }
+}
+
+fn function_return_moves(
+    value: Option<ValueId>,
+    slice_length: Option<ValueId>,
+    result_type: &HirType,
+) -> usize {
+    if let (Some(pointer), Some(length)) = (value, slice_length) {
+        argument_moves(&[pointer, length]).len()
+    } else {
+        usize::from(value.is_some_and(|value| value.0 != 0 || float_width(result_type).is_some()))
+    }
 }
 
 fn validate_float_width(width: u16) -> Result<(), String> {
@@ -646,6 +687,7 @@ fn encode_function(
                 }
                 LirInstruction::Call {
                     result,
+                    result_slice_length,
                     name,
                     args,
                     float_args,
@@ -692,7 +734,12 @@ fn encode_function(
                         push_word(bytes, 0x9400_0000);
                     }
                     encode_stack_adjust(bytes, stack_size, false)?;
-                    if let Some(result) = result {
+                    if let (Some(pointer), Some(length)) = (result, result_slice_length) {
+                        encode_register_moves(
+                            bytes,
+                            &parallel_moves(&[(pointer.0, 0), (length.0, 1)]),
+                        );
+                    } else if let Some(result) = result {
                         if let Some(width) = result_float {
                             encode_fp_to_gpr(bytes, result.0, 0, *width)?;
                         } else if result.0 != 0 {
@@ -703,6 +750,7 @@ fn encode_function(
                 }
                 LirInstruction::CallIndirect {
                     result,
+                    result_slice_length,
                     callee,
                     args,
                     float_args,
@@ -733,7 +781,12 @@ fn encode_function(
                     );
                     push_word(bytes, 0xd63f_0000 | (17 << 5));
                     encode_stack_adjust(bytes, stack_size, false)?;
-                    if let Some(result) = result {
+                    if let (Some(pointer), Some(length)) = (result, result_slice_length) {
+                        encode_register_moves(
+                            bytes,
+                            &parallel_moves(&[(pointer.0, 0), (length.0, 1)]),
+                        );
+                    } else if let Some(result) = result {
                         if let Some(width) = result_float {
                             encode_fp_to_gpr(bytes, result.0, 0, *width)?;
                         } else if result.0 != 0 {
@@ -773,8 +826,13 @@ fn encode_function(
                 push_word(bytes, 0x1400_0000);
                 branches.push((at, block_offsets[&else_block], false));
             }
-            MirTerminator::Return(result) => {
-                if let Some(value) = result {
+            MirTerminator::Return {
+                value: result,
+                slice_length,
+            } => {
+                if let (Some(pointer), Some(length)) = (result, slice_length) {
+                    encode_parallel_argument_moves(&[pointer, length], bytes);
+                } else if let Some(value) = result {
                     if let Some(width) = float_width(&function.result) {
                         encode_gpr_to_fp(bytes, 0, value.0, width)?;
                     } else if value.0 != 0 {
@@ -858,21 +916,40 @@ fn block_encoded_size(
             LirInstruction::Call {
                 args,
                 result,
+                result_slice_length,
                 float_args,
                 result_float,
                 ..
-            } => encoded_call_words(args, *result, float_args, *result_float, false)?,
+            } => encoded_call_words(
+                args,
+                *result,
+                *result_slice_length,
+                float_args,
+                *result_float,
+                false,
+            )?,
             LirInstruction::CallIndirect {
                 args,
                 result,
+                result_slice_length,
                 float_args,
                 result_float,
                 ..
-            } => encoded_call_words(args, *result, float_args, *result_float, true)?,
+            } => encoded_call_words(
+                args,
+                *result,
+                *result_slice_length,
+                float_args,
+                *result_float,
+                true,
+            )?,
         } * 4;
     }
     size += match block.terminator {
-        MirTerminator::Return(value) => {
+        MirTerminator::Return {
+            value,
+            slice_length,
+        } => {
             let has_calls = function
                 .blocks
                 .iter()
@@ -886,8 +963,7 @@ fn block_encoded_size(
             let frame_size = stack_frame_size(function);
             let saved_registers = callee_saved_registers(function);
             let save_frame = saves_frame_pointer(has_calls);
-            usize::from(value.is_some_and(|v| v.0 != 0 || float_width(&function.result).is_some()))
-                * 4
+            function_return_moves(value, slice_length, &function.result) * 4
                 + if function.name == "main" {
                     8 + usize::from(value.is_none()) * 4
                 } else {
@@ -992,16 +1068,26 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
             address,
         } => vec![*destination, *address],
         LirInstruction::StoreIndirect { address, value } => vec![*address, *value],
-        LirInstruction::Call { result, args, .. } => {
-            result.iter().copied().chain(args.iter().copied()).collect()
-        }
+        LirInstruction::Call {
+            result,
+            result_slice_length,
+            args,
+            ..
+        } => result
+            .iter()
+            .chain(result_slice_length.iter())
+            .copied()
+            .chain(args.iter().copied())
+            .collect(),
         LirInstruction::CallIndirect {
             result,
+            result_slice_length,
             callee,
             args,
             ..
         } => std::iter::once(*callee)
             .chain(result.iter().copied())
+            .chain(result_slice_length.iter().copied())
             .chain(args.iter().copied())
             .collect(),
         LirInstruction::Phi {
@@ -1225,6 +1311,12 @@ fn encode_float_compare(
 
 fn encode_parallel_argument_moves(args: &[ValueId], bytes: &mut Vec<u8>) {
     for (destination, source) in argument_moves(args) {
+        push_word(bytes, 0xaa00_03e0 | (source << 16) | destination);
+    }
+}
+
+fn encode_register_moves(bytes: &mut Vec<u8>, moves: &[(u32, u32)]) {
+    for (destination, source) in moves {
         push_word(bytes, 0xaa00_03e0 | (source << 16) | destination);
     }
 }
@@ -1559,6 +1651,7 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                 }
                 LirInstruction::Call {
                     result,
+                    result_slice_length,
                     name,
                     args,
                     float_args,
@@ -1582,7 +1675,12 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     );
                     assembly.push_str(&format!("    bl _{name}\n"));
                     emit_stack_adjust(assembly, stack_size, false);
-                    if let Some(result) = result {
+                    if let (Some(pointer), Some(length)) = (result, result_slice_length) {
+                        emit_register_moves(
+                            assembly,
+                            &parallel_moves(&[(pointer.0, 0), (length.0, 1)]),
+                        );
+                    } else if let Some(result) = result {
                         if let Some(width) = result_float {
                             emit_fp_to_gpr(assembly, result.0, 0, *width)?;
                         } else if result.0 != 0 {
@@ -1592,6 +1690,7 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                 }
                 LirInstruction::CallIndirect {
                     result,
+                    result_slice_length,
                     callee,
                     args,
                     float_args,
@@ -1616,7 +1715,12 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     );
                     assembly.push_str("    blr x17\n");
                     emit_stack_adjust(assembly, stack_size, false);
-                    if let Some(result) = result {
+                    if let (Some(pointer), Some(length)) = (result, result_slice_length) {
+                        emit_register_moves(
+                            assembly,
+                            &parallel_moves(&[(pointer.0, 0), (length.0, 1)]),
+                        );
+                    } else if let Some(result) = result {
                         if let Some(width) = result_float {
                             emit_fp_to_gpr(assembly, result.0, 0, *width)?;
                         } else if result.0 != 0 {
@@ -1686,8 +1790,13 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                 emit_assembly_phi_copies(assembly, function, block.id, else_block);
                 assembly.push_str(&format!("    b .L{}_{}\n", function.name, else_block.0));
             }
-            MirTerminator::Return(value) => {
-                if let Some(value) = value {
+            MirTerminator::Return {
+                value,
+                slice_length,
+            } => {
+                if let (Some(pointer), Some(length)) = (value, slice_length) {
+                    emit_register_moves(assembly, &argument_moves(&[pointer, length]));
+                } else if let Some(value) = value {
                     if let Some(width) = float_width(&function.result) {
                         emit_gpr_to_fp(assembly, 0, value.0, width)?;
                     } else if value.0 != 0 {

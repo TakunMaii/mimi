@@ -281,6 +281,14 @@ fn treats_string_literals_as_byte_slices_for_extern_calls() {
 }
 
 #[test]
+fn rejects_slice_return_types_for_external_functions() {
+    let ast = parse(tokenize("extern get_text : fn()[]u8".chars()));
+    let errors = check(&ast).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].message.contains("cannot return a slice"));
+}
+
+#[test]
 fn rejects_string_literals_when_a_non_byte_slice_is_expected() {
     let ast = parse(tokenize(
         "extern print : fn(value : i32)void main :: fn () void { print(\"hello\") }".chars(),

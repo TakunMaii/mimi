@@ -44,6 +44,7 @@ pub(crate) enum LirInstruction {
     },
     CallIndirect {
         result: Option<ValueId>,
+        result_slice_length: Option<ValueId>,
         callee: ValueId,
         args: Vec<ValueId>,
         float_args: Vec<(usize, u16)>,
@@ -109,6 +110,7 @@ pub(crate) enum LirInstruction {
     },
     Call {
         result: Option<ValueId>,
+        result_slice_length: Option<ValueId>,
         name: String,
         args: Vec<ValueId>,
         float_args: Vec<(usize, u16)>,
@@ -314,12 +316,14 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                         }
                         MirInstruction::Call {
                             result,
+                            result_slice_length,
                             name,
                             args,
                             float_args,
                             result_float,
                         } => LirInstruction::Call {
                             result: *result,
+                            result_slice_length: *result_slice_length,
                             name: name.clone(),
                             args: args.clone(),
                             float_args: float_args.clone(),
@@ -327,12 +331,14 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                         },
                         MirInstruction::CallIndirect {
                             result,
+                            result_slice_length,
                             callee,
                             args,
                             float_args,
                             result_float,
                         } => LirInstruction::CallIndirect {
                             result: *result,
+                            result_slice_length: *result_slice_length,
                             callee: *callee,
                             args: args.clone(),
                             float_args: float_args.clone(),

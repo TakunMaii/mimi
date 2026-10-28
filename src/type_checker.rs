@@ -265,6 +265,11 @@ pub(crate) fn check_with_import_paths(
             return_type,
         } = node
         {
+            if matches!(return_type, DataType::Slice(_)) {
+                errors.push(error(format!(
+                    "external function '{name}' cannot return a slice"
+                )));
+            }
             if functions
                 .insert(
                     name.clone(),

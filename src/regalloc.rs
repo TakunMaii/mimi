@@ -96,13 +96,23 @@ fn spill_values_across_calls(function: &LirFunction) -> LirFunction {
         .map(|block| {
             let mut instructions = Vec::new();
             for (index, instruction) in block.instructions.iter().enumerate() {
-                let values = if let LirInstruction::Call { result, .. }
-                | LirInstruction::CallIndirect { result, .. } = instruction
+                let values = if let LirInstruction::Call {
+                    result,
+                    result_slice_length,
+                    ..
+                }
+                | LirInstruction::CallIndirect {
+                    result,
+                    result_slice_length,
+                    ..
+                } = instruction
                 {
                     live_after[block.id.0 as usize][index]
                         .iter()
                         .copied()
-                        .filter(|value| Some(*value) != *result)
+                        .filter(|value| {
+                            Some(*value) != *result && Some(*value) != *result_slice_length
+                        })
                         .collect::<HashSet<_>>()
                 } else {
                     HashSet::new()
@@ -238,13 +248,16 @@ fn successors(terminator: &MirTerminator) -> Vec<BlockId> {
             else_block,
             ..
         } => vec![*then_block, *else_block],
-        MirTerminator::Return(_) | MirTerminator::Unreachable => Vec::new(),
+        MirTerminator::Return { .. } | MirTerminator::Unreachable => Vec::new(),
     }
 }
 
 fn terminator_uses(terminator: &MirTerminator) -> Vec<ValueId> {
     match terminator {
-        MirTerminator::Return(value) => value.iter().copied().collect(),
+        MirTerminator::Return {
+            value,
+            slice_length,
+        } => value.iter().chain(slice_length.iter()).copied().collect(),
         MirTerminator::Branch { condition, .. } => vec![*condition],
         MirTerminator::Jump(_) | MirTerminator::Unreachable => Vec::new(),
     }
@@ -309,11 +322,22 @@ fn instruction_uses_defs(instruction: &LirInstruction) -> (Vec<ValueId>, Vec<Val
         LirInstruction::FloatNeg {
             destination, value, ..
         } => (vec![*value], vec![*destination]),
-        LirInstruction::Call { result, args, .. } => {
-            (args.clone(), result.iter().copied().collect())
-        }
+        LirInstruction::Call {
+            result,
+            result_slice_length,
+            args,
+            ..
+        } => (
+            args.clone(),
+            result
+                .iter()
+                .chain(result_slice_length.iter())
+                .copied()
+                .collect(),
+        ),
         LirInstruction::CallIndirect {
             result,
+            result_slice_length,
             callee,
             args,
             ..
@@ -321,7 +345,11 @@ fn instruction_uses_defs(instruction: &LirInstruction) -> (Vec<ValueId>, Vec<Val
             std::iter::once(*callee)
                 .chain(args.iter().copied())
                 .collect(),
-            result.iter().copied().collect(),
+            result
+                .iter()
+                .chain(result_slice_length.iter())
+                .copied()
+                .collect(),
         ),
         LirInstruction::Phi { destination, .. } => (Vec::new(), vec![*destination]),
         LirInstruction::LoadSlot { destination, .. }
@@ -431,9 +459,17 @@ fn rewrite_function(
                     map_value(destination)?;
                     map_value(value)?;
                 }
-                LirInstruction::Call { result, args, .. } => {
+                LirInstruction::Call {
+                    result,
+                    result_slice_length,
+                    args,
+                    ..
+                } => {
                     if let Some(result) = result {
                         map_value(result)?;
+                    }
+                    if let Some(length) = result_slice_length {
+                        map_value(length)?;
                     }
                     for argument in args {
                         map_value(argument)?;
@@ -441,12 +477,16 @@ fn rewrite_function(
                 }
                 LirInstruction::CallIndirect {
                     result,
+                    result_slice_length,
                     callee,
                     args,
                     ..
                 } => {
                     if let Some(result) = result {
                         map_value(result)?;
+                    }
+                    if let Some(length) = result_slice_length {
+                        map_value(length)?;
                     }
                     map_value(callee)?;
                     for argument in args {
@@ -483,9 +523,15 @@ fn rewrite_function(
             }
         }
         match &mut block.terminator {
-            MirTerminator::Return(value) => {
+            MirTerminator::Return {
+                value,
+                slice_length,
+            } => {
                 if let Some(value) = value {
                     map_value(value)?;
+                }
+                if let Some(length) = slice_length {
+                    map_value(length)?;
                 }
             }
             MirTerminator::Branch { condition, .. } => map_value(condition)?,

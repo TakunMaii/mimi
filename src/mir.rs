@@ -115,6 +115,7 @@ pub(crate) enum MirInstruction {
     },
     Call {
         result: Option<ValueId>,
+        result_slice_length: Option<ValueId>,
         name: String,
         args: Vec<ValueId>,
         float_args: Vec<(usize, u16)>,
@@ -122,6 +123,7 @@ pub(crate) enum MirInstruction {
     },
     CallIndirect {
         result: Option<ValueId>,
+        result_slice_length: Option<ValueId>,
         callee: ValueId,
         args: Vec<ValueId>,
         float_args: Vec<(usize, u16)>,
@@ -161,7 +163,10 @@ pub(crate) enum MirInstruction {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum MirTerminator {
-    Return(Option<ValueId>),
+    Return {
+        value: Option<ValueId>,
+        slice_length: Option<ValueId>,
+    },
     Jump(BlockId),
     Branch {
         condition: ValueId,
@@ -213,6 +218,7 @@ struct Builder {
     variable_function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
     variable_types: std::collections::HashMap<String, HirType>,
     value_types: std::collections::HashMap<ValueId, HirType>,
+    slice_value_lengths: std::collections::HashMap<ValueId, ValueId>,
     expected_type_hint: Option<HirType>,
     return_type: HirType,
     variable_structs: std::collections::HashMap<String, String>,
@@ -290,6 +296,14 @@ impl Builder {
                     if let Some(data_type) = self.variable_types.get(name).cloned() {
                         self.value_types.insert(result, data_type);
                     }
+                    if let Some(length_slot) = self.slice_lengths.get(name).copied() {
+                        let length = self.value();
+                        self.emit(MirInstruction::LoadSlot {
+                            result: length,
+                            slot: length_slot,
+                        });
+                        self.slice_value_lengths.insert(result, length);
+                    }
                     Some(result)
                 }
                 None => {
@@ -327,6 +341,14 @@ impl Builder {
                 }
                 let result = self.value();
                 self.emit(MirInstruction::SlotAddress { result, slot: base });
+                if matches!(self.expected_type_hint.as_ref(), Some(HirType::Slice(_))) {
+                    let length = self.value();
+                    self.emit(MirInstruction::ConstInt {
+                        result: length,
+                        value: values.len() as i128,
+                    });
+                    self.slice_value_lengths.insert(result, length);
+                }
                 Some(result)
             }
             Expression::Index { object, index } => {
@@ -496,7 +518,23 @@ impl Builder {
                         signed: false,
                     })),
                 );
+                let length = self.value();
+                self.emit(MirInstruction::ConstInt {
+                    result: length,
+                    value: value.len() as i128,
+                });
+                self.slice_value_lengths.insert(result, length);
                 Some(result)
+            }
+            Expression::Slice { .. } => {
+                let expected = self
+                    .expected_type_hint
+                    .clone()
+                    .or_else(|| self.expression_type(expression))?;
+                let (base, length, _) = self.lower_array_view_expected(expression, &expected)?;
+                self.value_types.insert(base, expected);
+                self.slice_value_lengths.insert(base, length);
+                Some(base)
             }
             Expression::If {
                 condition,
@@ -551,6 +589,17 @@ impl Builder {
                     result,
                     incoming: vec![(then_end, then_value), (else_end, else_value)],
                 });
+                if let (Some(then_length), Some(else_length)) = (
+                    self.slice_value_lengths.get(&then_value).copied(),
+                    self.slice_value_lengths.get(&else_value).copied(),
+                ) {
+                    let length = self.value();
+                    self.emit(MirInstruction::Phi {
+                        result: length,
+                        incoming: vec![(then_end, then_length), (else_end, else_length)],
+                    });
+                    self.slice_value_lengths.insert(result, length);
+                }
                 Some(result)
             }
             Expression::Match { value, arms } => self.lower_match(value, arms),
@@ -562,12 +611,18 @@ impl Builder {
                     let (args, float_args) =
                         self.lower_function_value_arguments(arguments, &parameter_types)?;
                     let result = (return_type != HirType::Void).then(|| self.value());
+                    let result_slice_length =
+                        matches!(return_type, HirType::Slice(_)).then(|| self.value());
                     if let Some(result) = result {
                         self.value_types.insert(result, return_type.clone());
+                    }
+                    if let (Some(result), Some(length)) = (result, result_slice_length) {
+                        self.slice_value_lengths.insert(result, length);
                     }
                     let result_float = float_width(&return_type);
                     self.emit(MirInstruction::CallIndirect {
                         result,
+                        result_slice_length,
                         callee,
                         args,
                         float_args,
@@ -592,11 +647,19 @@ impl Builder {
                     .as_ref()
                     .is_none_or(|ty| *ty != HirType::Void)
                     .then(|| self.value());
+                let result_slice_length = return_type
+                    .as_ref()
+                    .is_some_and(|ty| matches!(ty, HirType::Slice(_)))
+                    .then(|| self.value());
                 if let (Some(result), Some(return_type)) = (result, return_type.as_ref()) {
                     self.value_types.insert(result, return_type.clone());
                 }
+                if let (Some(result), Some(length)) = (result, result_slice_length) {
+                    self.slice_value_lengths.insert(result, length);
+                }
                 self.emit(MirInstruction::Call {
                     result,
+                    result_slice_length,
                     name: name.clone(),
                     args,
                     float_args,
@@ -616,12 +679,18 @@ impl Builder {
                     let (args, float_args) =
                         self.lower_function_value_arguments(arguments, &parameter_types)?;
                     let result = (return_type != HirType::Void).then(|| self.value());
+                    let result_slice_length =
+                        matches!(return_type, HirType::Slice(_)).then(|| self.value());
                     if let Some(result) = result {
                         self.value_types.insert(result, return_type.clone());
+                    }
+                    if let (Some(result), Some(length)) = (result, result_slice_length) {
+                        self.slice_value_lengths.insert(result, length);
                     }
                     let result_float = float_width(&return_type);
                     self.emit(MirInstruction::CallIndirect {
                         result,
+                        result_slice_length,
                         callee,
                         args,
                         float_args,
@@ -671,11 +740,19 @@ impl Builder {
                     .as_ref()
                     .is_none_or(|ty| *ty != HirType::Void)
                     .then(|| self.value());
+                let result_slice_length = return_type
+                    .as_ref()
+                    .is_some_and(|ty| matches!(ty, HirType::Slice(_)))
+                    .then(|| self.value());
                 if let (Some(result), Some(return_type)) = (result, return_type.as_ref()) {
                     self.value_types.insert(result, return_type.clone());
                 }
+                if let (Some(result), Some(length)) = (result, result_slice_length) {
+                    self.slice_value_lengths.insert(result, length);
+                }
                 self.emit(MirInstruction::Call {
                     result,
+                    result_slice_length,
                     name: target.symbol,
                     args,
                     float_args,
@@ -810,7 +887,12 @@ impl Builder {
                                         _ => None,
                                     },
                                 };
-                                let is_slice = declared_slice || self.is_slice_value(value);
+                                let value_type = data_type
+                                    .map(Into::into)
+                                    .or_else(|| self.expression_type(value));
+                                let is_slice = declared_slice
+                                    || self.is_slice_value(value)
+                                    || matches!(&value_type, Some(HirType::Slice(_)));
                                 let inferred_pointer_scale = match value {
                                     Expression::AddressOf(inner) => {
                                         Some(self.address_target_scale(inner))
@@ -826,9 +908,6 @@ impl Builder {
                                     }
                                     _ => self.function_signature_for_expression(value),
                                 };
-                                let value_type = data_type
-                                    .map(Into::into)
-                                    .or_else(|| self.expression_type(value));
                                 let (value, slice_view) = if is_slice {
                                     let view = match value_type.as_ref() {
                                         Some(data_type) => {
@@ -1111,7 +1190,15 @@ impl Builder {
                                     None
                                 };
                                 self.run_all_defers();
-                                self.terminate(MirTerminator::Return(value));
+                                let slice_length = value.and_then(|value| {
+                                    matches!(&self.return_type, HirType::Slice(_))
+                                        .then(|| self.slice_value_lengths.get(&value).copied())
+                                        .flatten()
+                                });
+                                self.terminate(MirTerminator::Return {
+                                    value,
+                                    slice_length,
+                                });
                                 break;
                             }
                             crate::parser::ASTNode::Break => {
@@ -1340,6 +1427,12 @@ impl Builder {
                 bits: 8,
                 signed: false,
             }))),
+            Expression::Slice { object, .. } => match self.expression_type(object) {
+                Some(HirType::Array { element, .. }) | Some(HirType::Slice(element)) => {
+                    Some(HirType::Slice(element))
+                }
+                _ => None,
+            },
             Expression::AddressOf(inner) => self
                 .expression_type(inner)
                 .map(|inner| HirType::Pointer(Box::new(inner))),
@@ -1694,7 +1787,7 @@ impl Builder {
         match expression {
             Expression::LiteralString(_) | Expression::Slice { .. } => true,
             Expression::Identifier(name) => self.slice_lengths.contains_key(name),
-            _ => false,
+            _ => matches!(self.expression_type(expression), Some(HirType::Slice(_))),
         }
     }
 
@@ -1756,30 +1849,35 @@ impl Builder {
         match expression {
             Expression::ArrayLiteral(values) => {
                 let base = self.expression(expression)?;
-                let length = self.value();
-                self.emit(MirInstruction::ConstInt {
-                    result: length,
-                    value: values.len() as i128,
-                });
+                let length = if let Some(length) = self.slice_value_lengths.get(&base).copied() {
+                    length
+                } else {
+                    let length = self.value();
+                    self.emit(MirInstruction::ConstInt {
+                        result: length,
+                        value: values.len() as i128,
+                    });
+                    length
+                };
                 Some((base, length, 8))
             }
-            Expression::LiteralString(text) => {
+            Expression::LiteralString(_) => {
                 let base = self.expression(expression)?;
-                let length = self.value();
-                self.emit(MirInstruction::ConstInt {
-                    result: length,
-                    value: text.len() as i128,
-                });
+                let length = self.slice_value_lengths.get(&base).copied()?;
                 Some((base, length, 1))
             }
             Expression::Identifier(name) => {
                 let base = self.expression(expression)?;
                 if let Some(length_slot) = self.slice_lengths.get(name).copied() {
-                    let length = self.value();
-                    self.emit(MirInstruction::LoadSlot {
-                        result: length,
-                        slot: length_slot,
-                    });
+                    let length = self.slice_value_lengths.get(&base).copied().or_else(|| {
+                        let length = self.value();
+                        self.emit(MirInstruction::LoadSlot {
+                            result: length,
+                            slot: length_slot,
+                        });
+                        self.slice_value_lengths.insert(base, length);
+                        Some(length)
+                    })?;
                     let scale = *self.slice_scales.get(name)?;
                     Some((base, length, scale))
                 } else {
@@ -1822,9 +1920,17 @@ impl Builder {
                     lhs: end,
                     rhs: start,
                 });
+                self.slice_value_lengths.insert(sliced_base, length);
                 Some((sliced_base, length, scale))
             }
-            _ => None,
+            _ => {
+                let HirType::Slice(element) = self.expression_type(expression)? else {
+                    return None;
+                };
+                let base = self.expression(expression)?;
+                let length = self.slice_value_lengths.get(&base).copied()?;
+                Some((base, length, pointer_scale_from_hir_type(&element)))
+            }
         }
     }
 
@@ -2199,6 +2305,7 @@ fn lower_function(
         variable_function_signatures: std::collections::HashMap::new(),
         variable_types: std::collections::HashMap::new(),
         value_types: std::collections::HashMap::new(),
+        slice_value_lengths: std::collections::HashMap::new(),
         expected_type_hint: None,
         return_type: function.result.clone(),
         variable_structs: std::collections::HashMap::new(),
@@ -2272,7 +2379,15 @@ fn lower_function(
         result
     };
     if builder.is_open(builder.current) {
-        builder.terminate(MirTerminator::Return(result));
+        let slice_length = result.and_then(|value| {
+            matches!(&function.result, HirType::Slice(_))
+                .then(|| builder.slice_value_lengths.get(&value).copied())
+                .flatten()
+        });
+        builder.terminate(MirTerminator::Return {
+            value: result,
+            slice_length,
+        });
     }
     let mut blocks = builder.blocks;
     prune_unreachable_blocks(&mut blocks);
@@ -2309,7 +2424,7 @@ fn prune_unreachable_blocks(blocks: &mut Vec<MirBlock>) {
                 pending.push(then_block);
                 pending.push(else_block);
             }
-            MirTerminator::Return(_) | MirTerminator::Unreachable => {}
+            MirTerminator::Return { .. } | MirTerminator::Unreachable => {}
         }
     }
     let remap = reachable
@@ -2337,7 +2452,7 @@ fn prune_unreachable_blocks(blocks: &mut Vec<MirBlock>) {
                 *then_block = remap[then_block];
                 *else_block = remap[else_block];
             }
-            MirTerminator::Return(_) | MirTerminator::Unreachable => {}
+            MirTerminator::Return { .. } | MirTerminator::Unreachable => {}
         }
         for instruction in &mut block.instructions {
             if let MirInstruction::Phi { incoming, .. } = instruction {

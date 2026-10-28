@@ -555,6 +555,36 @@ fn passes_slice_pointer_and_length_to_functions() {
 }
 
 #[test]
+fn builds_and_runs_slice_return_values() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_slice_return_source_{}.mi",
+        std::process::id()
+    ));
+    let path =
+        std::env::temp_dir().join(format!("mimi_slice_return_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "identity :: fn (values : []u8) []u8 { return values } forward :: fn (values : []u8) []u8 { identity(values) } apply :: fn (function : fn([]u8)[]u8, values : []u8) []u8 { function(values) } choose :: fn (values : []u8, tail : bool) []u8 { chosen := if tail { values[1:] } else { values[0:2] } chosen } sum :: fn (values : []u8) i32 { total := 0 for item in values { total = total + item } total } main :: fn () i32 { returned := apply(forward, \"ABC\") selected := choose(returned, true) sum(selected) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(133));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_break_continue_and_loop_defers() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
@@ -999,7 +1029,10 @@ fn lowers_string_literals_to_data_symbols_in_lir() {
     );
     assert!(matches!(
         lir.functions[0].blocks[0].instructions.as_slice(),
-        [lir::LirInstruction::LoadAddress { .. }]
+        [
+            lir::LirInstruction::LoadAddress { .. },
+            lir::LirInstruction::LoadImmediate { value: 5, .. }
+        ]
     ));
 }
 
