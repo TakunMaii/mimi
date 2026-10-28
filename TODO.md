@@ -68,15 +68,15 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Allocate and preserve ARM64 callee-saved registers.
 - [ ] Complete package symbol visibility and cross-package linking behavior.
   - [x] Compile imported functions with package-qualified symbols and resolve package-local calls.
-  - [ ] Import and link exported types, constants, and external declarations with full visibility checks.
+  - [x] Import and link exported types, constants, and external declarations with full visibility checks.
     - [x] Import public function-valued constant aliases as callable functions.
     - [x] Inline imported public integer, float, and boolean literal constants.
     - [x] Import public external declarations for direct calls, with package-qualified visibility and original link symbols.
     - [x] Load imported external function addresses through target-specific GOT relocations.
     - [x] Import exported types and enforce type visibility.
-    - [ ] Lower and link exported constants with full visibility checks.
+    - [x] Lower and link exported constants with full visibility checks.
       - [x] Inline imported public scalar expressions and same-package scalar constant references.
-      - [ ] Lower imported aggregate constant values.
+      - [x] Lower imported structs, fixed arrays, enums, and string constants.
 
 ## Targets and Tooling
 

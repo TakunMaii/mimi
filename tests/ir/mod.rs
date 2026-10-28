@@ -234,6 +234,44 @@ fn builds_and_runs_imported_struct_types() {
 }
 
 #[test]
+fn builds_and_runs_imported_aggregate_constants() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let package =
+        std::env::temp_dir().join(format!("mimi_aggregate_package_{}.mi", std::process::id()));
+    let source =
+        std::env::temp_dir().join(format!("mimi_aggregate_import_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_aggregate_codegen_{}", std::process::id()));
+    std::fs::write(
+        &package,
+        "pub Point :: struct { x : i32, y : i32 } pub origin :: Point { x=33, y=0 } pub numbers : [2]i32 : [2, 3] pub Choice :: enum { none, some(i32) } pub choice :: some(7) pub message :: \"A\"",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        format!(
+            "geo :: @import(\"{}\") main :: fn () i32 {{ geo.origin.x + geo.numbers[0] + match geo.choice {{ some(value) => value, none => 0 }} + geo.message[0] - 65 }}",
+            package.display()
+        ),
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(42));
+    std::fs::remove_file(package).unwrap();
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn lowers_dynamic_if_else_to_mir_blocks_and_phi() {
     let ast = parse(tokenize(
         "choose :: fn (condition : bool) i32 { value := if condition { 7 } else { 3 } value }"

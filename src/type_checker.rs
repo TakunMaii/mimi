@@ -60,7 +60,7 @@ fn imported_exports(
         .map_err(|err| format!("cannot read '{}': {err}", source_path.display()))?;
     let ast = crate::parser::parse(tokenize(source.chars()));
     let callable_types = imported_callable_types(&ast);
-    let local_type_names = ast
+    let all_type_names = ast
         .iter()
         .map(|node| match node {
             ASTNode::Public(declaration) => declaration.as_ref(),
@@ -73,6 +73,34 @@ fn imported_exports(
             _ => None,
         })
         .collect::<HashSet<_>>();
+    let local_type_names =
+        ast.iter()
+            .filter_map(|node| match node {
+                ASTNode::Public(declaration) => match declaration.as_ref() {
+                    ASTNode::StructDefinition { name, .. }
+                    | ASTNode::EnumDefinition { name, .. } => Some(*name),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+    let enum_variants = ast
+        .iter()
+        .map(|node| match node {
+            ASTNode::Public(declaration) => declaration.as_ref(),
+            declaration => declaration,
+        })
+        .filter_map(|node| match node {
+            ASTNode::EnumDefinition { name, variants } => Some(
+                variants
+                    .iter()
+                    .map(|(variant, payload)| (variant.clone(), (*name, *payload)))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect::<HashMap<_, _>>();
     let mut constant_types = HashMap::new();
     for node in &ast {
         let declaration = match node {
@@ -85,9 +113,15 @@ fn imported_exports(
             value,
         } = declaration
             && let Some(data_type) =
-                data_type.or_else(|| imported_scalar_constant_type(value, &constant_types))
-            && is_scalar_type(data_type)
-            && imported_scalar_constant_expression(value, &constant_types)
+                data_type.or_else(|| imported_constant_type(value, &constant_types, &enum_variants))
+            && is_constant_type(data_type, &all_type_names)
+            && imported_constant_expression(
+                value,
+                &constant_types,
+                &enum_variants,
+                &all_type_names,
+                Some(data_type),
+            )
         {
             constant_types.insert(name.clone(), data_type);
         }
@@ -157,9 +191,11 @@ fn imported_exports(
                 let function_type = data_type
                     .filter(|ty| matches!(ty, DataType::Function(_, _)))
                     .or_else(|| callable_types.get(&name).copied());
-                if let Some(data_type) =
-                    function_type.or_else(|| constant_types.get(&name).copied())
-                {
+                let constant_type = constant_types
+                    .get(&name)
+                    .copied()
+                    .filter(|ty| is_importable_constant_type(*ty, &local_type_names));
+                if let Some(data_type) = function_type.or(constant_type) {
                     exports.insert(
                         name,
                         qualify_imported_type(data_type, package, &local_type_names),
@@ -464,12 +500,19 @@ fn imported_negative_integer_literal_type(value: &str) -> Option<DataType> {
     }
 }
 
-fn imported_scalar_constant_type(
+fn imported_constant_type(
     expression: &Expression,
     constants: &HashMap<String, DataType>,
+    enum_variants: &HashMap<String, (&'static str, Option<DataType>)>,
 ) -> Option<DataType> {
     match expression {
-        Expression::Identifier(name) => constants.get(name).copied(),
+        Expression::Identifier(name) => constants.get(name).copied().or_else(|| {
+            enum_variants
+                .get(name)
+                .filter(|(_, payload)| payload.is_none())
+                .map(|(name, _)| DataType::Enum(name))
+        }),
+        Expression::LiteralString(_) => Some(DataType::Slice(Box::leak(Box::new(DataType::U8)))),
         Expression::LiteralBool(_) => Some(DataType::Bool),
         Expression::LiteralNumber(value) if value.contains('.') => Some(DataType::F64),
         Expression::LiteralNumber(value) => imported_integer_literal_type(value),
@@ -479,7 +522,7 @@ fn imported_scalar_constant_type(
             };
             imported_negative_integer_literal_type(value)
         }
-        Expression::Negate(value) => imported_scalar_constant_type(value, constants),
+        Expression::Negate(value) => imported_constant_type(value, constants, enum_variants),
         Expression::Not(_) => Some(DataType::Bool),
         Expression::And(_, _)
         | Expression::Or(_, _)
@@ -494,17 +537,30 @@ fn imported_scalar_constant_type(
         | Expression::Multiply(lhs, rhs)
         | Expression::Divide(lhs, rhs)
         | Expression::Remainder(lhs, rhs) => {
-            let lhs = imported_scalar_constant_type(lhs, constants)?;
-            let rhs = imported_scalar_constant_type(rhs, constants)?;
+            let lhs = imported_constant_type(lhs, constants, enum_variants)?;
+            let rhs = imported_constant_type(rhs, constants, enum_variants)?;
             common_numeric_type(lhs, rhs)
         }
+        Expression::StructLiteral { type_name, .. } => type_name.map(DataType::Struct),
+        Expression::ArrayLiteral(values) => {
+            let element_type = values
+                .first()
+                .and_then(|value| imported_constant_type(value, constants, enum_variants))?;
+            Some(DataType::Array(
+                values.len() as u64,
+                Box::leak(Box::new(element_type)),
+            ))
+        }
+        Expression::Call { name, .. } => enum_variants
+            .get(name)
+            .map(|(name, _)| DataType::Enum(name)),
         Expression::If {
             then_branch,
             else_branch,
             ..
         } => {
-            let then_type = imported_scalar_constant_type(then_branch, constants)?;
-            let else_type = imported_scalar_constant_type(else_branch, constants)?;
+            let then_type = imported_constant_type(then_branch, constants, enum_variants)?;
+            let else_type = imported_constant_type(else_branch, constants, enum_variants)?;
             (then_type == else_type)
                 .then_some(then_type)
                 .or_else(|| common_numeric_type(then_type, else_type))
@@ -513,15 +569,26 @@ fn imported_scalar_constant_type(
     }
 }
 
-fn imported_scalar_constant_expression(
+fn imported_constant_expression(
     expression: &Expression,
     constants: &HashMap<String, DataType>,
+    enum_variants: &HashMap<String, (&'static str, Option<DataType>)>,
+    local_type_names: &HashSet<&'static str>,
+    expected: Option<DataType>,
 ) -> bool {
     match expression {
         Expression::LiteralNumber(_) | Expression::LiteralBool(_) => true,
-        Expression::Identifier(name) => constants.contains_key(name),
+        Expression::LiteralString(_) => {
+            matches!(expected, Some(DataType::Slice(element)) if *element == DataType::U8)
+        }
+        Expression::Identifier(name) => {
+            constants.contains_key(name)
+                || enum_variants
+                    .get(name)
+                    .is_some_and(|(_, payload)| payload.is_none())
+        }
         Expression::Negate(inner) | Expression::Not(inner) => {
-            imported_scalar_constant_expression(inner, constants)
+            imported_constant_expression(inner, constants, enum_variants, local_type_names, None)
         }
         Expression::Add(lhs, rhs)
         | Expression::Subtract(lhs, rhs)
@@ -536,23 +603,78 @@ fn imported_scalar_constant_expression(
         | Expression::GreaterThanOrEqual(lhs, rhs)
         | Expression::And(lhs, rhs)
         | Expression::Or(lhs, rhs) => {
-            imported_scalar_constant_expression(lhs, constants)
-                && imported_scalar_constant_expression(rhs, constants)
+            imported_constant_expression(lhs, constants, enum_variants, local_type_names, None)
+                && imported_constant_expression(
+                    rhs,
+                    constants,
+                    enum_variants,
+                    local_type_names,
+                    None,
+                )
+        }
+        Expression::StructLiteral { fields, .. } => fields.iter().all(|(_, value)| {
+            imported_constant_expression(value, constants, enum_variants, local_type_names, None)
+        }),
+        Expression::ArrayLiteral(values) => {
+            if matches!(expected, Some(DataType::Slice(_))) {
+                return false;
+            }
+            let element_type = match expected {
+                Some(DataType::Array(_, element)) => Some(*element),
+                _ => None,
+            };
+            values.iter().all(|value| {
+                imported_constant_expression(
+                    value,
+                    constants,
+                    enum_variants,
+                    local_type_names,
+                    element_type,
+                )
+            })
+        }
+        Expression::Call { name, arguments } => {
+            enum_variants.contains_key(name)
+                && arguments.iter().all(|argument| {
+                    imported_constant_expression(
+                        argument,
+                        constants,
+                        enum_variants,
+                        local_type_names,
+                        None,
+                    )
+                })
         }
         Expression::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            imported_scalar_constant_expression(condition, constants)
-                && imported_scalar_constant_expression(then_branch, constants)
-                && imported_scalar_constant_expression(else_branch, constants)
+            imported_constant_expression(
+                condition,
+                constants,
+                enum_variants,
+                local_type_names,
+                None,
+            ) && imported_constant_expression(
+                then_branch,
+                constants,
+                enum_variants,
+                local_type_names,
+                expected,
+            ) && imported_constant_expression(
+                else_branch,
+                constants,
+                enum_variants,
+                local_type_names,
+                expected,
+            )
         }
         _ => false,
     }
 }
 
-fn is_scalar_type(data_type: DataType) -> bool {
+fn is_constant_type(data_type: DataType, local_type_names: &HashSet<&'static str>) -> bool {
     matches!(
         data_type,
         DataType::U8
@@ -567,7 +689,43 @@ fn is_scalar_type(data_type: DataType) -> bool {
             | DataType::F32
             | DataType::F64
             | DataType::Bool
-    )
+    ) || match data_type {
+        DataType::Struct(name) | DataType::Enum(name) => local_type_names.contains(name),
+        DataType::Array(_, element) => {
+            !matches!(*element, DataType::Slice(_)) && is_constant_type(*element, local_type_names)
+        }
+        DataType::Slice(element) => *element == DataType::U8,
+        _ => false,
+    }
+}
+
+fn is_importable_constant_type(
+    data_type: DataType,
+    public_type_names: &HashSet<&'static str>,
+) -> bool {
+    matches!(
+        data_type,
+        DataType::U8
+            | DataType::U16
+            | DataType::U32
+            | DataType::U64
+            | DataType::I8
+            | DataType::I16
+            | DataType::I32
+            | DataType::I64
+            | DataType::F16
+            | DataType::F32
+            | DataType::F64
+            | DataType::Bool
+    ) || match data_type {
+        DataType::Struct(name) | DataType::Enum(name) => public_type_names.contains(name),
+        DataType::Array(_, element) => {
+            !matches!(*element, DataType::Slice(_))
+                && is_importable_constant_type(*element, public_type_names)
+        }
+        DataType::Slice(element) => *element == DataType::U8,
+        _ => false,
+    }
 }
 
 pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<TypeError>> {

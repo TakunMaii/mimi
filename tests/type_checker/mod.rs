@@ -391,6 +391,41 @@ fn imports_public_structs_and_enums_with_package_qualified_types() {
 }
 
 #[test]
+fn imports_public_aggregate_constants_and_hides_private_types() {
+    let path = std::env::temp_dir().join(format!(
+        "mimi_import_aggregates_{}.mimi",
+        std::process::id()
+    ));
+    std::fs::write(
+        &path,
+        "pub Point :: struct { x : i32, y : i32 } pub origin :: Point { x=33, y=0 } pub numbers : [2]i32 : [2, 3] pub Choice :: enum { none, some(i32) } pub choice :: some(7) pub message :: \"A\" Secret :: struct { value : i32 } pub hidden :: Secret { value=1 }",
+    )
+    .unwrap();
+    let source = format!(
+        "geo :: @import(\"{}\") main :: fn () i32 {{ geo.origin.x + geo.numbers[0] + match geo.choice {{ some(value) => value, none => 0 }} }}",
+        path.display()
+    );
+    let types = check(&parse(tokenize(source.chars()))).unwrap();
+    assert_eq!(types["geo.origin"], DataType::Struct("geo.Point"));
+    assert_eq!(
+        types["geo.numbers"],
+        DataType::Array(2, Box::leak(Box::new(DataType::I32)))
+    );
+    assert_eq!(types["geo.choice"], DataType::Enum("geo.Choice"));
+    assert_eq!(
+        types["geo.message"],
+        DataType::Slice(Box::leak(Box::new(DataType::U8)))
+    );
+
+    let source = format!(
+        "geo :: @import(\"{}\") result := geo.hidden.value",
+        path.display()
+    );
+    assert!(check(&parse(tokenize(source.chars()))).is_err());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn rejects_slice_return_types_for_external_functions() {
     let ast = parse(tokenize("extern get_text : fn()[]u8".chars()));
     let errors = check(&ast).unwrap_err();

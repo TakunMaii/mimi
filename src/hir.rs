@@ -116,6 +116,27 @@ pub(crate) struct HirModule {
 pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
     let mut module = HirModule::default();
     let mut constant_types = std::collections::HashMap::new();
+    let enum_variants = nodes
+        .iter()
+        .flat_map(|node| {
+            let node = match node {
+                ASTNode::Public(declaration) => declaration.as_ref(),
+                node => node,
+            };
+            match node {
+                ASTNode::EnumDefinition { name, variants } => variants
+                    .iter()
+                    .map(|(variant, payload)| {
+                        (
+                            variant.clone(),
+                            (HirType::Named((*name).to_string()), payload.is_some()),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            }
+        })
+        .collect::<std::collections::HashMap<_, _>>();
     for node in nodes {
         let node = match node {
             ASTNode::Public(inner) => inner.as_ref(),
@@ -159,11 +180,17 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
         } = node
         {
             let namespace = name.rsplit_once('.').map(|(namespace, _)| namespace);
-            let data_type = data_type
-                .map(Into::into)
-                .or_else(|| infer_scalar_constant_type(value, None, &constant_types, namespace));
-            if let Some(data_type) = data_type.filter(is_scalar_type)
-                && is_scalar_constant_expression(value, &constant_types, namespace)
+            let data_type = data_type.map(Into::into).or_else(|| {
+                infer_constant_type(value, None, &constant_types, namespace, &enum_variants)
+            });
+            if let Some(data_type) = data_type.filter(is_constant_type)
+                && is_constant_expression(
+                    value,
+                    &constant_types,
+                    namespace,
+                    &enum_variants,
+                    Some(&data_type),
+                )
             {
                 module.constants.push(HirConstant {
                     name: name.clone(),
@@ -259,30 +286,49 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
     module
 }
 
-fn infer_scalar_constant_type(
+fn infer_constant_type(
     expression: &Expression,
     expected: Option<&HirType>,
     constants: &std::collections::HashMap<String, HirType>,
     namespace: Option<&str>,
+    enum_variants: &std::collections::HashMap<String, (HirType, bool)>,
 ) -> Option<HirType> {
     match expression {
         Expression::LiteralBool(_) => Some(HirType::Bool),
+        Expression::LiteralString(_) => expected
+            .filter(|ty| matches!(ty, HirType::Slice(inner) if **inner == HirType::Integer { bits: 8, signed: false }))
+            .cloned()
+            .or_else(|| {
+                Some(HirType::Slice(Box::new(HirType::Integer {
+                    bits: 8,
+                    signed: false,
+                })))
+            }),
         Expression::LiteralNumber(text) => expected
             .filter(|data_type| is_scalar_numeric_type(data_type))
             .cloned()
             .or_else(|| inferred_integer_type(text))
             .or_else(|| text.contains('.').then_some(HirType::Float { bits: 64 })),
-        Expression::Identifier(name) => constants.get(name).cloned().or_else(|| {
-            namespace
-                .and_then(|namespace| constants.get(&format!("{namespace}.{name}")))
-                .cloned()
-        }),
+        Expression::Identifier(name) => constants
+            .get(name)
+            .cloned()
+            .or_else(|| {
+                namespace
+                    .and_then(|namespace| constants.get(&format!("{namespace}.{name}")))
+                    .cloned()
+            })
+            .or_else(|| {
+                enum_variants
+                    .get(name)
+                    .filter(|(_, has_payload)| !has_payload)
+                    .map(|(owner, _)| owner.clone())
+            }),
         Expression::Negate(inner) => match inner.as_ref() {
             Expression::LiteralNumber(text) if expected.is_none() => {
                 inferred_negative_integer_type(text)
                     .or_else(|| text.contains('.').then_some(HirType::Float { bits: 64 }))
             }
-            _ => infer_scalar_constant_type(inner, expected, constants, namespace)
+            _ => infer_constant_type(inner, expected, constants, namespace, enum_variants)
                 .filter(is_scalar_numeric_type),
         },
         Expression::Not(_) | Expression::And(_, _) | Expression::Or(_, _) => Some(HirType::Bool),
@@ -297,24 +343,51 @@ fn infer_scalar_constant_type(
         | Expression::Multiply(lhs, rhs)
         | Expression::Divide(lhs, rhs)
         | Expression::Remainder(lhs, rhs) => {
-            let lhs_type = infer_scalar_constant_type(lhs, expected, constants, namespace)?;
+            let lhs_type = infer_constant_type(lhs, expected, constants, namespace, enum_variants)?;
             let rhs_type =
-                infer_scalar_constant_type(rhs, Some(&lhs_type), constants, namespace)
-                    .or_else(|| infer_scalar_constant_type(rhs, expected, constants, namespace))?;
+                infer_constant_type(rhs, Some(&lhs_type), constants, namespace, enum_variants)
+                    .or_else(|| {
+                        infer_constant_type(rhs, expected, constants, namespace, enum_variants)
+                    })?;
             common_numeric_type(&lhs_type, &rhs_type)
         }
+        Expression::StructLiteral { type_name, .. } => type_name
+            .map(|name| HirType::Named(name.to_string()))
+            .or_else(|| {
+                expected
+                    .cloned()
+                    .filter(|ty| matches!(ty, HirType::Named(_)))
+            }),
+        Expression::ArrayLiteral(values) => {
+            if let Some(array_type @ HirType::Array { .. }) = expected {
+                return Some(array_type.clone());
+            }
+            let element_type = values.first().and_then(|first| {
+                infer_constant_type(first, None, constants, namespace, enum_variants)
+            })?;
+            Some(HirType::Array {
+                length: values.len() as u64,
+                element: Box::new(element_type),
+            })
+        }
+        Expression::Call { name, .. } => enum_variants.get(name).map(|(owner, _)| owner.clone()),
         Expression::If {
             then_branch,
             else_branch,
             ..
         } => {
             let then_type =
-                infer_scalar_constant_type(then_branch, expected, constants, namespace)?;
-            let else_type =
-                infer_scalar_constant_type(else_branch, Some(&then_type), constants, namespace)
-                    .or_else(|| {
-                        infer_scalar_constant_type(else_branch, expected, constants, namespace)
-                    })?;
+                infer_constant_type(then_branch, expected, constants, namespace, enum_variants)?;
+            let else_type = infer_constant_type(
+                else_branch,
+                Some(&then_type),
+                constants,
+                namespace,
+                enum_variants,
+            )
+            .or_else(|| {
+                infer_constant_type(else_branch, expected, constants, namespace, enum_variants)
+            })?;
             (then_type == else_type)
                 .then_some(then_type.clone())
                 .or_else(|| common_numeric_type(&then_type, &else_type))
@@ -323,20 +396,28 @@ fn infer_scalar_constant_type(
     }
 }
 
-fn is_scalar_constant_expression(
+fn is_constant_expression(
     expression: &Expression,
     constants: &std::collections::HashMap<String, HirType>,
     namespace: Option<&str>,
+    enum_variants: &std::collections::HashMap<String, (HirType, bool)>,
+    expected: Option<&HirType>,
 ) -> bool {
     match expression {
         Expression::LiteralBool(_) | Expression::LiteralNumber(_) => true,
+        Expression::LiteralString(_) => {
+            matches!(expected, Some(HirType::Slice(inner)) if **inner == HirType::Integer { bits: 8, signed: false })
+        }
         Expression::Identifier(name) => {
             constants.contains_key(name)
                 || namespace
                     .is_some_and(|namespace| constants.contains_key(&format!("{namespace}.{name}")))
+                || enum_variants
+                    .get(name)
+                    .is_some_and(|(_, has_payload)| !has_payload)
         }
         Expression::Negate(inner) | Expression::Not(inner) => {
-            is_scalar_constant_expression(inner, constants, namespace)
+            is_constant_expression(inner, constants, namespace, enum_variants, None)
         }
         Expression::Add(lhs, rhs)
         | Expression::Subtract(lhs, rhs)
@@ -351,27 +432,64 @@ fn is_scalar_constant_expression(
         | Expression::GreaterThanOrEqual(lhs, rhs)
         | Expression::And(lhs, rhs)
         | Expression::Or(lhs, rhs) => {
-            is_scalar_constant_expression(lhs, constants, namespace)
-                && is_scalar_constant_expression(rhs, constants, namespace)
+            is_constant_expression(lhs, constants, namespace, enum_variants, None)
+                && is_constant_expression(rhs, constants, namespace, enum_variants, None)
+        }
+        Expression::StructLiteral { fields, .. } => fields.iter().all(|(_, value)| {
+            is_constant_expression(value, constants, namespace, enum_variants, None)
+        }),
+        Expression::ArrayLiteral(values) => {
+            if matches!(expected, Some(HirType::Slice(_))) {
+                return false;
+            }
+            let element_type = match expected {
+                Some(HirType::Array { element, .. }) => Some(element.as_ref()),
+                _ => None,
+            };
+            values.iter().all(|value| {
+                is_constant_expression(value, constants, namespace, enum_variants, element_type)
+            })
+        }
+        Expression::Call { name, arguments } => {
+            enum_variants.contains_key(name)
+                && arguments.iter().all(|argument| {
+                    is_constant_expression(argument, constants, namespace, enum_variants, None)
+                })
         }
         Expression::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            is_scalar_constant_expression(condition, constants, namespace)
-                && is_scalar_constant_expression(then_branch, constants, namespace)
-                && is_scalar_constant_expression(else_branch, constants, namespace)
+            is_constant_expression(condition, constants, namespace, enum_variants, None)
+                && is_constant_expression(
+                    then_branch,
+                    constants,
+                    namespace,
+                    enum_variants,
+                    expected,
+                )
+                && is_constant_expression(
+                    else_branch,
+                    constants,
+                    namespace,
+                    enum_variants,
+                    expected,
+                )
         }
         _ => false,
     }
 }
 
-fn is_scalar_type(data_type: &HirType) -> bool {
+fn is_constant_type(data_type: &HirType) -> bool {
     matches!(
         data_type,
-        HirType::Integer { .. } | HirType::Float { bits: 16 | 32 | 64 } | HirType::Bool
-    )
+        HirType::Integer { .. }
+            | HirType::Float { bits: 16 | 32 | 64 }
+            | HirType::Bool
+            | HirType::Named(_)
+    ) || matches!(data_type, HirType::Array { element, .. } if !matches!(element.as_ref(), HirType::Slice(_)) && is_constant_type(element))
+        || matches!(data_type, HirType::Slice(inner) if **inner == HirType::Integer { bits: 8, signed: false })
 }
 
 fn is_scalar_numeric_type(data_type: &HirType) -> bool {
