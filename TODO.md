@@ -45,8 +45,9 @@ and focused regression coverage; it does not imply support on every target.
   - [x] Scale pointer plus/minus integer by scalar element width; allow integer plus pointer.
   - [x] Compute element distances when subtracting pointers to the same scalar type.
   - [x] Scale and index pointers to fixed arrays of scalar and pointer elements.
+  - [x] Scale and index pointers to pointers by pointer width.
   - [ ] Lay out and index pointers to structs and enums.
-  - [ ] Define compound-pointer arithmetic.
+  - [ ] Define pointer arithmetic for struct and enum pointees.
 
 ## Functions and Modules
 
