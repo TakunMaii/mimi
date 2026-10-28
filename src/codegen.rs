@@ -194,8 +194,8 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 LirInstruction::FloatNeg { .. } => 3,
                 LirInstruction::LoadSlot { .. } | LirInstruction::StoreSlot { .. } => 1,
                 LirInstruction::SlotAddress { slot, .. } => slot_address_words(*slot),
-                LirInstruction::IndexAddress { .. }
-                | LirInstruction::LoadIndirect { .. }
+                LirInstruction::IndexAddress { scale, .. } => index_address_words(*scale)?,
+                LirInstruction::LoadIndirect { .. }
                 | LirInstruction::LoadByteIndirect { .. }
                 | LirInstruction::LoadSizedIndirect { .. }
                 | LirInstruction::StoreIndirect { .. }
@@ -417,6 +417,50 @@ fn validate_float_width(width: u16) -> Result<(), String> {
     }
 }
 
+fn index_address_words(scale: u64) -> Result<usize, String> {
+    if scale == 0 {
+        return Err("ARM64 index scale cannot be zero".into());
+    }
+    if scale.is_power_of_two() {
+        return Ok(1);
+    }
+    let immediate_words = (0..4)
+        .filter(|shift| ((scale >> (shift * 16)) & 0xffff) != 0)
+        .count()
+        .max(1);
+    Ok(immediate_words + 2)
+}
+
+fn encode_index_address(
+    bytes: &mut Vec<u8>,
+    destination: ValueId,
+    base: ValueId,
+    index: ValueId,
+    scale: u64,
+) -> Result<(), String> {
+    if scale == 0 {
+        return Err("ARM64 index scale cannot be zero".into());
+    }
+    if scale.is_power_of_two() {
+        push_word(
+            bytes,
+            0x8b00_0000
+                | (index.0 << 16)
+                | (scale.trailing_zeros() << 10)
+                | (base.0 << 5)
+                | destination.0,
+        );
+    } else {
+        encode_immediate(16, scale, bytes)?;
+        push_word(bytes, 0x9b00_7c00 | (16 << 16) | (index.0 << 5) | 17);
+        push_word(
+            bytes,
+            0x8b00_0000 | (17 << 16) | (base.0 << 5) | destination.0,
+        );
+    }
+    Ok(())
+}
+
 fn slot_address_words(slot: crate::mir::SlotId) -> usize {
     (slot.0 * 8).div_ceil(4095).max(1) as usize
 }
@@ -524,6 +568,16 @@ fn encode_function(
     let mut branches = Vec::new();
     for block in &function.blocks {
         for instruction in &block.instructions {
+            if let LirInstruction::IndexAddress {
+                destination,
+                base,
+                index,
+                scale,
+            } = instruction
+            {
+                encode_index_address(bytes, *destination, *base, *index, *scale)?;
+                continue;
+            }
             let word = match instruction {
                 LirInstruction::LoadImmediate { register, value } => {
                     encode_immediate(register.0, *value as u64, bytes)?;
@@ -609,25 +663,7 @@ fn encode_function(
                     encode_slot_address(bytes, destination.0, slot.0 * 8);
                     continue;
                 }
-                LirInstruction::IndexAddress {
-                    destination,
-                    base,
-                    index,
-                    scale,
-                } => {
-                    let shift = match scale {
-                        1 => 0,
-                        2 => 1,
-                        4 => 2,
-                        8 => 3,
-                        _ => return Err(format!("unsupported ARM64 index scale {scale}")),
-                    };
-                    0x8b00_0000
-                        | (index.0 << 16)
-                        | ((shift as u32) << 10)
-                        | (base.0 << 5)
-                        | destination.0
-                }
+                LirInstruction::IndexAddress { .. } => unreachable!(),
                 LirInstruction::LoadIndirect {
                     destination,
                     address,
@@ -942,8 +978,8 @@ fn block_encoded_size(
             LirInstruction::FloatNeg { .. } => 3,
             LirInstruction::LoadSlot { .. } | LirInstruction::StoreSlot { .. } => 1,
             LirInstruction::SlotAddress { slot, .. } => slot_address_words(*slot),
-            LirInstruction::IndexAddress { .. }
-            | LirInstruction::LoadIndirect { .. }
+            LirInstruction::IndexAddress { scale, .. } => index_address_words(*scale)?,
+            LirInstruction::LoadIndirect { .. }
             | LirInstruction::LoadByteIndirect { .. }
             | LirInstruction::LoadSizedIndirect { .. }
             | LirInstruction::StoreIndirect { .. }
@@ -1792,25 +1828,7 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     base,
                     index,
                     scale,
-                } => match scale {
-                    1 => assembly.push_str(&format!(
-                        "    add x{}, x{}, x{}\n",
-                        destination.0, base.0, index.0
-                    )),
-                    2 => assembly.push_str(&format!(
-                        "    add x{}, x{}, x{}, lsl #1\n",
-                        destination.0, base.0, index.0
-                    )),
-                    4 => assembly.push_str(&format!(
-                        "    add x{}, x{}, x{}, lsl #2\n",
-                        destination.0, base.0, index.0
-                    )),
-                    8 => assembly.push_str(&format!(
-                        "    add x{}, x{}, x{}, lsl #3\n",
-                        destination.0, base.0, index.0
-                    )),
-                    _ => return Err(format!("unsupported ARM64 index scale {scale}")),
-                },
+                } => emit_index_address_assembly(assembly, *destination, *base, *index, *scale)?,
                 LirInstruction::LoadIndirect {
                     destination,
                     address,
@@ -1933,6 +1951,34 @@ fn emit_immediate(assembly: &mut String, register: u32, value: u64) {
             ));
         }
     }
+}
+
+fn emit_index_address_assembly(
+    assembly: &mut String,
+    destination: ValueId,
+    base: ValueId,
+    index: ValueId,
+    scale: u64,
+) -> Result<(), String> {
+    if scale == 0 {
+        return Err("ARM64 index scale cannot be zero".into());
+    }
+    if scale.is_power_of_two() {
+        assembly.push_str(&format!(
+            "    add x{}, x{}, x{}, lsl #{}\n",
+            destination.0,
+            base.0,
+            index.0,
+            scale.trailing_zeros()
+        ));
+    } else {
+        emit_immediate(assembly, 16, scale);
+        assembly.push_str(&format!(
+            "    mul x17, x{}, x16\n    add x{}, x{}, x17\n",
+            index.0, destination.0, base.0
+        ));
+    }
+    Ok(())
 }
 
 fn emit_stack_adjust(assembly: &mut String, size: u32, subtract: bool) {

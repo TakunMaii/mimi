@@ -145,7 +145,7 @@ pub(crate) enum MirInstruction {
         result: ValueId,
         base: ValueId,
         index: ValueId,
-        scale: u8,
+        scale: u64,
     },
     LoadIndirect {
         result: ValueId,
@@ -222,8 +222,8 @@ struct Builder {
     variables: std::collections::HashMap<String, Variable>,
     array_lengths: std::collections::HashMap<String, u64>,
     slice_lengths: std::collections::HashMap<String, SlotId>,
-    slice_scales: std::collections::HashMap<String, u8>,
-    pointer_scales: std::collections::HashMap<String, u8>,
+    slice_scales: std::collections::HashMap<String, u64>,
+    pointer_scales: std::collections::HashMap<String, u64>,
     enum_variants: std::collections::HashMap<String, EnumVariant>,
     struct_fields: std::collections::HashMap<String, Vec<(String, Option<Expression>)>>,
     struct_field_types: std::collections::HashMap<String, Vec<(String, HirType)>>,
@@ -379,7 +379,9 @@ impl Builder {
                             result: address,
                             base,
                             index: index_value,
-                            scale: packed_size.expect("packed array has an element size"),
+                            scale: u64::from(
+                                packed_size.expect("packed array has an element size"),
+                            ),
                         });
                         match packed_size.expect("packed array has an element size") {
                             1 => self.emit(MirInstruction::StoreByteIndirect { address, value }),
@@ -423,8 +425,11 @@ impl Builder {
                     index,
                     scale,
                 });
-                let result = self.value();
                 let data_type = self.expression_type(expression);
+                if matches!(data_type, Some(HirType::Array { .. })) {
+                    return Some(address);
+                }
+                let result = self.value();
                 self.emit_load_indirect(result, address, data_type.as_ref());
                 if let Some(data_type) = data_type {
                     self.value_types.insert(result, data_type);
@@ -434,7 +439,9 @@ impl Builder {
             Expression::AddressOf(inner) => {
                 let address = match inner.as_ref() {
                     Expression::Identifier(name) => {
-                        if self.variable_structs.contains_key(name) {
+                        if self.variable_structs.contains_key(name)
+                            || matches!(self.variable_types.get(name), Some(HirType::Array { .. }))
+                        {
                             return self.expression(inner);
                         }
                         let Variable::Slot(slot) = self.variables.get(name).copied()? else {
@@ -1400,7 +1407,7 @@ impl Builder {
                     (&lhs_type, &rhs_type)
                 && lhs_element == rhs_element
             {
-                let scale = scalar_storage_size(lhs_element)?;
+                let scale = pointer_stride_from_hir_type(lhs_element)?;
                 let lhs = self.expression(lhs)?;
                 let rhs = self.expression(rhs)?;
                 let byte_difference = self.value();
@@ -1522,7 +1529,7 @@ impl Builder {
         &mut self,
         expression: &Expression,
         expected: &HirType,
-    ) -> Option<(ValueId, ValueId, u8)> {
+    ) -> Option<(ValueId, ValueId, u64)> {
         let previous = self.expected_type_hint.replace(expected.clone());
         let result = self.lower_array_view(expression);
         self.expected_type_hint = previous;
@@ -2000,7 +2007,14 @@ impl Builder {
         }
     }
 
-    fn index_scale(&self, object: &Expression) -> u8 {
+    fn index_scale(&self, object: &Expression) -> u64 {
+        match self.expression_type(object) {
+            Some(HirType::Pointer(element)) => return pointer_scale_from_hir_type(&element),
+            Some(HirType::Array { element, .. }) | Some(HirType::Slice(element)) => {
+                return pointer_scale_from_hir_type(&element);
+            }
+            _ => {}
+        }
         match object {
             Expression::Identifier(name) => self
                 .slice_scales
@@ -2019,19 +2033,24 @@ impl Builder {
         }
     }
 
-    fn lower_index_base(&mut self, object: &Expression) -> Option<(ValueId, u8)> {
-        if let Expression::Identifier(name) = object
-            && self.pointer_scales.contains_key(name)
-        {
+    fn lower_index_base(&mut self, object: &Expression) -> Option<(ValueId, u64)> {
+        if matches!(
+            self.expression_type(object),
+            Some(HirType::Pointer(_)) | Some(HirType::Array { .. })
+        ) {
             return Some((self.expression(object)?, self.index_scale(object)));
         }
         let (base, _, scale) = self.lower_array_view(object)?;
         Some((base, scale))
     }
 
-    fn address_target_scale(&self, target: &Expression) -> u8 {
+    fn address_target_scale(&self, target: &Expression) -> u64 {
         match target {
             Expression::Index { object, .. } => self.index_scale(object),
+            Expression::Identifier(name) => match self.variable_types.get(name) {
+                Some(data_type @ HirType::Array { .. }) => pointer_scale_from_hir_type(data_type),
+                _ => 8,
+            },
             Expression::Dereference(pointer) => match pointer.as_ref() {
                 Expression::Identifier(name) => self.pointer_scales.get(name).copied().unwrap_or(8),
                 _ => 8,
@@ -2040,7 +2059,7 @@ impl Builder {
         }
     }
 
-    fn lower_array_view(&mut self, expression: &Expression) -> Option<(ValueId, ValueId, u8)> {
+    fn lower_array_view(&mut self, expression: &Expression) -> Option<(ValueId, ValueId, u64)> {
         match expression {
             Expression::ArrayLiteral(values) => {
                 let base = self.expression(expression)?;
@@ -2828,8 +2847,23 @@ fn struct_name_from_hir_type(
     }
 }
 
-fn pointer_scale_from_hir_type(data_type: &HirType) -> u8 {
-    scalar_storage_size(data_type).unwrap_or(8)
+fn pointer_scale_from_hir_type(data_type: &HirType) -> u64 {
+    pointer_stride_from_hir_type(data_type).unwrap_or(8)
+}
+
+fn pointer_stride_from_hir_type(data_type: &HirType) -> Option<u64> {
+    if let Some(size) = scalar_storage_size(data_type) {
+        return Some(u64::from(size));
+    }
+    match data_type {
+        HirType::Pointer(_) | HirType::Function { .. } => Some(8),
+        HirType::Array { length, element }
+            if *length > 0 && scalar_storage_size(element).is_some() =>
+        {
+            length.checked_mul(pointer_stride_from_hir_type(element)?)
+        }
+        _ => None,
+    }
 }
 
 fn scalar_storage_size(data_type: &HirType) -> Option<u8> {
@@ -2853,7 +2887,7 @@ fn float_width(data_type: &HirType) -> Option<u16> {
     }
 }
 
-fn pointer_scale_from_data_type(data_type: &crate::parser::DataType) -> u8 {
+fn pointer_scale_from_data_type(data_type: &crate::parser::DataType) -> u64 {
     match data_type {
         crate::parser::DataType::U8 | crate::parser::DataType::I8 | crate::parser::DataType::F8 => {
             1
@@ -2865,6 +2899,9 @@ fn pointer_scale_from_data_type(data_type: &crate::parser::DataType) -> u8 {
         | crate::parser::DataType::I32
         | crate::parser::DataType::F32 => 4,
         crate::parser::DataType::Bool => 1,
+        crate::parser::DataType::Array(length, element) if *length > 0 => length
+            .checked_mul(pointer_scale_from_data_type(element))
+            .unwrap_or(8),
         _ => 8,
     }
 }

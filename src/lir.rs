@@ -136,7 +136,7 @@ pub(crate) enum LirInstruction {
         destination: ValueId,
         base: ValueId,
         index: ValueId,
-        scale: u8,
+        scale: u64,
     },
     LoadIndirect {
         destination: ValueId,

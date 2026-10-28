@@ -752,13 +752,13 @@ fn infer_expression(
             let rhs_type = infer_expression(rhs, scopes, functions, structs, None)?;
             if let (DataType::Pointer(inner), offset_type) = (lhs_type, rhs_type)
                 && offset_type.is_integer()
-                && is_scalar_pointer_element(*inner)
+                && pointer_stride(*inner).is_some()
             {
                 return Ok(lhs_type);
             }
             if let (offset_type, DataType::Pointer(inner)) = (lhs_type, rhs_type)
                 && offset_type.is_integer()
-                && is_scalar_pointer_element(*inner)
+                && pointer_stride(*inner).is_some()
             {
                 return Ok(rhs_type);
             }
@@ -776,13 +776,13 @@ fn infer_expression(
             if let (DataType::Pointer(lhs_element), DataType::Pointer(rhs_element)) =
                 (lhs_type, rhs_type)
                 && lhs_element == rhs_element
-                && is_scalar_pointer_element(*lhs_element)
+                && pointer_stride(*lhs_element).is_some()
             {
                 return Ok(DataType::I64);
             }
             if let (DataType::Pointer(inner), offset_type) = (lhs_type, rhs_type)
                 && offset_type.is_integer()
-                && is_scalar_pointer_element(*inner)
+                && pointer_stride(*inner).is_some()
             {
                 return Ok(lhs_type);
             }
@@ -1210,9 +1210,9 @@ fn infer_expression(
                 return Err(error("array index must be an integer"));
             }
             match object_type {
-                DataType::Array(_, element)
-                | DataType::Slice(element)
-                | DataType::Pointer(element) => Ok(*element),
+                DataType::Array(_, element) | DataType::Slice(element) => Ok(*element),
+                DataType::Pointer(element) if pointer_stride(*element).is_some() => Ok(*element),
+                DataType::Pointer(_) => Err(error("pointer element layout is not supported")),
                 _ => Err(error("indexing requires an array, slice, or pointer")),
             }
         }
@@ -1322,8 +1322,19 @@ fn check_receiver_compatibility(
     }
 }
 
-fn is_scalar_pointer_element(data_type: DataType) -> bool {
-    data_type.is_integer() || data_type.is_float() || data_type == DataType::Bool
+fn pointer_stride(data_type: DataType) -> Option<u64> {
+    if data_type.is_numeric() || data_type == DataType::Bool {
+        return Some(u64::from(data_type.bit_width().div_ceil(8)));
+    }
+    match data_type {
+        DataType::Pointer(_) | DataType::Function(_, _) => Some(8),
+        DataType::Array(length, element)
+            if length > 0 && (element.is_numeric() || *element == DataType::Bool) =>
+        {
+            length.checked_mul(pointer_stride(*element)?)
+        }
+        _ => None,
+    }
 }
 
 fn is_constant_expression(expression: &Expression) -> bool {
