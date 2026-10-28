@@ -356,6 +356,19 @@ impl Builder {
                 self.emit(MirInstruction::LoadIndirect { result, address });
                 Some(result)
             }
+            Expression::StaticAccess { type_name, member } => {
+                let symbol = self
+                    .method_targets
+                    .get(&(type_name.clone(), member.clone()))?
+                    .symbol
+                    .clone();
+                let result = self.value();
+                self.emit(MirInstruction::LoadFunctionAddress {
+                    result,
+                    symbol: format!("_{symbol}"),
+                });
+                Some(result)
+            }
             Expression::LiteralNumber(text) => {
                 let result = self.value();
                 let value = text.parse().ok()?;
@@ -1249,6 +1262,12 @@ impl Builder {
                 .get(name)
                 .cloned()
                 .or_else(|| self.function_signatures.get(name).cloned()),
+            Expression::StaticAccess { type_name, member } => {
+                let target = self
+                    .method_targets
+                    .get(&(type_name.clone(), member.clone()))?;
+                self.function_signatures.get(&target.symbol).cloned()
+            }
             _ => None,
         }
     }

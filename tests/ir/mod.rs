@@ -932,6 +932,36 @@ fn builds_and_runs_function_values_and_indirect_calls() {
 }
 
 #[test]
+fn builds_and_runs_static_method_values() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_method_value_source_{}.mi",
+        std::process::id()
+    ));
+    let path =
+        std::env::temp_dir().join(format!("mimi_method_value_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "pos :: struct { offset() :: fn (value : i32) i32 { value + 1 } } apply :: fn (function : fn(i32)i32, value : i32) i32 { function(value) } main :: fn () i32 { method := pos::offset apply(pos::offset, 5) + method(5) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(12));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn lowers_string_literals_to_data_symbols_in_lir() {
     let ast = parse(tokenize(r#"main :: fn () []u8 { "hello" }"#.chars()));
     let hir = hir::lower_ast(&ast);
