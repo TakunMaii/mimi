@@ -430,18 +430,11 @@ fn checks_pointer_difference_for_matching_scalar_types() {
 }
 
 #[test]
-fn rejects_pointer_arithmetic_on_compound_elements() {
+fn checks_pointer_arithmetic_on_compound_elements() {
     let ast = parse(tokenize(
-        "pos :: struct { x : i32 } main :: fn () void { point := pos { x = 1 } pointer := &point pointer + 1 }"
-            .chars(),
+        "pos :: struct { x : i32, y : i32 } result :: enum { some(i32), none } shift_pos :: fn (pointer : *pos) *pos { pointer + 1 } distance_pos :: fn (left : *pos, right : *pos) i64 { right - left } shift_result :: fn (pointer : *result) *result { pointer + 1 } distance_result :: fn (left : *result, right : *result) i64 { right - left } main :: fn () void {}".chars(),
     ));
-    let errors = check(&ast).unwrap_err();
-    assert_eq!(errors.len(), 1);
-
-    let indexed = parse(tokenize(
-        "pos :: struct { x : i32 } main :: fn (pointer : *pos) i32 { pointer[0].x }".chars(),
-    ));
-    assert!(check(&indexed).is_err());
+    check(&ast).unwrap();
 }
 
 #[test]

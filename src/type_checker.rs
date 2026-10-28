@@ -808,13 +808,13 @@ fn infer_expression(
             let rhs_type = infer_expression(rhs, scopes, functions, structs, None)?;
             if let (DataType::Pointer(inner), offset_type) = (lhs_type, rhs_type)
                 && offset_type.is_integer()
-                && pointer_stride(*inner).is_some()
+                && pointer_stride(*inner, structs).is_some()
             {
                 return Ok(lhs_type);
             }
             if let (offset_type, DataType::Pointer(inner)) = (lhs_type, rhs_type)
                 && offset_type.is_integer()
-                && pointer_stride(*inner).is_some()
+                && pointer_stride(*inner, structs).is_some()
             {
                 return Ok(rhs_type);
             }
@@ -832,13 +832,13 @@ fn infer_expression(
             if let (DataType::Pointer(lhs_element), DataType::Pointer(rhs_element)) =
                 (lhs_type, rhs_type)
                 && lhs_element == rhs_element
-                && pointer_stride(*lhs_element).is_some()
+                && pointer_stride(*lhs_element, structs).is_some()
             {
                 return Ok(DataType::I64);
             }
             if let (DataType::Pointer(inner), offset_type) = (lhs_type, rhs_type)
                 && offset_type.is_integer()
-                && pointer_stride(*inner).is_some()
+                && pointer_stride(*inner, structs).is_some()
             {
                 return Ok(lhs_type);
             }
@@ -1267,7 +1267,9 @@ fn infer_expression(
             }
             match object_type {
                 DataType::Array(_, element) | DataType::Slice(element) => Ok(*element),
-                DataType::Pointer(element) if pointer_stride(*element).is_some() => Ok(*element),
+                DataType::Pointer(element) if pointer_stride(*element, structs).is_some() => {
+                    Ok(*element)
+                }
                 DataType::Pointer(_) => Err(error("pointer element layout is not supported")),
                 _ => Err(error("indexing requires an array, slice, or pointer")),
             }
@@ -1378,19 +1380,47 @@ fn check_receiver_compatibility(
     }
 }
 
-fn pointer_stride(data_type: DataType) -> Option<u64> {
+fn pointer_stride(data_type: DataType, structs: &HashMap<&'static str, StructInfo>) -> Option<u64> {
+    type_storage_stride(data_type, structs, &mut HashSet::new())
+}
+
+fn type_storage_stride(
+    data_type: DataType,
+    structs: &HashMap<&'static str, StructInfo>,
+    visiting: &mut HashSet<&'static str>,
+) -> Option<u64> {
     if data_type.is_numeric() || data_type == DataType::Bool {
         return Some(u64::from(data_type.bit_width().div_ceil(8)));
     }
     match data_type {
         DataType::Pointer(_) | DataType::Function(_, _) => Some(8),
-        DataType::Array(length, element)
-            if length > 0
-                && (element.is_numeric()
-                    || *element == DataType::Bool
-                    || matches!(element, DataType::Pointer(_) | DataType::Function(_, _))) =>
-        {
-            length.checked_mul(pointer_stride(*element)?)
+        DataType::Array(length, element) if length > 0 => {
+            length.checked_mul(type_storage_stride(*element, structs, visiting)?)
+        }
+        DataType::Struct(name) | DataType::Enum(name) => {
+            let info = structs.get(name)?;
+            if !info.variants.is_empty() {
+                return Some(if info.variants.values().any(Option::is_some) {
+                    16
+                } else {
+                    8
+                });
+            }
+            if !visiting.insert(name) {
+                return None;
+            }
+            let mut slots = 0u64;
+            for field in info.fields.values() {
+                let bytes = match field.data_type {
+                    DataType::Array(_, _) | DataType::Struct(_) | DataType::Enum(_) => {
+                        type_storage_stride(field.data_type, structs, visiting)?
+                    }
+                    _ => 8,
+                };
+                slots = slots.checked_add(bytes.div_ceil(8))?;
+            }
+            visiting.remove(name);
+            slots.checked_mul(8)
         }
         _ => None,
     }

@@ -558,6 +558,38 @@ fn builds_and_runs_arrays_of_payload_enums() {
 }
 
 #[test]
+fn builds_and_runs_pointers_to_structs_and_enums() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_compound_pointer_source_{}.mi",
+        std::process::id()
+    ));
+    let path = std::env::temp_dir().join(format!(
+        "mimi_compound_pointer_codegen_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "point :: struct { x : i32, y : i32 } result :: enum { some(i32), none } update :: fn (points : *point) i32 { points[1].x = 7 points[1].x + points[0].y } select :: fn (values : *result) i32 { match values[0] { some(value) => value, none => 0 } } read_matrix :: fn (matrix : *[2]point) i32 { matrix[0][1].x } shift_point :: fn (pointer : *point) *point { pointer + 1 } point_distance :: fn (left : *point, right : *point) i64 { right - left } shift_result :: fn (pointer : *result) *result { pointer + 1 } result_distance :: fn (left : *result, right : *result) i64 { right - left } main :: fn () i32 { points : [2]point = [point { x = 1, y = 2 }, point { x = 3, y = 4 }] values : [2]result = [none, some(8)] shifted_point := shift_point(&points[0]) shifted_result := shift_result(&values[0]) distances_ok := point_distance(&points[0], shifted_point) == 1 && result_distance(&values[0], shifted_result) == 1 && read_matrix(&points) == shifted_point[0].x answer := if distances_ok { shifted_point[0].x + select(shifted_result) } else { 0 } answer }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(11));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_nested_struct_field_access() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

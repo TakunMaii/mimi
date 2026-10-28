@@ -1472,7 +1472,7 @@ impl Builder {
                     (&lhs_type, &rhs_type)
                 && lhs_element == rhs_element
             {
-                let scale = pointer_stride_from_hir_type(lhs_element)?;
+                let scale = self.element_stride(lhs_element);
                 let lhs = self.expression(lhs)?;
                 let rhs = self.expression(rhs)?;
                 let byte_difference = self.value();
@@ -1527,7 +1527,7 @@ impl Builder {
                     result,
                     base: pointer,
                     index: offset,
-                    scale: pointer_scale_from_hir_type(&element_type),
+                    scale: self.element_stride(&element_type),
                 });
                 self.value_types
                     .insert(result, HirType::Pointer(Box::new(element_type)));

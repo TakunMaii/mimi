@@ -46,13 +46,13 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Return slices from Mimi functions as pointer in x0 and length in x1; reject C extern slice returns.
 - [x] Implement local addresses, pointer loads/stores, and pointer type checks.
 - [x] Lower pointer member access and typed pointer indexing in MIR.
-- [ ] Implement pointer-to-array layouts and remaining general pointer arithmetic.
+- [x] Implement pointer-to-array layouts and remaining general pointer arithmetic.
   - [x] Scale pointer plus/minus integer by scalar element width; allow integer plus pointer.
   - [x] Compute element distances when subtracting pointers to the same scalar type.
   - [x] Scale and index pointers to fixed arrays of scalar and pointer elements.
   - [x] Scale and index pointers to pointers by pointer width.
-  - [ ] Lay out and index pointers to structs and enums.
-  - [ ] Define pointer arithmetic for struct and enum pointees.
+  - [x] Lay out and index pointers to structs and enums.
+  - [x] Scale pointer arithmetic and differences for struct and enum pointees.
 
 ## Functions and Modules
 
