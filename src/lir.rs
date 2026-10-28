@@ -41,6 +41,7 @@ pub(crate) enum LirInstruction {
     LoadAddress {
         register: ValueId,
         symbol: String,
+        external: bool,
     },
     CallIndirect {
         result: Option<ValueId>,
@@ -321,14 +322,18 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                             LirInstruction::LoadAddress {
                                 register: *result,
                                 symbol,
+                                external: false,
                             }
                         }
-                        MirInstruction::LoadFunctionAddress { result, symbol } => {
-                            LirInstruction::LoadAddress {
-                                register: *result,
-                                symbol: symbol.clone(),
-                            }
-                        }
+                        MirInstruction::LoadFunctionAddress {
+                            result,
+                            symbol,
+                            external,
+                        } => LirInstruction::LoadAddress {
+                            register: *result,
+                            symbol: symbol.clone(),
+                            external: *external,
+                        },
                         MirInstruction::Call {
                             result,
                             result_slice_length,

@@ -70,7 +70,7 @@ and focused regression coverage; it does not imply support on every target.
   - [x] Compile imported functions with package-qualified symbols and resolve package-local calls.
   - [ ] Import and link exported types, constants, and external declarations with full visibility checks.
     - [x] Import public external declarations for direct calls, with package-qualified visibility and original link symbols.
-    - [ ] Load imported external function addresses through target-specific GOT or stub relocations.
+    - [x] Load imported external function addresses through target-specific GOT relocations.
     - [ ] Import exported types and enforce type visibility.
     - [ ] Lower and link exported constants with full visibility checks.
 

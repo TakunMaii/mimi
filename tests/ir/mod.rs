@@ -104,7 +104,7 @@ fn builds_and_runs_imported_external_functions() {
     std::fs::write(
         &source,
         format!(
-            "system :: @import(\"{}\") main :: fn () i32 {{ system.abs(-17) + system.call_abs(-2) }}",
+            "system :: @import(\"{}\") apply :: fn (function : fn(i32)i32, value : i32) i32 {{ function(value) }} main :: fn () i32 {{ system.abs(-17) + system.call_abs(-2) + apply(system.abs, -1) }}",
             package.display()
         ),
     )
@@ -118,7 +118,7 @@ fn builds_and_runs_imported_external_functions() {
     )
     .unwrap();
     let status = std::process::Command::new(&path).status().unwrap();
-    assert_eq!(status.code(), Some(19));
+    assert_eq!(status.code(), Some(20));
     std::fs::remove_file(package).unwrap();
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();

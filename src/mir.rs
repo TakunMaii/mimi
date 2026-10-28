@@ -50,6 +50,7 @@ pub(crate) enum MirInstruction {
     LoadFunctionAddress {
         result: ValueId,
         symbol: String,
+        external: bool,
     },
     Add {
         result: ValueId,
@@ -331,9 +332,12 @@ impl Builder {
                         let symbol = self.resolve_function_name(name);
                         self.function_signatures.get(&symbol)?;
                         let result = self.value();
+                        let external = self.external_symbols.contains_key(&symbol);
+                        let symbol = self.link_function_name(&symbol);
                         self.emit(MirInstruction::LoadFunctionAddress {
                             result,
                             symbol: format!("_{symbol}"),
+                            external,
                         });
                         Some(result)
                     }
@@ -511,10 +515,12 @@ impl Builder {
                         self.function_signatures.get(&name).cloned()
                     {
                         let result = self.value();
+                        let external = self.external_symbols.contains_key(&name);
                         let symbol = self.link_function_name(&name);
                         self.emit(MirInstruction::LoadFunctionAddress {
                             result,
                             symbol: format!("_{symbol}"),
+                            external,
                         });
                         self.value_types.insert(
                             result,
@@ -555,6 +561,7 @@ impl Builder {
                 self.emit(MirInstruction::LoadFunctionAddress {
                     result,
                     symbol: format!("_{symbol}"),
+                    external: false,
                 });
                 if let Some((parameters, result_type)) =
                     self.function_signature_for_expression(expression)

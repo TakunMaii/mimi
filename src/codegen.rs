@@ -11,6 +11,8 @@ enum RelocationKind {
     Branch26,
     Page21,
     PageOff12,
+    GotPage21,
+    GotPageOff12,
 }
 
 struct Relocation {
@@ -583,24 +585,36 @@ fn encode_function(
                     encode_immediate(register.0, *value as u64, bytes)?;
                     continue;
                 }
-                LirInstruction::LoadAddress { symbol, .. } => {
-                    let register = match instruction {
-                        LirInstruction::LoadAddress { register, .. } => *register,
-                        _ => unreachable!(),
-                    };
+                LirInstruction::LoadAddress {
+                    register,
+                    symbol,
+                    external,
+                } => {
                     let page = bytes.len() as u32;
                     push_word(bytes, 0x9000_0000 | register.0);
                     let low = bytes.len() as u32;
-                    push_word(bytes, 0x9100_0000 | (register.0 << 5) | register.0);
+                    if *external {
+                        push_word(bytes, 0xf940_0000 | (register.0 << 5) | register.0);
+                    } else {
+                        push_word(bytes, 0x9100_0000 | (register.0 << 5) | register.0);
+                    }
                     relocations.push(Relocation {
                         offset: page,
                         symbol: symbol.clone(),
-                        kind: RelocationKind::Page21,
+                        kind: if *external {
+                            RelocationKind::GotPage21
+                        } else {
+                            RelocationKind::Page21
+                        },
                     });
                     relocations.push(Relocation {
                         offset: low,
                         symbol: symbol.clone(),
-                        kind: RelocationKind::PageOff12,
+                        kind: if *external {
+                            RelocationKind::GotPageOff12
+                        } else {
+                            RelocationKind::PageOff12
+                        },
                     });
                     continue;
                 }
@@ -1549,6 +1563,8 @@ fn write_macho_object(
             RelocationKind::Branch26 => (2u32, 1u32),
             RelocationKind::Page21 => (3, 1),
             RelocationKind::PageOff12 => (4, 0),
+            RelocationKind::GotPage21 => (5, 1),
+            RelocationKind::GotPageOff12 => (6, 0),
         };
         let info = symbol_index | (pcrel << 24) | (2 << 25) | (1 << 27) | (kind << 28);
         output.extend_from_slice(&info.to_le_bytes());
@@ -1649,11 +1665,22 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                 LirInstruction::LoadImmediate { register, value } => {
                     emit_immediate(assembly, register.0, *value as u64);
                 }
-                LirInstruction::LoadAddress { register, symbol } => {
-                    assembly.push_str(&format!(
-                        "    adrp x{}, {symbol}@PAGE\n    add x{}, x{}, {symbol}@PAGEOFF\n",
-                        register.0, register.0, register.0
-                    ));
+                LirInstruction::LoadAddress {
+                    register,
+                    symbol,
+                    external,
+                } => {
+                    if *external {
+                        assembly.push_str(&format!(
+                            "    adrp x{}, {symbol}@GOTPAGE\n    ldr x{}, [x{}, {symbol}@GOTPAGEOFF]\n",
+                            register.0, register.0, register.0
+                        ));
+                    } else {
+                        assembly.push_str(&format!(
+                            "    adrp x{}, {symbol}@PAGE\n    add x{}, x{}, {symbol}@PAGEOFF\n",
+                            register.0, register.0, register.0
+                        ));
+                    }
                 }
                 LirInstruction::Add {
                     destination,
