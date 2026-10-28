@@ -1,4 +1,5 @@
 use crate::hir::{HirFunction, HirModule, HirType};
+use crate::layout::{AbiClass, TypeLayouts, scalar_storage_size};
 use crate::lir::TargetDataLayout;
 use crate::parser::Expression;
 
@@ -219,6 +220,7 @@ pub(crate) struct MirModule {
 
 struct Builder {
     layout: TargetDataLayout,
+    type_layouts: TypeLayouts,
     next_value: u32,
     next_slot: u32,
     blocks: Vec<MirBlock>,
@@ -676,7 +678,10 @@ impl Builder {
             }
             Expression::LiteralNumber(text) => {
                 let result = self.value();
-                let expected_float = self.expected_type_hint.as_ref().and_then(float_width);
+                let expected_float = self
+                    .expected_type_hint
+                    .as_ref()
+                    .and_then(|ty| self.float_abi_width(ty));
                 if let Some(width) = expected_float.or_else(|| text.contains('.').then_some(64)) {
                     let value = text.parse::<f64>().ok()?;
                     let bits = match width {
@@ -837,7 +842,7 @@ impl Builder {
                     if let (Some(result), Some(length)) = (result, result_slice_length) {
                         self.slice_value_lengths.insert(result, length);
                     }
-                    let result_float = float_width(&return_type);
+                    let result_float = self.float_abi_width(&return_type);
                     self.emit(MirInstruction::CallIndirect {
                         result: if aggregate_result { None } else { result },
                         result_slice_length,
@@ -895,7 +900,7 @@ impl Builder {
                     name: symbol,
                     args,
                     float_args,
-                    result_float: return_type.as_ref().and_then(float_width),
+                    result_float: return_type.as_ref().and_then(|ty| self.float_abi_width(ty)),
                 });
                 result
             }
@@ -932,7 +937,7 @@ impl Builder {
                             name: symbol,
                             args,
                             float_args,
-                            result_float: float_width(&return_type),
+                            result_float: self.float_abi_width(&return_type),
                         });
                         return result;
                     }
@@ -969,7 +974,7 @@ impl Builder {
                     if let (Some(result), Some(length)) = (result, result_slice_length) {
                         self.slice_value_lengths.insert(result, length);
                     }
-                    let result_float = float_width(&return_type);
+                    let result_float = self.float_abi_width(&return_type);
                     self.emit(MirInstruction::CallIndirect {
                         result: if aggregate_result { None } else { result },
                         result_slice_length,
@@ -1049,7 +1054,7 @@ impl Builder {
                     name: target.symbol,
                     args,
                     float_args,
-                    result_float: return_type.as_ref().and_then(float_width),
+                    result_float: return_type.as_ref().and_then(|ty| self.float_abi_width(ty)),
                 });
                 result
             }
@@ -1062,7 +1067,7 @@ impl Builder {
                 let expected = self
                     .expected_type_hint
                     .clone()
-                    .filter(|ty| float_width(ty).is_some())
+                    .filter(|ty| self.float_abi_width(ty).is_some())
                     .or_else(|| self.expression_type(value));
                 let value = if let Some(data_type) = expected.as_ref() {
                     self.expression_expected(value, data_type)
@@ -1070,7 +1075,10 @@ impl Builder {
                     self.expression(value)
                 }?;
                 let result = self.value();
-                if let Some(width) = self.value_type(value).and_then(|ty| float_width(&ty)) {
+                if let Some(width) = self
+                    .value_type(value)
+                    .and_then(|ty| self.float_abi_width(&ty))
+                {
                     self.emit(MirInstruction::FloatNeg {
                         result,
                         value,
@@ -1120,7 +1128,10 @@ impl Builder {
                     _ => CompareKind::GreaterEqual,
                 };
                 let result = self.value();
-                if let Some(width) = operand_type.as_ref().and_then(float_width) {
+                if let Some(width) = operand_type
+                    .as_ref()
+                    .and_then(|ty| self.float_abi_width(ty))
+                {
                     self.emit(MirInstruction::FloatCompare {
                         result,
                         lhs,
@@ -1553,7 +1564,7 @@ impl Builder {
             let parameter_type = parameter_types
                 .as_ref()
                 .and_then(|parameters| parameters.get(index));
-            if matches!(parameter_type, Some(HirType::Slice(_))) {
+            if parameter_type.is_some_and(|ty| self.is_slice_abi_type(ty)) {
                 let (base, length, _) = self.lower_array_view_expected(
                     argument,
                     parameter_type.expect("checked slice parameter"),
@@ -1568,7 +1579,7 @@ impl Builder {
                 Some(data_type) => self.expression_expected(argument, data_type)?,
                 None => self.expression(argument)?,
             };
-            if let Some(width) = parameter_type.and_then(float_width) {
+            if let Some(width) = parameter_type.and_then(|ty| self.float_abi_width(ty)) {
                 float_args.push((values.len(), width));
             }
             values.push(value);
@@ -1599,7 +1610,7 @@ impl Builder {
                         values.push(self.materialize_inline_argument(argument, parameter_type)?);
                         continue;
                     }
-                    if let Some(width) = float_width(parameter_type) {
+                    if let Some(width) = self.float_abi_width(parameter_type) {
                         float_args.push((values.len(), width));
                     }
                     values.push(self.expression_expected(argument, parameter_type)?);
@@ -1692,7 +1703,10 @@ impl Builder {
             self.expression(rhs)
         }?;
         let result = self.value();
-        if let Some(width) = operation_type.as_ref().and_then(float_width) {
+        if let Some(width) = operation_type
+            .as_ref()
+            .and_then(|ty| self.float_abi_width(ty))
+        {
             let kind = match kind {
                 0 => FloatBinaryKind::Add,
                 1 => FloatBinaryKind::Subtract,
@@ -1997,20 +2011,20 @@ impl Builder {
             .then(|| self.expression_type(rhs))
             .flatten();
         lhs_type
-            .filter(|ty| float_width(ty).is_some())
-            .or_else(|| rhs_type.filter(|ty| float_width(ty).is_some()))
+            .filter(|ty| self.float_abi_width(ty).is_some())
+            .or_else(|| rhs_type.filter(|ty| self.float_abi_width(ty).is_some()))
             .or_else(|| {
                 self.expected_type_hint
                     .clone()
-                    .filter(|ty| float_width(ty).is_some())
+                    .filter(|ty| self.float_abi_width(ty).is_some())
             })
             .or_else(|| {
                 self.expression_type(lhs)
-                    .filter(|ty| float_width(ty).is_some())
+                    .filter(|ty| self.float_abi_width(ty).is_some())
             })
             .or_else(|| {
                 self.expression_type(rhs)
-                    .filter(|ty| float_width(ty).is_some())
+                    .filter(|ty| self.float_abi_width(ty).is_some())
             })
     }
 
@@ -2874,119 +2888,38 @@ impl Builder {
     }
 
     fn struct_slot_count(&self, struct_name: &str) -> Option<u32> {
-        self.struct_slot_count_inner(struct_name, &mut std::collections::HashSet::new())
-    }
-
-    fn struct_slot_count_inner(
-        &self,
-        struct_name: &str,
-        visiting: &mut std::collections::HashSet<String>,
-    ) -> Option<u32> {
-        if !visiting.insert(format!("struct:{struct_name}")) {
-            return None;
-        }
-        let fields = self.struct_field_types.get(struct_name)?;
-        let mut slot_count = 0u32;
-        for (_, field_type) in fields {
-            let field_slots = self.inline_field_slot_count(field_type, visiting)?;
-            slot_count = slot_count.checked_add(field_slots)?;
-        }
-        visiting.remove(&format!("struct:{struct_name}"));
-        Some(slot_count)
+        self.type_layouts
+            .aggregate_slot_count(&HirType::Named(struct_name.to_string()))
     }
 
     fn struct_field_offset(&self, struct_name: &str, member: &str) -> Option<u32> {
-        let fields = self.struct_field_types.get(struct_name)?;
-        let mut visiting = std::collections::HashSet::new();
-        visiting.insert(format!("struct:{struct_name}"));
-        let mut offset = 0u32;
-        for (field_name, field_type) in fields {
-            if field_name == member {
-                return Some(offset);
-            }
-            let field_slots = self.inline_field_slot_count(field_type, &mut visiting)?;
-            offset = offset.checked_add(field_slots)?;
-        }
-        None
-    }
-
-    fn inline_field_slot_count(
-        &self,
-        data_type: &HirType,
-        visiting: &mut std::collections::HashSet<String>,
-    ) -> Option<u32> {
-        match data_type {
-            HirType::Named(name) if self.struct_fields.contains_key(name) => {
-                self.struct_slot_count_inner(name, visiting)
-            }
-            HirType::Named(name) if self.enum_uses_storage(name) => {
-                self.enum_storage_slot_count_inner(name, visiting)
-            }
-            HirType::Slice(_) => {
-                let bytes = self.layout.pointer_bytes() + self.layout.stack_slot_bytes();
-                u32::try_from(bytes.div_ceil(self.layout.stack_slot_bytes())).ok()
-            }
-            HirType::Array { length, element } => {
-                let bytes = length.checked_mul(self.type_storage_stride(element, visiting)?)?;
-                u32::try_from(bytes.div_ceil(self.layout.stack_slot_bytes())).ok()
-            }
-            _ => Some(1),
-        }
-    }
-
-    fn type_storage_stride(
-        &self,
-        data_type: &HirType,
-        visiting: &mut std::collections::HashSet<String>,
-    ) -> Option<u64> {
-        if let Some(size) = scalar_storage_size(data_type) {
-            return Some(u64::from(size));
-        }
-        match data_type {
-            HirType::Pointer(_) | HirType::Function { .. } => Some(self.layout.pointer_bytes()),
-            HirType::Slice(_) => Some(self.layout.pointer_bytes() + self.layout.stack_slot_bytes()),
-            HirType::Array { length, element } => {
-                length.checked_mul(self.type_storage_stride(element, visiting)?)
-            }
-            HirType::Named(name) if self.struct_fields.contains_key(name) => self
-                .struct_slot_count_inner(name, visiting)
-                .map(|slots| u64::from(slots) * self.layout.stack_slot_bytes()),
-            HirType::Named(name) if self.enum_uses_storage(name) => self
-                .enum_storage_slot_count_inner(name, visiting)
-                .map(|slots| u64::from(slots) * self.layout.stack_slot_bytes()),
-            _ => Some(self.layout.pointer_bytes()),
-        }
-    }
-
-    fn is_inline_struct(&self, data_type: &HirType) -> bool {
-        matches!(data_type, HirType::Named(name) if self.struct_fields.contains_key(name))
+        self.type_layouts
+            .struct_field_offset_slots(struct_name, member)
     }
 
     fn is_inline_aggregate(&self, data_type: &HirType) -> bool {
-        self.is_inline_struct(data_type)
-            || matches!(data_type, HirType::Array { .. })
-            || matches!(data_type, HirType::Named(name) if self.enum_uses_storage(name))
+        self.type_layouts.is_indirect_aggregate(data_type)
+    }
+
+    fn is_slice_abi_type(&self, data_type: &HirType) -> bool {
+        self.type_layouts
+            .abi_class(data_type)
+            .is_some_and(|class| matches!(class, AbiClass::SlicePair))
+    }
+
+    fn float_abi_width(&self, data_type: &HirType) -> Option<u16> {
+        match self.type_layouts.abi_class(data_type)? {
+            AbiClass::Float(width) => Some(width),
+            _ => None,
+        }
     }
 
     fn is_inline_storage_aggregate(&self, data_type: &HirType) -> bool {
-        self.is_inline_aggregate(data_type) || matches!(data_type, HirType::Slice(_))
+        self.is_inline_aggregate(data_type) || self.is_slice_abi_type(data_type)
     }
 
     fn inline_aggregate_slot_count(&self, data_type: &HirType) -> Option<u32> {
-        let slots = match data_type {
-            HirType::Named(name) if self.struct_fields.contains_key(name) => {
-                self.struct_slot_count(name)?
-            }
-            HirType::Named(name) if self.enum_uses_storage(name) => {
-                self.enum_storage_slot_count(name)?
-            }
-            HirType::Array { length, element } => {
-                let bytes = length.checked_mul(self.element_stride(element))?;
-                u32::try_from(bytes.div_ceil(self.layout.stack_slot_bytes())).ok()?
-            }
-            _ => return None,
-        };
-        Some(slots.max(1))
+        self.type_layouts.aggregate_slot_count(data_type)
     }
 
     fn allocate_inline_temporary(&mut self, data_type: &HirType) -> Option<ValueId> {
@@ -3043,64 +2976,16 @@ impl Builder {
     }
 
     fn enum_uses_storage(&self, enum_name: &str) -> bool {
-        self.enum_variants
-            .values()
-            .any(|variant| variant.owner == enum_name && variant.uses_storage)
+        self.type_layouts.enum_uses_storage(enum_name)
     }
 
     fn enum_storage_slot_count(&self, enum_name: &str) -> Option<u32> {
-        self.enum_storage_slot_count_inner(enum_name, &mut std::collections::HashSet::new())
-    }
-
-    fn enum_storage_slot_count_inner(
-        &self,
-        enum_name: &str,
-        visiting: &mut std::collections::HashSet<String>,
-    ) -> Option<u32> {
-        let key = format!("enum:{enum_name}");
-        if !visiting.insert(key.clone()) {
-            return None;
-        }
-        let mut payload_slots = 1;
-        for variant in self
-            .enum_variants
-            .values()
-            .filter(|variant| variant.owner == enum_name)
-        {
-            if let Some(payload) = &variant.payload {
-                payload_slots = payload_slots.max(self.inline_value_slot_count(payload, visiting)?);
-            }
-        }
-        visiting.remove(&key);
-        payload_slots.checked_add(1)
-    }
-
-    fn inline_value_slot_count(
-        &self,
-        data_type: &HirType,
-        visiting: &mut std::collections::HashSet<String>,
-    ) -> Option<u32> {
-        match data_type {
-            HirType::Named(name) if self.struct_fields.contains_key(name) => {
-                self.struct_slot_count_inner(name, visiting)
-            }
-            HirType::Named(name) if self.enum_uses_storage(name) => {
-                self.enum_storage_slot_count_inner(name, visiting)
-            }
-            HirType::Array { length, element } => {
-                let bytes = length.checked_mul(self.type_storage_stride(element, visiting)?)?;
-                u32::try_from(bytes.div_ceil(self.layout.stack_slot_bytes())).ok()
-            }
-            HirType::Slice(_) => {
-                let bytes = self.layout.pointer_bytes() + self.layout.stack_slot_bytes();
-                u32::try_from(bytes.div_ceil(self.layout.stack_slot_bytes())).ok()
-            }
-            _ => Some(1),
-        }
+        self.type_layouts.enum_storage_slot_count(enum_name)
     }
 
     fn element_stride(&self, data_type: &HirType) -> u64 {
-        self.type_storage_stride(data_type, &mut std::collections::HashSet::new())
+        self.type_layouts
+            .storage_stride(data_type)
             .unwrap_or_else(|| pointer_scale_from_hir_type(data_type, self.layout.pointer_bytes()))
     }
 
@@ -3331,10 +3216,12 @@ fn lower_function(
     function_signatures: &std::collections::HashMap<String, (Vec<HirType>, HirType)>,
     external_symbols: &std::collections::HashMap<String, String>,
     global_constants: &std::collections::HashMap<String, crate::hir::HirConstant>,
+    type_layouts: &TypeLayouts,
     layout: TargetDataLayout,
 ) -> MirFunction {
     let mut builder = Builder {
         layout,
+        type_layouts: type_layouts.clone(),
         next_value: 0,
         next_slot: 0,
         blocks: vec![MirBlock {
@@ -3381,7 +3268,7 @@ fn lower_function(
     }
     for (name, ty) in &function.params {
         let incoming = builder.value();
-        if let Some(width) = float_width(ty) {
+        if let Some(width) = builder.float_abi_width(ty) {
             abi_float_params.push((incoming, width));
         } else {
             abi_params.push(incoming);
@@ -3393,7 +3280,9 @@ fn lower_function(
         if let HirType::Array { length, .. } = ty {
             builder.array_lengths.insert(name.clone(), *length);
         }
-        if let HirType::Slice(element) = ty {
+        if builder.is_slice_abi_type(ty)
+            && let HirType::Slice(element) = ty
+        {
             let length = builder.value();
             abi_params.push(length);
             let length_slot = builder.slot();
@@ -3586,6 +3475,21 @@ pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout
             )
         })
         .collect::<std::collections::HashMap<_, _>>();
+    let enum_layouts = module
+        .enums
+        .iter()
+        .map(|enumeration| {
+            (
+                enumeration.name.clone(),
+                enumeration
+                    .variants
+                    .iter()
+                    .map(|(_, payload)| payload.clone())
+                    .collect(),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let type_layouts = TypeLayouts::new(layout, struct_field_types.clone(), enum_layouts);
     let function_slice_params = module
         .functions
         .iter()
@@ -3683,6 +3587,7 @@ pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout
                     &function_signatures,
                     &external_symbols,
                     &global_constants,
+                    &type_layouts,
                     layout,
                 )
             })
@@ -3721,27 +3626,6 @@ fn pointer_stride_from_hir_type(data_type: &HirType, pointer_bytes: u64) -> Opti
         {
             length.checked_mul(pointer_stride_from_hir_type(element, pointer_bytes)?)
         }
-        _ => None,
-    }
-}
-
-fn scalar_storage_size(data_type: &HirType) -> Option<u8> {
-    match data_type {
-        HirType::Integer { bits, .. } | HirType::Float { bits } => match bits {
-            8 => Some(1),
-            16 => Some(2),
-            32 => Some(4),
-            64 => Some(8),
-            _ => None,
-        },
-        HirType::Bool => Some(1),
-        _ => None,
-    }
-}
-
-fn float_width(data_type: &HirType) -> Option<u16> {
-    match data_type {
-        HirType::Float { bits } => Some(*bits),
         _ => None,
     }
 }

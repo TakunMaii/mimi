@@ -1,5 +1,6 @@
 mod codegen;
 mod hir;
+mod layout;
 mod lexer;
 mod lir;
 mod mir;
