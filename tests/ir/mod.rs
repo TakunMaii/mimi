@@ -663,6 +663,38 @@ fn builds_and_runs_scaled_pointer_arithmetic() {
 }
 
 #[test]
+fn builds_and_runs_pointer_differences_in_elements() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_pointer_difference_source_{}.mi",
+        std::process::id()
+    ));
+    let path = std::env::temp_dir().join(format!(
+        "mimi_pointer_difference_codegen_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { values := [10, 20, 30, 40] start := &values[0] end := start + 3 bytes : [5]u8 = [1, 2, 3, 4, 5] byte_start := &bytes[0] byte_end := byte_start + 4 result := if end - start == 3 && start - end == -3 && byte_end - byte_start == 4 { 0 } else { 1 } result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_slice_return_values() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

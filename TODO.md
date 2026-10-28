@@ -43,8 +43,9 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Lower pointer member access and typed pointer indexing in MIR.
 - [ ] Implement pointer-to-array layouts and remaining general pointer arithmetic.
   - [x] Scale pointer plus/minus integer by scalar element width; allow integer plus pointer.
+  - [x] Compute element distances when subtracting pointers to the same scalar type.
   - [ ] Lay out and index pointers to arrays, structs, and enums.
-  - [ ] Define pointer difference and compound-pointer arithmetic.
+  - [ ] Define compound-pointer arithmetic.
 
 ## Functions and Modules
 

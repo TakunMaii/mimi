@@ -388,6 +388,19 @@ fn checks_pointer_indexing_and_assignment() {
 }
 
 #[test]
+fn checks_pointer_difference_for_matching_scalar_types() {
+    let valid = parse(tokenize(
+        "distance :: fn (left : *i32, right : *i32) i64 { right - left }".chars(),
+    ));
+    check(&valid).unwrap();
+
+    let mismatched = parse(tokenize(
+        "distance :: fn (left : *i32, right : *u8) i64 { right - left }".chars(),
+    ));
+    assert!(check(&mismatched).is_err());
+}
+
+#[test]
 fn rejects_pointer_arithmetic_on_compound_elements() {
     let ast = parse(tokenize(
         "pos :: struct { x : i32 } main :: fn () void { point := pos { x = 1 } pointer := &point pointer + 1 }"

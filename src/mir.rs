@@ -1395,6 +1395,44 @@ impl Builder {
         if matches!(kind, 0 | 1) {
             let lhs_type = self.expression_type(lhs);
             let rhs_type = self.expression_type(rhs);
+            if kind == 1
+                && let (Some(HirType::Pointer(lhs_element)), Some(HirType::Pointer(rhs_element))) =
+                    (&lhs_type, &rhs_type)
+                && lhs_element == rhs_element
+            {
+                let scale = scalar_storage_size(lhs_element)?;
+                let lhs = self.expression(lhs)?;
+                let rhs = self.expression(rhs)?;
+                let byte_difference = self.value();
+                self.emit(MirInstruction::Sub {
+                    result: byte_difference,
+                    lhs,
+                    rhs,
+                });
+                let integer_type = HirType::Integer {
+                    bits: 64,
+                    signed: true,
+                };
+                self.value_types
+                    .insert(byte_difference, integer_type.clone());
+                if scale == 1 {
+                    return Some(byte_difference);
+                }
+                let scale_value = self.value();
+                self.emit(MirInstruction::ConstInt {
+                    result: scale_value,
+                    value: i128::from(scale),
+                });
+                self.value_types.insert(scale_value, integer_type.clone());
+                let element_difference = self.value();
+                self.emit(MirInstruction::Div {
+                    result: element_difference,
+                    lhs: byte_difference,
+                    rhs: scale_value,
+                });
+                self.value_types.insert(element_difference, integer_type);
+                return Some(element_difference);
+            }
             let pointer_offset = match (kind, lhs_type, rhs_type) {
                 (0, Some(HirType::Pointer(element)), _) => Some((lhs, rhs, *element, false)),
                 (0, _, Some(HirType::Pointer(element))) => Some((rhs, lhs, *element, false)),
@@ -1607,13 +1645,29 @@ impl Builder {
                 .map(|(_, result)| result),
             Expression::Negate(inner) => self.expression_type(inner),
             Expression::Add(lhs, rhs)
-            | Expression::Subtract(lhs, rhs)
             | Expression::Multiply(lhs, rhs)
             | Expression::Divide(lhs, rhs)
             | Expression::Remainder(lhs, rhs) => self
                 .float_operation_type(lhs, rhs)
                 .or_else(|| self.expression_type(lhs))
                 .or_else(|| self.expression_type(rhs)),
+            Expression::Subtract(lhs, rhs) => {
+                let lhs_type = self.expression_type(lhs);
+                let rhs_type = self.expression_type(rhs);
+                if matches!(
+                    (&lhs_type, &rhs_type),
+                    (Some(HirType::Pointer(lhs)), Some(HirType::Pointer(rhs))) if lhs == rhs
+                ) {
+                    Some(HirType::Integer {
+                        bits: 64,
+                        signed: true,
+                    })
+                } else {
+                    self.float_operation_type(lhs, rhs)
+                        .or(lhs_type)
+                        .or(rhs_type)
+                }
+            }
             Expression::If {
                 then_branch,
                 else_branch,

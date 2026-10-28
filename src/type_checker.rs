@@ -773,6 +773,13 @@ fn infer_expression(
         Expression::Subtract(lhs, rhs) => {
             let lhs_type = infer_expression(lhs, scopes, functions, structs, None)?;
             let rhs_type = infer_expression(rhs, scopes, functions, structs, None)?;
+            if let (DataType::Pointer(lhs_element), DataType::Pointer(rhs_element)) =
+                (lhs_type, rhs_type)
+                && lhs_element == rhs_element
+                && is_scalar_pointer_element(*lhs_element)
+            {
+                return Ok(DataType::I64);
+            }
             if let (DataType::Pointer(inner), offset_type) = (lhs_type, rhs_type)
                 && offset_type.is_integer()
                 && is_scalar_pointer_element(*inner)
