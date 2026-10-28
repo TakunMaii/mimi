@@ -240,6 +240,7 @@ struct Builder {
     slice_value_lengths: std::collections::HashMap<ValueId, ValueId>,
     expected_type_hint: Option<HirType>,
     return_type: HirType,
+    return_pointer: Option<ValueId>,
     variable_structs: std::collections::HashMap<String, String>,
     defer_scopes: Vec<Vec<Expression>>,
     loop_targets: Vec<LoopTargets>,
@@ -726,11 +727,20 @@ impl Builder {
                     self.variable_function_signatures.get(name).cloned()
                 {
                     let callee = self.expression(&Expression::Identifier(name.clone()))?;
-                    let (args, float_args) =
+                    let (mut args, mut float_args) =
                         self.lower_function_value_arguments(arguments, &parameter_types)?;
-                    let result = (return_type != HirType::Void).then(|| self.value());
-                    let result_slice_length =
-                        matches!(return_type, HirType::Slice(_)).then(|| self.value());
+                    let aggregate_result = self.is_inline_aggregate(&return_type);
+                    let result = if aggregate_result {
+                        Some(self.allocate_inline_temporary(&return_type)?)
+                    } else {
+                        (return_type != HirType::Void).then(|| self.value())
+                    };
+                    if aggregate_result {
+                        self.prepend_indirect_result(&mut args, &mut float_args, result?);
+                    }
+                    let result_slice_length = (!aggregate_result
+                        && matches!(return_type, HirType::Slice(_)))
+                    .then(|| self.value());
                     if let Some(result) = result {
                         self.value_types.insert(result, return_type.clone());
                     }
@@ -739,7 +749,7 @@ impl Builder {
                     }
                     let result_float = float_width(&return_type);
                     self.emit(MirInstruction::CallIndirect {
-                        result,
+                        result: if aggregate_result { None } else { result },
                         result_slice_length,
                         callee,
                         args,
@@ -757,19 +767,31 @@ impl Builder {
                     return self.lower_enum_value(&variant, arguments.first());
                 }
                 let function_name = self.resolve_function_name(name);
-                let (args, float_args) = self.lower_call_arguments(&function_name, arguments)?;
+                let (mut args, mut float_args) =
+                    self.lower_call_arguments(&function_name, arguments)?;
                 let return_type = self
                     .function_signatures
                     .get(&function_name)
                     .map(|(_, result)| result.clone());
-                let result = return_type
+                let aggregate_result = return_type
                     .as_ref()
-                    .is_none_or(|ty| *ty != HirType::Void)
-                    .then(|| self.value());
-                let result_slice_length = return_type
-                    .as_ref()
-                    .is_some_and(|ty| matches!(ty, HirType::Slice(_)))
-                    .then(|| self.value());
+                    .is_some_and(|ty| self.is_inline_aggregate(ty));
+                let result = if aggregate_result {
+                    Some(self.allocate_inline_temporary(return_type.as_ref()?)?)
+                } else {
+                    return_type
+                        .as_ref()
+                        .is_none_or(|ty| *ty != HirType::Void)
+                        .then(|| self.value())
+                };
+                if aggregate_result {
+                    self.prepend_indirect_result(&mut args, &mut float_args, result?);
+                }
+                let result_slice_length = (!aggregate_result
+                    && return_type
+                        .as_ref()
+                        .is_some_and(|ty| matches!(ty, HirType::Slice(_))))
+                .then(|| self.value());
                 if let (Some(result), Some(return_type)) = (result, return_type.as_ref()) {
                     self.value_types.insert(result, return_type.clone());
                 }
@@ -778,7 +800,7 @@ impl Builder {
                 }
                 let symbol = self.link_function_name(&function_name);
                 self.emit(MirInstruction::Call {
-                    result,
+                    result: if aggregate_result { None } else { result },
                     result_slice_length,
                     name: symbol,
                     args,
@@ -793,10 +815,20 @@ impl Builder {
                 {
                     let name = format!("{package}.{member}");
                     if let Some((_, return_type)) = self.function_signatures.get(&name).cloned() {
-                        let (args, float_args) = self.lower_call_arguments(&name, arguments)?;
-                        let result = (return_type != HirType::Void).then(|| self.value());
-                        let result_slice_length =
-                            matches!(return_type, HirType::Slice(_)).then(|| self.value());
+                        let (mut args, mut float_args) =
+                            self.lower_call_arguments(&name, arguments)?;
+                        let aggregate_result = self.is_inline_aggregate(&return_type);
+                        let result = if aggregate_result {
+                            Some(self.allocate_inline_temporary(&return_type)?)
+                        } else {
+                            (return_type != HirType::Void).then(|| self.value())
+                        };
+                        if aggregate_result {
+                            self.prepend_indirect_result(&mut args, &mut float_args, result?);
+                        }
+                        let result_slice_length = (!aggregate_result
+                            && matches!(return_type, HirType::Slice(_)))
+                        .then(|| self.value());
                         if let Some(result) = result {
                             self.value_types.insert(result, return_type.clone());
                         }
@@ -805,7 +837,7 @@ impl Builder {
                         }
                         let symbol = self.link_function_name(&name);
                         self.emit(MirInstruction::Call {
-                            result,
+                            result: if aggregate_result { None } else { result },
                             result_slice_length,
                             name: symbol,
                             args,
@@ -827,11 +859,20 @@ impl Builder {
                         })
                 {
                     let callee = self.expression(callee)?;
-                    let (args, float_args) =
+                    let (mut args, mut float_args) =
                         self.lower_function_value_arguments(arguments, &parameter_types)?;
-                    let result = (return_type != HirType::Void).then(|| self.value());
-                    let result_slice_length =
-                        matches!(return_type, HirType::Slice(_)).then(|| self.value());
+                    let aggregate_result = self.is_inline_aggregate(&return_type);
+                    let result = if aggregate_result {
+                        Some(self.allocate_inline_temporary(&return_type)?)
+                    } else {
+                        (return_type != HirType::Void).then(|| self.value())
+                    };
+                    if aggregate_result {
+                        self.prepend_indirect_result(&mut args, &mut float_args, result?);
+                    }
+                    let result_slice_length = (!aggregate_result
+                        && matches!(return_type, HirType::Slice(_)))
+                    .then(|| self.value());
                     if let Some(result) = result {
                         self.value_types.insert(result, return_type.clone());
                     }
@@ -840,7 +881,7 @@ impl Builder {
                     }
                     let result_float = float_width(&return_type);
                     self.emit(MirInstruction::CallIndirect {
-                        result,
+                        result: if aggregate_result { None } else { result },
                         result_slice_length,
                         callee,
                         args,
@@ -881,20 +922,31 @@ impl Builder {
                 if call_arguments.len() != target.parameter_count {
                     return None;
                 }
-                let (args, float_args) =
+                let (mut args, mut float_args) =
                     self.lower_call_arguments(&target.symbol, &call_arguments)?;
                 let return_type = self
                     .function_signatures
                     .get(&target.symbol)
                     .map(|(_, result)| result.clone());
-                let result = return_type
+                let aggregate_result = return_type
                     .as_ref()
-                    .is_none_or(|ty| *ty != HirType::Void)
-                    .then(|| self.value());
-                let result_slice_length = return_type
-                    .as_ref()
-                    .is_some_and(|ty| matches!(ty, HirType::Slice(_)))
-                    .then(|| self.value());
+                    .is_some_and(|ty| self.is_inline_aggregate(ty));
+                let result = if aggregate_result {
+                    Some(self.allocate_inline_temporary(return_type.as_ref()?)?)
+                } else {
+                    return_type
+                        .as_ref()
+                        .is_none_or(|ty| *ty != HirType::Void)
+                        .then(|| self.value())
+                };
+                if aggregate_result {
+                    self.prepend_indirect_result(&mut args, &mut float_args, result?);
+                }
+                let result_slice_length = (!aggregate_result
+                    && return_type
+                        .as_ref()
+                        .is_some_and(|ty| matches!(ty, HirType::Slice(_))))
+                .then(|| self.value());
                 if let (Some(result), Some(return_type)) = (result, return_type.as_ref()) {
                     self.value_types.insert(result, return_type.clone());
                 }
@@ -902,7 +954,7 @@ impl Builder {
                     self.slice_value_lengths.insert(result, length);
                 }
                 self.emit(MirInstruction::Call {
-                    result,
+                    result: if aggregate_result { None } else { result },
                     result_slice_length,
                     name: target.symbol,
                     args,
@@ -1342,6 +1394,7 @@ impl Builder {
                                 } else {
                                     None
                                 };
+                                let value = self.copy_return_value(value)?;
                                 self.run_all_defers();
                                 let slice_length = value.and_then(|value| {
                                     matches!(&self.return_type, HirType::Slice(_))
@@ -1415,24 +1468,12 @@ impl Builder {
                 values.extend([base, length]);
                 continue;
             }
-            let expected_struct = match parameter_type {
-                Some(HirType::Named(name)) if self.struct_fields.contains_key(name) => {
-                    Some(name.as_str())
+            let value = match parameter_type {
+                Some(data_type) if self.is_inline_aggregate(data_type) => {
+                    self.materialize_inline_argument(argument, data_type)?
                 }
-                _ => None,
-            };
-            let value = match (argument, expected_struct) {
-                (
-                    Expression::StructLiteral {
-                        type_name: None,
-                        fields,
-                    },
-                    Some(struct_name),
-                ) => self.lower_struct_literal(struct_name, fields)?,
-                _ => match parameter_type {
-                    Some(data_type) => self.expression_expected(argument, data_type)?,
-                    None => self.expression(argument)?,
-                },
+                Some(data_type) => self.expression_expected(argument, data_type)?,
+                None => self.expression(argument)?,
             };
             if let Some(width) = parameter_type.and_then(float_width) {
                 float_args.push((values.len(), width));
@@ -1460,17 +1501,11 @@ impl Builder {
                     values.push(base);
                     values.push(length);
                 }
-                HirType::Named(name) if self.struct_fields.contains_key(name) => {
-                    let value = match argument {
-                        Expression::StructLiteral {
-                            type_name: None,
-                            fields,
-                        } => self.lower_struct_literal(name, fields)?,
-                        _ => self.expression_expected(argument, parameter_type)?,
-                    };
-                    values.push(value);
-                }
                 _ => {
+                    if self.is_inline_aggregate(parameter_type) {
+                        values.push(self.materialize_inline_argument(argument, parameter_type)?);
+                        continue;
+                    }
                     if let Some(width) = float_width(parameter_type) {
                         float_args.push((values.len(), width));
                     }
@@ -2733,6 +2768,74 @@ impl Builder {
             || matches!(data_type, HirType::Named(name) if self.enum_uses_storage(name))
     }
 
+    fn inline_aggregate_slot_count(&self, data_type: &HirType) -> Option<u32> {
+        let slots = match data_type {
+            HirType::Named(name) if self.struct_fields.contains_key(name) => {
+                self.struct_slot_count(name)?
+            }
+            HirType::Named(name) if self.enum_uses_storage(name) => 2,
+            HirType::Array { length, element } => {
+                let bytes = length.checked_mul(self.element_stride(element))?;
+                u32::try_from(bytes.div_ceil(8)).ok()?
+            }
+            _ => return None,
+        };
+        Some(slots.max(1))
+    }
+
+    fn allocate_inline_temporary(&mut self, data_type: &HirType) -> Option<ValueId> {
+        let slot_count = self.inline_aggregate_slot_count(data_type)?;
+        let base = self.slot();
+        self.next_slot = self.next_slot.checked_add(slot_count - 1)?;
+        Some(self.slot_address_value(base))
+    }
+
+    fn materialize_inline_argument(
+        &mut self,
+        expression: &Expression,
+        data_type: &HirType,
+    ) -> Option<ValueId> {
+        let source = match (expression, data_type) {
+            (
+                Expression::StructLiteral {
+                    type_name: None,
+                    fields,
+                },
+                HirType::Named(name),
+            ) if self.struct_fields.contains_key(name) => {
+                self.lower_struct_literal(name, fields)?
+            }
+            _ => self.expression_expected(expression, data_type)?,
+        };
+        let destination = self.allocate_inline_temporary(data_type)?;
+        self.copy_inline_value_to_address(data_type, source, destination)?;
+        Some(destination)
+    }
+
+    fn prepend_indirect_result(
+        &mut self,
+        args: &mut Vec<ValueId>,
+        float_args: &mut [(usize, u16)],
+        result: ValueId,
+    ) {
+        args.insert(0, result);
+        for (position, _) in float_args {
+            *position += 1;
+        }
+    }
+
+    fn copy_return_value(&mut self, value: Option<ValueId>) -> Option<Option<ValueId>> {
+        if self.is_inline_aggregate(&self.return_type) {
+            let source = value?;
+            let destination = self.return_pointer?;
+            let return_type = self.return_type.clone();
+            self.copy_inline_value_to_address(&return_type, source, destination)?;
+            Some(Some(destination))
+        } else {
+            Some(value)
+        }
+    }
+
     fn enum_uses_storage(&self, enum_name: &str) -> bool {
         self.enum_variants
             .values()
@@ -2980,6 +3083,7 @@ fn lower_function(
         slice_value_lengths: std::collections::HashMap::new(),
         expected_type_hint: None,
         return_type: function.result.clone(),
+        return_pointer: None,
         variable_structs: std::collections::HashMap::new(),
         defer_scopes: Vec::new(),
         loop_targets: Vec::new(),
@@ -2987,6 +3091,11 @@ fn lower_function(
     let mut params = Vec::new();
     let mut abi_params = Vec::new();
     let mut abi_float_params = Vec::new();
+    if builder.is_inline_aggregate(&function.result) {
+        let incoming = builder.value();
+        builder.return_pointer = Some(incoming);
+        abi_params.push(incoming);
+    }
     for (name, ty) in &function.params {
         let incoming = builder.value();
         if let Some(width) = float_width(ty) {
@@ -3039,6 +3148,9 @@ fn lower_function(
     } else {
         result
     };
+    let result = builder
+        .copy_return_value(result)
+        .expect("aggregate function result must have a hidden return buffer");
     if builder.is_open(builder.current) {
         let slice_length = result.and_then(|value| {
             matches!(&function.result, HirType::Slice(_))

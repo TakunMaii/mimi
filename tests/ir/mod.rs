@@ -697,6 +697,36 @@ fn builds_and_runs_scalar_struct_fields_and_defaults() {
 }
 
 #[test]
+fn builds_and_runs_aggregate_parameters_and_returns_by_value() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_aggregate_abi_source_{}.mi",
+        std::process::id()
+    ));
+    let path =
+        std::env::temp_dir().join(format!("mimi_aggregate_abi_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "point :: struct { x : i32, y : i32 } wrapper :: struct { point : point } make :: fn (x : i32) wrapper { wrapper { point = point { x = x, y = 2 } } } replace :: fn (value : wrapper) wrapper { value.point.x = 100 value } apply :: fn (function : fn(wrapper)wrapper, value : wrapper) wrapper { function(value) } roundtrip :: fn (values : [2]wrapper) [2]wrapper { values } main :: fn () i32 { original := make(9) changed := apply(replace, original) values : [2]wrapper = [original, make(4)] returned := roundtrip(values) original.point.x = 10 values[1].point.x = 30 result := if original.point.x == 10 && changed.point.x == 100 && changed.point.y == 2 && returned[0].point.x == 9 && returned[1].point.x == 4 { 0 } else { 1 } result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_fixed_arrays_of_structs() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
