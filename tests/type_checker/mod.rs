@@ -269,6 +269,20 @@ fn imports_public_functions_through_package_namespaces() {
     let ast = parse(tokenize(source.chars()));
     let types = check(&ast).unwrap();
     assert_eq!(types["result"], DataType::I32);
+
+    let source = format!(
+        "std :: @import(\"{}\") apply :: fn (function : fn(i32, i32)i32, left : i32, right : i32) i32 {{ function(left, right) }} main :: fn () i32 {{ apply(std.add, 1, 2) }}",
+        path.display()
+    );
+    let ast = parse(tokenize(source.chars()));
+    check(&ast).unwrap();
+
+    let source = format!(
+        "std :: @import(\"{}\") main :: fn () i32 {{ std.hidden() }}",
+        path.display()
+    );
+    let ast = parse(tokenize(source.chars()));
+    assert!(check(&ast).is_err());
     std::fs::remove_file(path).unwrap();
 }
 

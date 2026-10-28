@@ -1139,6 +1139,40 @@ fn builds_and_runs_an_internal_function_call() {
 }
 
 #[test]
+fn builds_and_runs_public_functions_from_imported_packages() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let directory =
+        std::env::temp_dir().join(format!("mimi_import_codegen_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let library = directory.join("math.mimi");
+    let source = directory.join("main.mimi");
+    let output = directory.join("program");
+    std::fs::write(
+        &library,
+        "helper :: fn (left : i32, right : i32) i32 { left + right } pub add :: fn (left : i32, right : i32) i32 { helper(left, right) }",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "math :: @import(\"math\") helper :: fn (left : i32, right : i32) i32 { 0 } apply :: fn (function : fn(i32, i32)i32, left : i32, right : i32) i32 { function(left, right) } main :: fn () i32 { apply(math.add, 19, 23) + math.add(1, 1) - 2 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        output.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&output).status().unwrap();
+    assert_eq!(status.code(), Some(42));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn lowers_function_values_and_indirect_calls() {
     let ast = parse(tokenize(
         "square :: fn (value : i32) i32 { value * value } apply :: fn (function : fn(i32)i32, value : i32) i32 { function(value) } main :: fn () i32 { apply(square, 6) }"

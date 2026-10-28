@@ -230,6 +230,7 @@ struct Builder {
     function_slice_params: std::collections::HashMap<String, Vec<bool>>,
     method_targets: std::collections::HashMap<(String, String), MethodTarget>,
     function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
+    function_namespace: Option<String>,
     variable_function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
     variable_types: std::collections::HashMap<String, HirType>,
     value_types: std::collections::HashMap<ValueId, HirType>,
@@ -325,11 +326,12 @@ impl Builder {
                     if let Some(variant) = self.enum_variants.get(name).cloned() {
                         self.lower_enum_value(&variant, None)
                     } else {
-                        self.function_signatures.get(name)?;
+                        let symbol = self.resolve_function_name(name);
+                        self.function_signatures.get(&symbol)?;
                         let result = self.value();
                         self.emit(MirInstruction::LoadFunctionAddress {
                             result,
-                            symbol: format!("_{name}"),
+                            symbol: format!("_{symbol}"),
                         });
                         Some(result)
                     }
@@ -484,6 +486,26 @@ impl Builder {
                 self.lower_struct_literal((*type_name)?, fields)
             }
             Expression::MemberAccess { object, member } => {
+                if let Expression::Identifier(package) = object.as_ref() {
+                    let name = format!("{package}.{member}");
+                    if let Some((parameters, result_type)) =
+                        self.function_signatures.get(&name).cloned()
+                    {
+                        let result = self.value();
+                        self.emit(MirInstruction::LoadFunctionAddress {
+                            result,
+                            symbol: format!("_{name}"),
+                        });
+                        self.value_types.insert(
+                            result,
+                            HirType::Function {
+                                params: parameters,
+                                result: Box::new(result_type),
+                            },
+                        );
+                        return Some(result);
+                    }
+                }
                 let struct_name = self.expression_struct_name(object)?;
                 let fields = self.struct_fields.get(&struct_name)?;
                 let field_index = fields.iter().position(|(name, _)| name == member)?;
@@ -708,10 +730,11 @@ impl Builder {
                     }
                     return self.lower_enum_value(&variant, arguments.first());
                 }
-                let (args, float_args) = self.lower_call_arguments(name, arguments)?;
+                let function_name = self.resolve_function_name(name);
+                let (args, float_args) = self.lower_call_arguments(&function_name, arguments)?;
                 let return_type = self
                     .function_signatures
-                    .get(name)
+                    .get(&function_name)
                     .map(|(_, result)| result.clone());
                 let result = return_type
                     .as_ref()
@@ -730,7 +753,7 @@ impl Builder {
                 self.emit(MirInstruction::Call {
                     result,
                     result_slice_length,
-                    name: name.clone(),
+                    name: function_name,
                     args,
                     float_args,
                     result_float: return_type.as_ref().and_then(float_width),
@@ -738,12 +761,42 @@ impl Builder {
                 result
             }
             Expression::CallValue { callee, arguments } => {
+                if let Expression::MemberAccess { object, member } = callee.as_ref()
+                    && let Expression::Identifier(package) = object.as_ref()
+                {
+                    let name = format!("{package}.{member}");
+                    if let Some((_, return_type)) = self.function_signatures.get(&name).cloned() {
+                        let (args, float_args) = self.lower_call_arguments(&name, arguments)?;
+                        let result = (return_type != HirType::Void).then(|| self.value());
+                        let result_slice_length =
+                            matches!(return_type, HirType::Slice(_)).then(|| self.value());
+                        if let Some(result) = result {
+                            self.value_types.insert(result, return_type.clone());
+                        }
+                        if let (Some(result), Some(length)) = (result, result_slice_length) {
+                            self.slice_value_lengths.insert(result, length);
+                        }
+                        self.emit(MirInstruction::Call {
+                            result,
+                            result_slice_length,
+                            name,
+                            args,
+                            float_args,
+                            result_float: float_width(&return_type),
+                        });
+                        return result;
+                    }
+                }
                 if let Expression::Identifier(name) = callee.as_ref()
                     && let Some((parameter_types, return_type)) = self
                         .variable_function_signatures
                         .get(name)
                         .cloned()
-                        .or_else(|| self.function_signatures.get(name).cloned())
+                        .or_else(|| {
+                            self.function_signatures
+                                .get(&self.resolve_function_name(name))
+                                .cloned()
+                        })
                 {
                     let callee = self.expression(callee)?;
                     let (args, float_args) =
@@ -1618,6 +1671,15 @@ impl Builder {
                 _ => None,
             },
             Expression::MemberAccess { object, member } => {
+                if let Expression::Identifier(package) = object.as_ref() {
+                    let name = format!("{package}.{member}");
+                    if let Some((params, result)) = self.function_signatures.get(&name) {
+                        return Some(HirType::Function {
+                            params: params.clone(),
+                            result: Box::new(result.clone()),
+                        });
+                    }
+                }
                 let struct_name = self.expression_struct_name(object)?;
                 self.struct_field_types
                     .get(&struct_name)?
@@ -1644,7 +1706,7 @@ impl Builder {
                 .map(|(_, result)| result.clone())
                 .or_else(|| {
                     self.function_signatures
-                        .get(name)
+                        .get(&self.resolve_function_name(name))
                         .map(|(_, result)| result.clone())
                 }),
             Expression::CallValue { callee, .. } => self
@@ -1996,7 +2058,19 @@ impl Builder {
                 .variable_function_signatures
                 .get(name)
                 .cloned()
-                .or_else(|| self.function_signatures.get(name).cloned()),
+                .or_else(|| {
+                    self.function_signatures
+                        .get(&self.resolve_function_name(name))
+                        .cloned()
+                }),
+            Expression::MemberAccess { object, member } => {
+                let Expression::Identifier(package) = object.as_ref() else {
+                    return None;
+                };
+                self.function_signatures
+                    .get(&format!("{package}.{member}"))
+                    .cloned()
+            }
             Expression::StaticAccess { type_name, member } => {
                 let target = self
                     .method_targets
@@ -2005,6 +2079,16 @@ impl Builder {
             }
             _ => None,
         }
+    }
+
+    fn resolve_function_name(&self, name: &str) -> String {
+        if let Some(namespace) = &self.function_namespace {
+            let qualified = format!("{namespace}.{name}");
+            if self.function_signatures.contains_key(&qualified) {
+                return qualified;
+            }
+        }
+        name.to_string()
     }
 
     fn index_scale(&self, object: &Expression) -> u64 {
@@ -2535,6 +2619,10 @@ fn lower_function(
         function_slice_params: function_slice_params.clone(),
         method_targets: method_targets.clone(),
         function_signatures: function_signatures.clone(),
+        function_namespace: function
+            .name
+            .rsplit_once('.')
+            .map(|(namespace, _)| namespace.to_string()),
         variable_function_signatures: std::collections::HashMap::new(),
         variable_types: std::collections::HashMap::new(),
         value_types: std::collections::HashMap::new(),

@@ -60,6 +60,8 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Pass ARM64 integer arguments beyond x0-x7 on the stack (up to 16 total).
 - [x] Allocate and preserve ARM64 callee-saved registers.
 - [ ] Complete package symbol visibility and cross-package linking behavior.
+  - [x] Compile imported functions with package-qualified symbols and resolve package-local calls.
+  - [ ] Import and link exported types, constants, and external declarations with full visibility checks.
 
 ## Targets and Tooling
 

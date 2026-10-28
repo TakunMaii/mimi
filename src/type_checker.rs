@@ -49,32 +49,7 @@ fn imported_exports(
     path: &str,
     import_paths: &[std::path::PathBuf],
 ) -> Result<HashMap<String, DataType>, String> {
-    let requested = PathBuf::from(path);
-    let mut candidates = vec![requested.clone()];
-    candidates.extend(
-        import_paths
-            .iter()
-            .map(|directory| directory.join(&requested)),
-    );
-    let mut source_path = candidates
-        .iter()
-        .find(|candidate| candidate.exists())
-        .cloned()
-        .unwrap_or_else(|| requested.clone());
-    if !source_path.exists() && source_path.extension().is_none() {
-        source_path.set_extension("mimi");
-        if !source_path.exists() {
-            source_path = import_paths
-                .iter()
-                .map(|directory| {
-                    let mut candidate = directory.join(&requested);
-                    candidate.set_extension("mimi");
-                    candidate
-                })
-                .find(|candidate| candidate.exists())
-                .unwrap_or(source_path);
-        }
-    }
+    let source_path = resolve_import_path(path, import_paths)?;
     let source = std::fs::read_to_string(&source_path)
         .map_err(|err| format!("cannot read '{}': {err}", source_path.display()))?;
     let ast = crate::parser::parse(tokenize(source.chars()));
@@ -122,6 +97,39 @@ fn imported_exports(
         }
     }
     Ok(exports)
+}
+
+pub(crate) fn resolve_import_path(path: &str, import_paths: &[PathBuf]) -> Result<PathBuf, String> {
+    let requested = PathBuf::from(path);
+    let mut candidates = vec![requested.clone()];
+    candidates.extend(
+        import_paths
+            .iter()
+            .map(|directory| directory.join(&requested)),
+    );
+    let mut source_path = candidates
+        .iter()
+        .find(|candidate| candidate.exists())
+        .cloned()
+        .unwrap_or_else(|| requested.clone());
+    if !source_path.exists() && source_path.extension().is_none() {
+        source_path.set_extension("mimi");
+        if !source_path.exists() {
+            source_path = import_paths
+                .iter()
+                .map(|directory| {
+                    let mut candidate = directory.join(&requested);
+                    candidate.set_extension("mimi");
+                    candidate
+                })
+                .find(|candidate| candidate.exists())
+                .unwrap_or(source_path);
+        }
+    }
+    if !source_path.exists() {
+        return Err(format!("cannot resolve import '{path}'"));
+    }
+    Ok(source_path)
 }
 
 fn imported_literal_type(expression: &Expression) -> Option<DataType> {
@@ -172,6 +180,11 @@ pub(crate) fn check_with_import_paths(
             }
         }
     }
+    let imported_symbols = scopes[0]
+        .iter()
+        .filter(|(name, _)| name.contains('.'))
+        .map(|(name, symbol)| (name.clone(), *symbol))
+        .collect::<HashMap<_, _>>();
 
     for node in nodes {
         if let ASTNode::EnumDefinition { name, variants } = node {
@@ -289,9 +302,9 @@ pub(crate) fn check_with_import_paths(
         match node {
             ASTNode::StructDefinition { name, methods, .. } => {
                 for method in methods {
-                    let mut method_scopes = vec![HashMap::new()];
+                    let mut method_scopes = vec![imported_symbols.clone(), HashMap::new()];
                     for (parameter_name, data_type) in &method.parameters {
-                        method_scopes[0].insert(
+                        method_scopes[1].insert(
                             parameter_name.clone(),
                             Symbol {
                                 data_type: resolve_self(*data_type, name),
@@ -319,9 +332,9 @@ pub(crate) fn check_with_import_paths(
                 return_type,
                 body,
             } => {
-                let mut function_scopes = vec![HashMap::new()];
+                let mut function_scopes = vec![imported_symbols.clone(), HashMap::new()];
                 for (parameter_name, data_type) in parameters {
-                    if function_scopes[0]
+                    if function_scopes[1]
                         .insert(
                             parameter_name.clone(),
                             Symbol {

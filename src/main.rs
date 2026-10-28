@@ -87,7 +87,15 @@ fn build_file(
             .collect::<Vec<_>>()
             .join("\n")
     })?;
-    let hir = hir::lower_ast(&ast);
+    let mut compilation_ast = ast.clone();
+    collect_imported_functions(
+        &ast,
+        &import_paths,
+        "",
+        &mut std::collections::HashSet::new(),
+        &mut compilation_ast,
+    )?;
+    let hir = hir::lower_ast(&compilation_ast);
     let mir = mir::lower_hir(&hir);
     let lir = lir::lower_mir(&mir, &lir::HostTarget);
     codegen::compile_executable_with_options(
@@ -98,6 +106,69 @@ fn build_file(
             libraries: libraries.to_vec(),
         },
     )
+}
+
+fn collect_imported_functions(
+    nodes: &[parser::ASTNode],
+    import_paths: &[std::path::PathBuf],
+    namespace: &str,
+    visiting: &mut std::collections::HashSet<std::path::PathBuf>,
+    output: &mut Vec<parser::ASTNode>,
+) -> Result<(), String> {
+    for node in nodes {
+        let parser::ASTNode::Import { alias, path } = node else {
+            continue;
+        };
+        let source_path = type_checker::resolve_import_path(path, import_paths)?;
+        let visit_key = source_path
+            .canonicalize()
+            .unwrap_or_else(|_| source_path.clone());
+        if !visiting.insert(visit_key.clone()) {
+            continue;
+        }
+        let source = std::fs::read_to_string(&source_path)
+            .map_err(|error| format!("cannot read '{}': {error}", source_path.display()))?;
+        let module_nodes = parser::parse(lexer::tokenize(source.chars()));
+        let mut module_paths = import_paths.to_vec();
+        if let Some(parent) = source_path.parent()
+            && !module_paths.iter().any(|path| path == parent)
+        {
+            module_paths.push(parent.to_path_buf());
+        }
+        type_checker::check_with_import_paths(&module_nodes, &module_paths).map_err(|errors| {
+            errors
+                .into_iter()
+                .map(|error| error.message)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })?;
+
+        let package = if namespace.is_empty() {
+            alias.clone()
+        } else {
+            format!("{namespace}.{alias}")
+        };
+        for module_node in &module_nodes {
+            let declaration = match module_node {
+                parser::ASTNode::Public(declaration) => declaration.as_ref(),
+                declaration => declaration,
+            };
+            if let parser::ASTNode::FunctionDefinition { name, .. } = declaration {
+                let mut function = declaration.clone();
+                if let parser::ASTNode::FunctionDefinition {
+                    name: function_name,
+                    ..
+                } = &mut function
+                {
+                    *function_name = format!("{package}.{name}");
+                }
+                output.push(function);
+            }
+        }
+        collect_imported_functions(&module_nodes, &module_paths, &package, visiting, output)?;
+        visiting.remove(&visit_key);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
