@@ -86,6 +86,9 @@ and focused regression coverage; it does not imply support on every target.
 ## Targets and Tooling
 
 - [x] Emit textual assembly for all current LIR blocks and supported operations.
-- [ ] Implement x86_64 code generation.
-- [ ] Define target interfaces and add another platform/object format.
+- [x] Implement x86_64 code generation.
+  - [x] Emit and assemble System V x86_64 text for the current LIR operations.
+  - [x] Emit native x86_64 objects and executables through the target interface.
+- [x] Define target interfaces and add another platform/object format.
 - [ ] Add integration tests that compile, link, and run representative programs per feature.
+  - [x] Compile and link an x86_64 float/control-flow program; run it on x86_64 hosts and verify its architecture on cross-target hosts.

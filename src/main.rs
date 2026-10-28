@@ -1,4 +1,5 @@
 mod codegen;
+mod codegen_x86_64;
 mod hir;
 mod layout;
 mod lexer;
@@ -21,6 +22,7 @@ fn run_cli() -> Result<(), String> {
         Some("build") => {
             let mut input = None;
             let mut output = None;
+            let mut target = <lir::HostTarget as lir::Target>::arch(&lir::HostTarget);
             let mut import_paths = Vec::new();
             let mut library_paths = Vec::new();
             let mut libraries = Vec::new();
@@ -45,23 +47,39 @@ fn run_cli() -> Result<(), String> {
                     } else {
                         library.to_string()
                     });
+                } else if argument == "--target" {
+                    target = parse_target(&args.next().ok_or("missing value after --target")?)?;
+                } else if let Some(value) = argument.strip_prefix("--target=") {
+                    target = parse_target(value)?;
                 } else if input.is_none() {
                     input = Some(argument);
                 } else {
                     return Err(
-                        "usage: mimi build <source> -o <output> [-Ipath] [-Lpath] [-lname]".into(),
+                        "usage: mimi build <source> -o <output> [--target host|aarch64|x86_64] [-Ipath] [-Lpath] [-lname]".into(),
                     );
                 }
             }
-            build_file(
+            build_file_for_target(
                 &input.ok_or("missing source path")?,
                 &output.ok_or("missing output path")?,
                 &import_paths,
                 &library_paths,
                 &libraries,
+                target,
             )
         }
         _ => Err("usage: mimi build <source> -o <output>".into()),
+    }
+}
+
+fn parse_target(value: &str) -> Result<lir::TargetArch, String> {
+    match value {
+        "host" => Ok(<lir::HostTarget as lir::Target>::arch(&lir::HostTarget)),
+        "aarch64" | "arm64" => Ok(lir::TargetArch::Aarch64),
+        "x86_64" | "amd64" => Ok(lir::TargetArch::X86_64),
+        _ => Err(format!(
+            "unsupported target '{value}'; expected host, aarch64, or x86_64"
+        )),
     }
 }
 
@@ -71,6 +89,24 @@ fn build_file(
     import_paths: &[std::path::PathBuf],
     library_paths: &[std::path::PathBuf],
     libraries: &[String],
+) -> Result<(), String> {
+    build_file_for_target(
+        input,
+        output,
+        import_paths,
+        library_paths,
+        libraries,
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+    )
+}
+
+fn build_file_for_target(
+    input: &str,
+    output: &str,
+    import_paths: &[std::path::PathBuf],
+    library_paths: &[std::path::PathBuf],
+    libraries: &[String],
+    target: lir::TargetArch,
 ) -> Result<(), String> {
     let source = std::fs::read_to_string(input)
         .map_err(|error| format!("cannot read '{input}': {error}"))?;
@@ -97,8 +133,7 @@ fn build_file(
         &mut compilation_ast,
     )?;
     let hir = hir::lower_ast(&compilation_ast);
-    let target = lir::HostTarget;
-    let layout = <lir::HostTarget as lir::Target>::data_layout(&target);
+    let layout = <lir::TargetArch as lir::Target>::data_layout(&target);
     let mir = mir::lower_hir_with_layout(&hir, layout);
     let lir = lir::lower_mir(&mir, &target);
     codegen::compile_executable_with_options(

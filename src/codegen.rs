@@ -39,7 +39,10 @@ pub(crate) fn emit_assembly(module: &LirModule) -> Result<String, String> {
             validate_data_layout(module)?;
             emit_aarch64(module)
         }
-        TargetArch::X86_64 => Err("x86_64 code generation is not implemented yet".into()),
+        TargetArch::X86_64 => {
+            validate_data_layout(module)?;
+            crate::codegen_x86_64::emit_assembly(module)
+        }
     }
 }
 
@@ -52,10 +55,10 @@ pub(crate) fn compile_executable_with_options(
     output: &Path,
     options: &LinkOptions,
 ) -> Result<(), String> {
-    if module.target != TargetArch::Aarch64 {
-        return Err("machine code emission is currently implemented for ARM64 only".into());
-    }
     validate_data_layout(module)?;
+    if module.target == TargetArch::X86_64 {
+        return compile_x86_64(module, output, options);
+    }
     let (text, data, symbols, relocations) = encode_module(module)?;
     let object = write_macho_object(&text, &data, &symbols, &relocations);
     let object_path = output.with_extension("o");
@@ -104,9 +107,61 @@ pub(crate) fn compile_executable_with_options(
     }
 }
 
+fn compile_x86_64(module: &LirModule, output: &Path, options: &LinkOptions) -> Result<(), String> {
+    let assembly = emit_assembly(module)?;
+    let assembly_path = output.with_extension("s");
+    let object_path = output.with_extension("o");
+    std::fs::write(&assembly_path, assembly)
+        .map_err(|error| format!("cannot write x86_64 assembly: {error}"))?;
+
+    let mut assembler = Command::new("cc");
+    if cfg!(target_os = "macos") {
+        assembler.args(["-arch", "x86_64"]);
+    }
+    let assembled = assembler
+        .arg("-c")
+        .arg(&assembly_path)
+        .arg("-o")
+        .arg(&object_path)
+        .output()
+        .map_err(|error| format!("cannot invoke x86_64 assembler: {error}"))?;
+    if !assembled.status.success() {
+        let _ = std::fs::remove_file(&assembly_path);
+        let _ = std::fs::remove_file(&object_path);
+        return Err(String::from_utf8_lossy(&assembled.stderr).into_owned());
+    }
+
+    let mut linker = Command::new("cc");
+    if cfg!(target_os = "macos") {
+        linker.args(["-arch", "x86_64"]);
+    }
+    for path in &options.library_paths {
+        linker.arg("-L").arg(path);
+    }
+    linker.arg(&object_path);
+    for library in &options.libraries {
+        linker.arg(format!("-l{library}"));
+    }
+    let linked = linker.arg("-o").arg(output).output();
+    let _ = std::fs::remove_file(&assembly_path);
+    let _ = std::fs::remove_file(&object_path);
+    let linked = linked.map_err(|error| format!("cannot invoke x86_64 linker: {error}"))?;
+    if linked.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&linked.stderr).into_owned())
+    }
+}
+
 fn validate_data_layout(module: &LirModule) -> Result<(), String> {
     if module.data_layout.pointer_bytes() != 8 || module.data_layout.stack_slot_bytes() != 8 {
-        return Err("ARM64 backend requires 8-byte pointers and stack slots".into());
+        let target = match module.target {
+            TargetArch::Aarch64 => "ARM64",
+            TargetArch::X86_64 => "x86_64",
+        };
+        return Err(format!(
+            "{target} backend requires 8-byte pointers and stack slots"
+        ));
     }
     Ok(())
 }
@@ -478,7 +533,7 @@ fn slot_address_words(slot: crate::mir::SlotId) -> usize {
     (slot.0 * 8).div_ceil(4095).max(1) as usize
 }
 
-fn phi_copies(
+pub(crate) fn phi_copies(
     function: &LirFunction,
     from: crate::mir::BlockId,
     to: crate::mir::BlockId,

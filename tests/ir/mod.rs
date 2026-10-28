@@ -1,4 +1,6 @@
-use super::{build_file, codegen, hir, lexer::tokenize, lir, mir, parser::parse};
+use super::{
+    build_file, build_file_for_target, codegen, hir, lexer::tokenize, lir, mir, parser::parse,
+};
 
 #[test]
 fn lowers_function_through_all_ir_layers() {
@@ -1415,6 +1417,122 @@ fn emits_host_assembly_for_integer_function() {
         assert!(assembly.contains("str x"));
         assert!(assembly.contains("ret"));
     }
+}
+
+#[test]
+fn emits_and_assembles_x86_64_integer_control_flow() {
+    let ast = parse(tokenize(
+        "combine :: fn (left : i32, right : i32) i32 { if left < right { left + right } else { left - right } } main :: fn () i32 { combine(9, 4) }"
+            .chars(),
+    ));
+    let hir = hir::lower_ast(&ast);
+    let mir = mir::lower_hir_with_layout(&hir, lir::TargetDataLayout::HOST_64);
+    let target = lir::X86_64Target;
+    let lir = lir::lower_mir(&mir, &target);
+    let assembly = codegen::emit_assembly(&lir).unwrap();
+
+    assert!(assembly.contains(".intel_syntax noprefix"));
+    assert!(assembly.contains("cmp rax, rcx"));
+    assert!(assembly.contains("jz .Lcombine_"));
+    assert!(assembly.contains("call _combine"));
+    assert!(assembly.contains("leave\n    ret"));
+
+    let assembly_path =
+        std::env::temp_dir().join(format!("mimi_x86_assembly_{}.s", std::process::id()));
+    let object_path =
+        std::env::temp_dir().join(format!("mimi_x86_assembly_{}.o", std::process::id()));
+    std::fs::write(&assembly_path, assembly).unwrap();
+    let mut command = std::process::Command::new("cc");
+    if cfg!(target_os = "macos") {
+        command.args(["-arch", "x86_64"]);
+    }
+    let status = command
+        .arg("-c")
+        .arg(&assembly_path)
+        .arg("-o")
+        .arg(&object_path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    std::fs::remove_file(assembly_path).unwrap();
+    std::fs::remove_file(object_path).unwrap();
+}
+
+#[test]
+fn emits_and_assembles_x86_64_float_and_stack_arguments() {
+    let ast = parse(tokenize(
+        "sum10 :: fn (a : i32, b : i32, c : i32, d : i32, e : i32, f : i32, g : i32, h : i32, i : i32, j : i32) i32 { a + b + c + d + e + f + g + h + i + j } add32 :: fn (left : f32, right : f32) f32 { left + right } multiply16 :: fn (left : f16, right : f16) f16 { left * right } main :: fn () i32 { sum10(1, 2, 3, 4, 5, 6, 7, 8, 9, 10) + if add32(1.0, 2.0) > 2.0 { 1 } else { 0 } }"
+            .chars(),
+    ));
+    let hir = hir::lower_ast(&ast);
+    let mir = mir::lower_hir_with_layout(&hir, lir::TargetDataLayout::HOST_64);
+    let target = lir::X86_64Target;
+    let lir = lir::lower_mir(&mir, &target);
+    let assembly = codegen::emit_assembly(&lir).unwrap();
+
+    assert!(assembly.contains("addss xmm0, xmm1"));
+    assert!(assembly.contains("vcvtph2ps"));
+    assert!(assembly.contains("vcvtps2ph"));
+    assert!(assembly.contains("call _sum10"));
+    assert!(assembly.contains("[rsp + 0]"));
+
+    let assembly_path =
+        std::env::temp_dir().join(format!("mimi_x86_float_assembly_{}.s", std::process::id()));
+    let object_path =
+        std::env::temp_dir().join(format!("mimi_x86_float_assembly_{}.o", std::process::id()));
+    std::fs::write(&assembly_path, assembly).unwrap();
+    let mut command = std::process::Command::new("cc");
+    if cfg!(target_os = "macos") {
+        command.args(["-arch", "x86_64"]);
+    }
+    let status = command
+        .arg("-c")
+        .arg(&assembly_path)
+        .arg("-o")
+        .arg(&object_path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    std::fs::remove_file(assembly_path).unwrap();
+    std::fs::remove_file(object_path).unwrap();
+}
+
+#[test]
+fn builds_x86_64_executable_for_selected_target() {
+    let source =
+        std::env::temp_dir().join(format!("mimi_x86_target_source_{}.mi", std::process::id()));
+    let executable =
+        std::env::temp_dir().join(format!("mimi_x86_target_executable_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "choose :: fn (left : f32, right : f32) i32 { result := if left + right > 3.0 { 41 } else { 1 } result } main :: fn () i32 { choose(1.5, 2.0) }",
+    )
+    .unwrap();
+    build_file_for_target(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+        lir::TargetArch::X86_64,
+    )
+    .unwrap();
+    assert!(executable.is_file());
+
+    if cfg!(target_arch = "x86_64") {
+        let status = std::process::Command::new(&executable).status().unwrap();
+        assert_eq!(status.code(), Some(41));
+    } else if cfg!(target_os = "macos") {
+        let description = std::process::Command::new("file")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(description.status.success());
+        assert!(String::from_utf8_lossy(&description.stdout).contains("x86_64"));
+    }
+
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
 }
 
 #[test]

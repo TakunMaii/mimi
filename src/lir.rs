@@ -49,6 +49,16 @@ pub(crate) trait Target {
     fn data_layout(&self) -> TargetDataLayout;
 }
 
+impl Target for TargetArch {
+    fn arch(&self) -> TargetArch {
+        *self
+    }
+
+    fn data_layout(&self) -> TargetDataLayout {
+        TargetDataLayout::HOST_64
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct HostTarget;
 
@@ -63,6 +73,19 @@ impl Target for HostTarget {
 
     fn data_layout(&self) -> TargetDataLayout {
         TargetDataLayout::new((usize::BITS / 8) as u64, 8)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct X86_64Target;
+
+impl Target for X86_64Target {
+    fn arch(&self) -> TargetArch {
+        TargetArch::X86_64
+    }
+
+    fn data_layout(&self) -> TargetDataLayout {
+        TargetDataLayout::HOST_64
     }
 }
 
