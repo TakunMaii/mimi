@@ -425,6 +425,36 @@ fn builds_and_runs_scalar_struct_fields_and_defaults() {
 }
 
 #[test]
+fn builds_and_runs_nested_struct_field_access() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_nested_struct_source_{}.mi",
+        std::process::id()
+    ));
+    let path =
+        std::env::temp_dir().join(format!("mimi_nested_struct_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "inner :: struct { x : i32 } outer :: struct { nested : inner, y : i32 } main :: fn () i32 { value := outer { nested = inner { x = 3 }, y = 4 } before := value.nested.x value.nested.x = 9 before + value.nested.x + value.y }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(16));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_for_loops_over_fixed_arrays() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

@@ -26,6 +26,8 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Implement 64-bit stack slots, loads/stores, and mutable locals across loops and branches.
 - [x] Lower scalar struct literals, 64-bit field slots, defaults, reads, writes, parameters, and inferred arguments.
 - [ ] Implement nested fields, compound layouts, and value return ABI.
+  - [x] Resolve reads and writes through nested struct fields.
+  - [ ] Store nested aggregates inline and define aggregate parameter and return ABI.
 - [x] Implement tag-plus-one-slot enum construction and payload access.
 - [ ] Add target-aware enum layouts for payloads larger than one machine word and value returns.
 - [x] Implement fixed-size scalar array literals, stack layout, indexing, and reads.

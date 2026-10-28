@@ -2388,7 +2388,14 @@ impl Builder {
                 ..
             } => Some((*name).to_string()),
             Expression::AddressOf(inner) => self.expression_struct_name(inner),
-            _ => None,
+            _ => match self.expression_type(expression)? {
+                HirType::Named(name) if self.struct_fields.contains_key(&name) => Some(name),
+                HirType::Pointer(inner) => match *inner {
+                    HirType::Named(name) if self.struct_fields.contains_key(&name) => Some(name),
+                    _ => None,
+                },
+                _ => None,
+            },
         }
     }
 
