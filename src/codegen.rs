@@ -35,7 +35,10 @@ pub(crate) struct LinkOptions {
 
 pub(crate) fn emit_assembly(module: &LirModule) -> Result<String, String> {
     match module.target {
-        TargetArch::Aarch64 => emit_aarch64(module),
+        TargetArch::Aarch64 => {
+            validate_data_layout(module)?;
+            emit_aarch64(module)
+        }
         TargetArch::X86_64 => Err("x86_64 code generation is not implemented yet".into()),
     }
 }
@@ -52,6 +55,7 @@ pub(crate) fn compile_executable_with_options(
     if module.target != TargetArch::Aarch64 {
         return Err("machine code emission is currently implemented for ARM64 only".into());
     }
+    validate_data_layout(module)?;
     let (text, data, symbols, relocations) = encode_module(module)?;
     let object = write_macho_object(&text, &data, &symbols, &relocations);
     let object_path = output.with_extension("o");
@@ -98,6 +102,13 @@ pub(crate) fn compile_executable_with_options(
     } else {
         Err(String::from_utf8_lossy(&result.stderr).into_owned())
     }
+}
+
+fn validate_data_layout(module: &LirModule) -> Result<(), String> {
+    if module.data_layout.pointer_bytes() != 8 || module.data_layout.stack_slot_bytes() != 8 {
+        return Err("ARM64 backend requires 8-byte pointers and stack slots".into());
+    }
+    Ok(())
 }
 
 fn encode_module(

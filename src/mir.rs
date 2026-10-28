@@ -1,4 +1,5 @@
 use crate::hir::{HirFunction, HirModule, HirType};
+use crate::lir::TargetDataLayout;
 use crate::parser::Expression;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -212,10 +213,12 @@ pub(crate) struct MirFunction {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct MirModule {
+    pub(crate) data_layout: TargetDataLayout,
     pub(crate) functions: Vec<MirFunction>,
 }
 
 struct Builder {
+    layout: TargetDataLayout,
     next_value: u32,
     next_slot: u32,
     blocks: Vec<MirBlock>,
@@ -312,8 +315,10 @@ impl Builder {
                 .insert(name.to_string(), struct_name.clone());
         }
         if let HirType::Pointer(element) = data_type {
-            self.pointer_scales
-                .insert(name.to_string(), pointer_scale_from_hir_type(element));
+            self.pointer_scales.insert(
+                name.to_string(),
+                pointer_scale_from_hir_type(element, self.layout.pointer_bytes()),
+            );
         }
         if let HirType::Function { params, result } = data_type {
             self.variable_function_signatures
@@ -421,13 +426,14 @@ impl Builder {
                 let packed_size = expected_element
                     .as_ref()
                     .and_then(scalar_storage_size)
-                    .filter(|size| *size < 8);
+                    .filter(|size| u64::from(*size) < self.layout.stack_slot_bytes());
                 let element_stride = expected_element
                     .as_ref()
                     .map(|data_type| self.element_stride(data_type))
-                    .unwrap_or(8);
+                    .unwrap_or(self.layout.pointer_bytes());
                 let total_bytes = (values.len() as u64).checked_mul(element_stride)?;
-                let slot_count = u32::try_from(total_bytes.div_ceil(8)).ok()?;
+                let slot_count =
+                    u32::try_from(total_bytes.div_ceil(self.layout.stack_slot_bytes())).ok()?;
                 let inline_elements = expected_element
                     .as_ref()
                     .is_some_and(|data_type| self.is_inline_aggregate(data_type));
@@ -1221,7 +1227,10 @@ impl Builder {
                                 }
                                 let pointer_scale = match data_type {
                                     Some(crate::parser::DataType::Pointer(element)) => {
-                                        Some(pointer_scale_from_data_type(element))
+                                        Some(pointer_scale_from_data_type(
+                                            element,
+                                            self.layout.pointer_bytes(),
+                                        ))
                                     }
                                     _ => inferred_pointer_scale,
                                 };
@@ -2284,9 +2293,9 @@ impl Builder {
                     Some(HirType::Array { element, .. }) => Some(self.element_stride(element)),
                     _ => None,
                 })
-                .unwrap_or(8),
+                .unwrap_or(self.layout.pointer_bytes()),
             Expression::LiteralString(_) => 1,
-            _ => 8,
+            _ => self.layout.pointer_bytes(),
         }
     }
 
@@ -2305,14 +2314,20 @@ impl Builder {
         match target {
             Expression::Index { object, .. } => self.index_scale(object),
             Expression::Identifier(name) => match self.variable_types.get(name) {
-                Some(data_type @ HirType::Array { .. }) => pointer_scale_from_hir_type(data_type),
-                _ => 8,
+                Some(data_type @ HirType::Array { .. }) => {
+                    pointer_scale_from_hir_type(data_type, self.layout.pointer_bytes())
+                }
+                _ => self.layout.pointer_bytes(),
             },
             Expression::Dereference(pointer) => match pointer.as_ref() {
-                Expression::Identifier(name) => self.pointer_scales.get(name).copied().unwrap_or(8),
-                _ => 8,
+                Expression::Identifier(name) => self
+                    .pointer_scales
+                    .get(name)
+                    .copied()
+                    .unwrap_or(self.layout.pointer_bytes()),
+                _ => self.layout.pointer_bytes(),
             },
-            _ => 8,
+            _ => self.layout.pointer_bytes(),
         }
     }
 
@@ -2338,7 +2353,7 @@ impl Builder {
                         .first()
                         .and_then(|value| self.expression_type(value))
                         .map(|element| self.element_stride(&element))
-                        .unwrap_or(8),
+                        .unwrap_or(self.layout.pointer_bytes()),
                 };
                 Some((base, length, scale))
             }
@@ -2370,7 +2385,7 @@ impl Builder {
                     });
                     let scale = match self.variable_types.get(name) {
                         Some(HirType::Array { element, .. }) => self.element_stride(element),
-                        _ => 8,
+                        _ => self.layout.pointer_bytes(),
                     };
                     Some((base, length_value, scale))
                 }
@@ -2414,7 +2429,11 @@ impl Builder {
                 };
                 let base = self.expression(expression)?;
                 let length = self.slice_value_lengths.get(&base).copied()?;
-                Some((base, length, pointer_scale_from_hir_type(&element)))
+                Some((
+                    base,
+                    length,
+                    pointer_scale_from_hir_type(&element, self.layout.pointer_bytes()),
+                ))
             }
         }
     }
@@ -2651,7 +2670,8 @@ impl Builder {
             value: tag,
         });
         let address = self.slot_address_value(base);
-        let payload_address = self.byte_offset_address(address, 8);
+        let slot_bytes = self.layout.stack_slot_bytes();
+        let payload_address = self.byte_offset_address(address, slot_bytes);
         if let (Some(payload_expression), Some(payload_type)) = (payload, variant.payload.as_ref())
         {
             if self.is_inline_aggregate(payload_type) {
@@ -2667,7 +2687,8 @@ impl Builder {
                     result: zero,
                     value: 0,
                 });
-                let address = self.byte_offset_address(payload_address, u64::from(offset) * 8);
+                let address =
+                    self.byte_offset_address(payload_address, u64::from(offset) * slot_bytes);
                 self.emit(MirInstruction::StoreIndirect {
                     address,
                     value: zero,
@@ -2693,7 +2714,7 @@ impl Builder {
             result: address,
             base: value,
             index: zero,
-            scale: 8,
+            scale: self.layout.stack_slot_bytes(),
         });
         let discriminant = self.value();
         self.emit(MirInstruction::LoadIndirect {
@@ -2705,7 +2726,7 @@ impl Builder {
 
     fn enum_payload(&mut self, value: ValueId, variant: &EnumVariant) -> Option<ValueId> {
         let payload_type = variant.payload.as_ref()?;
-        let address = self.byte_offset_address(value, 8);
+        let address = self.byte_offset_address(value, self.layout.stack_slot_bytes());
         if self.is_inline_aggregate(payload_type) {
             Some(address)
         } else {
@@ -2800,7 +2821,7 @@ impl Builder {
             }
             HirType::Array { length, element } => {
                 let bytes = length.checked_mul(self.type_storage_stride(element, visiting)?)?;
-                u32::try_from(bytes.div_ceil(8)).ok()
+                u32::try_from(bytes.div_ceil(self.layout.stack_slot_bytes())).ok()
             }
             _ => Some(1),
         }
@@ -2815,17 +2836,17 @@ impl Builder {
             return Some(u64::from(size));
         }
         match data_type {
-            HirType::Pointer(_) | HirType::Function { .. } => Some(8),
+            HirType::Pointer(_) | HirType::Function { .. } => Some(self.layout.pointer_bytes()),
             HirType::Array { length, element } => {
                 length.checked_mul(self.type_storage_stride(element, visiting)?)
             }
             HirType::Named(name) if self.struct_fields.contains_key(name) => self
                 .struct_slot_count_inner(name, visiting)
-                .map(|slots| u64::from(slots) * 8),
+                .map(|slots| u64::from(slots) * self.layout.stack_slot_bytes()),
             HirType::Named(name) if self.enum_uses_storage(name) => self
                 .enum_storage_slot_count_inner(name, visiting)
-                .map(|slots| u64::from(slots) * 8),
-            _ => Some(8),
+                .map(|slots| u64::from(slots) * self.layout.stack_slot_bytes()),
+            _ => Some(self.layout.pointer_bytes()),
         }
     }
 
@@ -2849,7 +2870,7 @@ impl Builder {
             }
             HirType::Array { length, element } => {
                 let bytes = length.checked_mul(self.element_stride(element))?;
-                u32::try_from(bytes.div_ceil(8)).ok()?
+                u32::try_from(bytes.div_ceil(self.layout.stack_slot_bytes())).ok()?
             }
             _ => return None,
         };
@@ -2956,7 +2977,7 @@ impl Builder {
             }
             HirType::Array { length, element } => {
                 let bytes = length.checked_mul(self.type_storage_stride(element, visiting)?)?;
-                u32::try_from(bytes.div_ceil(8)).ok()
+                u32::try_from(bytes.div_ceil(self.layout.stack_slot_bytes())).ok()
             }
             _ => Some(1),
         }
@@ -2964,11 +2985,14 @@ impl Builder {
 
     fn element_stride(&self, data_type: &HirType) -> u64 {
         self.type_storage_stride(data_type, &mut std::collections::HashSet::new())
-            .unwrap_or_else(|| pointer_scale_from_hir_type(data_type))
+            .unwrap_or_else(|| pointer_scale_from_hir_type(data_type, self.layout.pointer_bytes()))
     }
 
     fn inline_field_address(&mut self, base: ValueId, slot_offset: u32) -> ValueId {
-        self.byte_offset_address(base, u64::from(slot_offset) * 8)
+        self.byte_offset_address(
+            base,
+            u64::from(slot_offset) * self.layout.stack_slot_bytes(),
+        )
     }
 
     fn byte_offset_address(&mut self, base: ValueId, offset: u64) -> ValueId {
@@ -3184,8 +3208,10 @@ fn lower_function(
     function_signatures: &std::collections::HashMap<String, (Vec<HirType>, HirType)>,
     external_symbols: &std::collections::HashMap<String, String>,
     global_constants: &std::collections::HashMap<String, crate::hir::HirConstant>,
+    layout: TargetDataLayout,
 ) -> MirFunction {
     let mut builder = Builder {
+        layout,
         next_value: 0,
         next_slot: 0,
         blocks: vec![MirBlock {
@@ -3258,9 +3284,10 @@ fn lower_function(
             });
         }
         if let HirType::Pointer(element) = ty {
-            builder
-                .pointer_scales
-                .insert(name.clone(), pointer_scale_from_hir_type(element));
+            builder.pointer_scales.insert(
+                name.clone(),
+                pointer_scale_from_hir_type(element, layout.pointer_bytes()),
+            );
         }
         if let HirType::Function { params, result } = ty {
             builder
@@ -3379,6 +3406,10 @@ fn prune_unreachable_blocks(blocks: &mut Vec<MirBlock>) {
 }
 
 pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
+    lower_hir_with_layout(module, TargetDataLayout::HOST_64)
+}
+
+pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout) -> MirModule {
     let enum_variants = module
         .enums
         .iter()
@@ -3514,6 +3545,7 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
         .map(|constant| (constant.name.clone(), constant.clone()))
         .collect::<std::collections::HashMap<_, _>>();
     MirModule {
+        data_layout: layout,
         functions: module
             .functions
             .iter()
@@ -3528,6 +3560,7 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
                     &function_signatures,
                     &external_symbols,
                     &global_constants,
+                    layout,
                 )
             })
             .collect(),
@@ -3545,16 +3578,16 @@ fn struct_name_from_hir_type(
     }
 }
 
-fn pointer_scale_from_hir_type(data_type: &HirType) -> u64 {
-    pointer_stride_from_hir_type(data_type).unwrap_or(8)
+fn pointer_scale_from_hir_type(data_type: &HirType, pointer_bytes: u64) -> u64 {
+    pointer_stride_from_hir_type(data_type, pointer_bytes).unwrap_or(pointer_bytes)
 }
 
-fn pointer_stride_from_hir_type(data_type: &HirType) -> Option<u64> {
+fn pointer_stride_from_hir_type(data_type: &HirType, pointer_bytes: u64) -> Option<u64> {
     if let Some(size) = scalar_storage_size(data_type) {
         return Some(u64::from(size));
     }
     match data_type {
-        HirType::Pointer(_) | HirType::Function { .. } => Some(8),
+        HirType::Pointer(_) | HirType::Function { .. } => Some(pointer_bytes),
         HirType::Array { length, element }
             if *length > 0
                 && (scalar_storage_size(element).is_some()
@@ -3563,7 +3596,7 @@ fn pointer_stride_from_hir_type(data_type: &HirType) -> Option<u64> {
                         HirType::Pointer(_) | HirType::Function { .. }
                     )) =>
         {
-            length.checked_mul(pointer_stride_from_hir_type(element)?)
+            length.checked_mul(pointer_stride_from_hir_type(element, pointer_bytes)?)
         }
         _ => None,
     }
@@ -3639,7 +3672,7 @@ fn f64_to_f16_bits(value: f64) -> u16 {
     sign | (rounded as u16)
 }
 
-fn pointer_scale_from_data_type(data_type: &crate::parser::DataType) -> u64 {
+fn pointer_scale_from_data_type(data_type: &crate::parser::DataType, pointer_bytes: u64) -> u64 {
     match data_type {
         crate::parser::DataType::U8 | crate::parser::DataType::I8 | crate::parser::DataType::F8 => {
             1
@@ -3667,11 +3700,11 @@ fn pointer_scale_from_data_type(data_type: &crate::parser::DataType) -> u64 {
                 | crate::parser::DataType::I64
                 | crate::parser::DataType::F64
                 | crate::parser::DataType::Pointer(_)
-                | crate::parser::DataType::Function(_, _) => 8,
-                _ => return 8,
+                | crate::parser::DataType::Function(_, _) => pointer_bytes,
+                _ => return pointer_bytes,
             };
-            length.checked_mul(element_scale).unwrap_or(8)
+            length.checked_mul(element_scale).unwrap_or(pointer_bytes)
         }
-        _ => 8,
+        _ => pointer_bytes,
     }
 }

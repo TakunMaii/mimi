@@ -96,8 +96,10 @@ fn build_file(
         &mut compilation_ast,
     )?;
     let hir = hir::lower_ast(&compilation_ast);
-    let mir = mir::lower_hir(&hir);
-    let lir = lir::lower_mir(&mir, &lir::HostTarget);
+    let target = lir::HostTarget;
+    let layout = <lir::HostTarget as lir::Target>::data_layout(&target);
+    let mir = mir::lower_hir_with_layout(&hir, layout);
+    let lir = lir::lower_mir(&mir, &target);
     codegen::compile_executable_with_options(
         &lir,
         std::path::Path::new(output),

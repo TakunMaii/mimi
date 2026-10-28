@@ -25,6 +25,8 @@ and focused regression coverage; it does not imply support on every target.
   - [x] Reserve `f8` as a keyword and retain it as a type placeholder.
   - [ ] Define an f8 encoding and support its lowering and ABI representation.
 - [ ] Define target data layout and ABI rules for all supported value types.
+  - [x] Carry pointer and stack-slot widths from target selection through MIR and LIR.
+  - [ ] Centralize recursive aggregate layouts and per-type ABI classification.
 - [x] Implement 64-bit stack slots, loads/stores, and mutable locals across loops and branches.
 - [x] Lower scalar struct literals, 64-bit field slots, defaults, reads, writes, parameters, and inferred arguments.
 - [ ] Implement nested fields and compound target layouts.

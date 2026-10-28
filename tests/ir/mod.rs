@@ -23,12 +23,33 @@ fn lowers_function_through_all_ir_layers() {
         lir.target,
         <lir::HostTarget as lir::Target>::arch(&lir::HostTarget)
     );
+    assert_eq!(
+        lir.data_layout,
+        <lir::HostTarget as lir::Target>::data_layout(&lir::HostTarget)
+    );
     assert!(
         lir.functions[0].blocks[0]
             .instructions
             .iter()
             .any(|instruction| matches!(instruction, lir::LirInstruction::Add { .. }))
     );
+}
+
+#[test]
+fn lowers_pointer_stride_from_target_data_layout() {
+    let ast = parse(tokenize(
+        "advance :: fn (value : **i32) **i32 { value + 1 }".chars(),
+    ));
+    let hir = hir::lower_ast(&ast);
+    let mir = mir::lower_hir_with_layout(&hir, lir::TargetDataLayout::new(4, 8));
+    assert!(mir.functions[0].blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                mir::MirInstruction::IndexAddress { scale: 4, .. }
+            )
+        })
+    }));
 }
 
 #[test]

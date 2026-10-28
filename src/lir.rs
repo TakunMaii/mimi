@@ -10,9 +10,43 @@ pub(crate) enum TargetArch {
     X86_64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TargetDataLayout {
+    pointer_bytes: u64,
+    stack_slot_bytes: u64,
+}
+
+impl TargetDataLayout {
+    pub(crate) const HOST_64: Self = Self {
+        pointer_bytes: 8,
+        stack_slot_bytes: 8,
+    };
+
+    pub(crate) const fn new(pointer_bytes: u64, stack_slot_bytes: u64) -> Self {
+        Self {
+            pointer_bytes,
+            stack_slot_bytes,
+        }
+    }
+
+    pub(crate) const fn pointer_bytes(self) -> u64 {
+        self.pointer_bytes
+    }
+
+    pub(crate) const fn stack_slot_bytes(self) -> u64 {
+        self.stack_slot_bytes
+    }
+}
+
+impl Default for TargetDataLayout {
+    fn default() -> Self {
+        Self::HOST_64
+    }
+}
+
 pub(crate) trait Target {
     fn arch(&self) -> TargetArch;
-    fn pointer_bits(&self) -> u16;
+    fn data_layout(&self) -> TargetDataLayout;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -27,8 +61,8 @@ impl Target for HostTarget {
         }
     }
 
-    fn pointer_bits(&self) -> u16 {
-        usize::BITS as u16
+    fn data_layout(&self) -> TargetDataLayout {
+        TargetDataLayout::new((usize::BITS / 8) as u64, 8)
     }
 }
 
@@ -188,14 +222,17 @@ pub(crate) struct LirBlock {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LirModule {
     pub(crate) target: TargetArch,
+    pub(crate) data_layout: TargetDataLayout,
     pub(crate) functions: Vec<LirFunction>,
     pub(crate) strings: Vec<(String, Vec<u8>)>,
 }
 
 pub(crate) fn lower_mir<T: Target>(module: &MirModule, target: &T) -> LirModule {
+    debug_assert_eq!(module.data_layout, target.data_layout());
     let mut strings = Vec::new();
     LirModule {
         target: target.arch(),
+        data_layout: module.data_layout,
         functions: module
             .functions
             .iter()
