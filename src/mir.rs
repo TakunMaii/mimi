@@ -685,6 +685,7 @@ impl Builder {
                 if let Some(width) = expected_float.or_else(|| text.contains('.').then_some(64)) {
                     let value = text.parse::<f64>().ok()?;
                     let bits = match width {
+                        8 => u64::from(crate::float8::to_e4m3fn(value)),
                         16 => f64_to_f16_bits(value) as u64,
                         32 => (value as f32).to_bits() as u64,
                         64 => value.to_bits(),

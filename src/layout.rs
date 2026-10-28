@@ -369,6 +369,7 @@ mod tests {
             integer(32),
             integer(64),
             HirType::Float { bits: 16 },
+            HirType::Float { bits: 8 },
             HirType::Float { bits: 32 },
             HirType::Float { bits: 64 },
             HirType::Bool,

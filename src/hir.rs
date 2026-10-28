@@ -485,7 +485,9 @@ fn is_constant_type(data_type: &HirType) -> bool {
     matches!(
         data_type,
         HirType::Integer { .. }
-            | HirType::Float { bits: 16 | 32 | 64 }
+            | HirType::Float {
+                bits: 8 | 16 | 32 | 64
+            }
             | HirType::Bool
             | HirType::Named(_)
     ) || matches!(data_type, HirType::Array { element, .. } if !matches!(element.as_ref(), HirType::Slice(_)) && is_constant_type(element))

@@ -1,5 +1,6 @@
 mod codegen;
 mod codegen_x86_64;
+mod float8;
 mod hir;
 mod layout;
 mod lexer;
