@@ -250,6 +250,7 @@ enum Variable {
 
 #[derive(Clone)]
 struct EnumVariant {
+    owner: String,
     tag: u64,
     payload: Option<HirType>,
     uses_storage: bool,
@@ -442,11 +443,10 @@ impl Builder {
                     scale,
                 });
                 let data_type = self.expression_type(expression);
-                if data_type.as_ref().is_some_and(|ty| match ty {
-                    HirType::Named(name) => self.struct_fields.contains_key(name),
-                    HirType::Array { .. } => true,
-                    _ => false,
-                }) {
+                if data_type
+                    .as_ref()
+                    .is_some_and(|data_type| self.is_inline_aggregate(data_type))
+                {
                     return Some(address);
                 }
                 let result = self.value();
@@ -535,8 +535,7 @@ impl Builder {
                     .clone();
                 let base = self.expression(object)?;
                 let address = self.inline_field_address(base, field_offset);
-                if self.is_inline_struct(&field_type) || matches!(field_type, HirType::Array { .. })
-                {
+                if self.is_inline_aggregate(&field_type) {
                     return Some(address);
                 }
                 let result = self.value();
@@ -1201,12 +1200,6 @@ impl Builder {
                                 });
                                 let base = self.expression(object)?;
                                 let index = self.expression(index)?;
-                                let value = match expected_type.as_ref() {
-                                    Some(data_type) => {
-                                        self.expression_expected(value, data_type)?
-                                    }
-                                    None => self.expression(value)?,
-                                };
                                 let address = self.value();
                                 let scale = self.index_scale(object);
                                 self.emit(MirInstruction::IndexAddress {
@@ -1215,11 +1208,17 @@ impl Builder {
                                     index,
                                     scale,
                                 });
-                                if let Some(HirType::Named(name)) = expected_type.as_ref()
-                                    && self.struct_fields.contains_key(name)
+                                if let Some(data_type) = expected_type.as_ref()
+                                    && self.is_inline_aggregate(data_type)
                                 {
-                                    self.copy_struct_to_address(name, value, address)?;
+                                    self.lower_inline_value_into(data_type, value, address)?;
                                 } else {
+                                    let value = match expected_type.as_ref() {
+                                        Some(data_type) => {
+                                            self.expression_expected(value, data_type)?
+                                        }
+                                        None => self.expression(value)?,
+                                    };
                                     self.emit_store_indirect(
                                         address,
                                         value,
@@ -1258,12 +1257,8 @@ impl Builder {
                                     .clone();
                                 let base = self.expression(object)?;
                                 let address = self.inline_field_address(base, field_offset);
-                                if self.is_inline_struct(&field_type) {
-                                    let value = self.expression_expected(value, &field_type)?;
-                                    let HirType::Named(name) = &field_type else {
-                                        unreachable!();
-                                    };
-                                    self.copy_struct_to_address(name, value, address)?;
+                                if self.is_inline_aggregate(&field_type) {
+                                    self.lower_inline_value_into(&field_type, value, address)?;
                                 } else {
                                     let value = self.expression_expected(value, &field_type)?;
                                     self.emit(MirInstruction::StoreIndirect { address, value });
@@ -2637,6 +2632,7 @@ impl Builder {
             HirType::Named(name) if self.struct_fields.contains_key(name) => {
                 self.struct_slot_count_inner(name, visiting)
             }
+            HirType::Named(name) if self.enum_uses_storage(name) => Some(2),
             HirType::Array { length, element } => {
                 let bytes = length.checked_mul(self.type_storage_stride(element, visiting)?)?;
                 u32::try_from(bytes.div_ceil(8)).ok()
@@ -2661,6 +2657,7 @@ impl Builder {
             HirType::Named(name) if self.struct_fields.contains_key(name) => self
                 .struct_slot_count_inner(name, visiting)
                 .map(|slots| u64::from(slots) * 8),
+            HirType::Named(name) if self.enum_uses_storage(name) => Some(16),
             _ => Some(8),
         }
     }
@@ -2670,7 +2667,15 @@ impl Builder {
     }
 
     fn is_inline_aggregate(&self, data_type: &HirType) -> bool {
-        self.is_inline_struct(data_type) || matches!(data_type, HirType::Array { .. })
+        self.is_inline_struct(data_type)
+            || matches!(data_type, HirType::Array { .. })
+            || matches!(data_type, HirType::Named(name) if self.enum_uses_storage(name))
+    }
+
+    fn enum_uses_storage(&self, enum_name: &str) -> bool {
+        self.enum_variants
+            .values()
+            .any(|variant| variant.owner == enum_name && variant.uses_storage)
     }
 
     fn element_stride(&self, data_type: &HirType) -> u64 {
@@ -2714,6 +2719,15 @@ impl Builder {
         destination: ValueId,
     ) -> Option<()> {
         let slot_count = self.struct_slot_count(struct_name)?;
+        self.copy_words_to_address(source, destination, slot_count)
+    }
+
+    fn copy_words_to_address(
+        &mut self,
+        source: ValueId,
+        destination: ValueId,
+        slot_count: u32,
+    ) -> Option<()> {
         for offset in 0..slot_count {
             let source_address = self.inline_field_address(source, offset);
             let value = self.value();
@@ -2744,6 +2758,10 @@ impl Builder {
                     let value = self.expression_expected(expression, data_type)?;
                     self.copy_struct_to_address(name, value, destination)
                 }
+            }
+            HirType::Named(name) if self.enum_uses_storage(name) => {
+                let value = self.expression_expected(expression, data_type)?;
+                self.copy_words_to_address(value, destination, 2)
             }
             HirType::Array { length, element } => {
                 if let Expression::ArrayLiteral(values) = expression {
@@ -2778,6 +2796,9 @@ impl Builder {
         match data_type {
             HirType::Named(name) if self.struct_fields.contains_key(name) => {
                 self.copy_struct_to_address(name, source, destination)
+            }
+            HirType::Named(name) if self.enum_uses_storage(name) => {
+                self.copy_words_to_address(source, destination, 2)
             }
             HirType::Array { length, element } => {
                 let stride = self.element_stride(element);
@@ -3063,6 +3084,7 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
                     (
                         variant.clone(),
                         EnumVariant {
+                            owner: enumeration.name.clone(),
                             tag: tag as u64,
                             payload: payload.clone(),
                             uses_storage,

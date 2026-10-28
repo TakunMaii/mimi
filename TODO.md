@@ -39,7 +39,8 @@ and focused regression coverage; it does not imply support on every target.
   - [x] Pack scalar elements at their 1-, 2-, 4-, or 8-byte target widths.
   - [x] Lay out fixed arrays of structs inline, including indexing, field reads and writes, and value copies.
   - [x] Lay out nested arrays inline, including arrays of structs and array fields.
-  - [ ] Lay out multi-slot enum elements inline.
+  - [x] Lay out tag-plus-one-slot payload enums inline in arrays and struct fields.
+  - [ ] Lay out enums whose payload exceeds one machine word inline.
 - [x] Represent local slices with pointer/length slots; support indexing, slicing, and parameter passing.
 - [x] Lower local slice reassignment with updated pointer, length, and element scale.
 - [x] Return slices from Mimi functions as pointer in x0 and length in x1; reject C extern slice returns.

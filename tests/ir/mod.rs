@@ -524,6 +524,40 @@ fn builds_and_runs_nested_array_layouts() {
 }
 
 #[test]
+fn builds_and_runs_arrays_of_payload_enums() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_enum_array_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_enum_array_codegen_{}", std::process::id()));
+    for (program, expected) in [
+        (
+            "result :: enum { some(i32), error, none } main :: fn () i32 { values : [3]result = [some(7), none, some(9)] first := match values[0] { some(value) => value, error => 0, none => 0 } second := match values[1] { some(value) => value, error => 0, none => 2 } third := match values[2] { some(value) => value, error => 0, none => 0 } first + second + third }",
+            18,
+        ),
+        (
+            "result :: enum { some(i32), none } choice :: struct { value : result } main :: fn () i32 { item := choice { value = some(11) } match item.value { some(value) => value, none => 0 } }",
+            11,
+        ),
+    ] {
+        std::fs::write(&source, program).unwrap();
+        build_file(
+            source.to_str().unwrap(),
+            path.to_str().unwrap(),
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let status = std::process::Command::new(&path).status().unwrap();
+        assert_eq!(status.code(), Some(expected));
+    }
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_nested_struct_field_access() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
