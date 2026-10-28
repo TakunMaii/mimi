@@ -308,6 +308,18 @@ impl Builder {
         if let HirType::Array { length, .. } = data_type {
             self.array_lengths.insert(name.to_string(), *length);
         }
+        if let HirType::Slice(element) = data_type
+            && let Some(length) = self.slice_value_lengths.get(&value).copied()
+        {
+            let length_slot = self.slot();
+            self.slice_lengths.insert(name.to_string(), length_slot);
+            self.slice_scales
+                .insert(name.to_string(), self.element_stride(element));
+            self.emit(MirInstruction::StoreSlot {
+                slot: length_slot,
+                value: length,
+            });
+        }
         if let HirType::Named(struct_name) = data_type
             && self.struct_fields.contains_key(struct_name)
         {
@@ -436,7 +448,7 @@ impl Builder {
                     u32::try_from(total_bytes.div_ceil(self.layout.stack_slot_bytes())).ok()?;
                 let inline_elements = expected_element
                     .as_ref()
-                    .is_some_and(|data_type| self.is_inline_aggregate(data_type));
+                    .is_some_and(|data_type| self.is_inline_storage_aggregate(data_type));
                 let base = self.slot();
                 self.next_slot += slot_count.saturating_sub(1) as u32;
                 let storage_base = if packed_size.is_some() || inline_elements {
@@ -528,6 +540,9 @@ impl Builder {
                 {
                     return Some(address);
                 }
+                if let Some(data_type @ HirType::Slice(_)) = data_type.as_ref() {
+                    return self.load_slice_descriptor(address, data_type);
+                }
                 let result = self.value();
                 self.emit_load_indirect(result, address, data_type.as_ref());
                 if let Some(data_type) = data_type {
@@ -571,8 +586,11 @@ impl Builder {
             }
             Expression::Dereference(pointer) => {
                 let address = self.expression(pointer)?;
-                let result = self.value();
                 let data_type = self.expression_type(expression);
+                if let Some(data_type @ HirType::Slice(_)) = data_type.as_ref() {
+                    return self.load_slice_descriptor(address, data_type);
+                }
+                let result = self.value();
                 self.emit_load_indirect(result, address, data_type.as_ref());
                 if let Some(data_type) = data_type {
                     self.value_types.insert(result, data_type);
@@ -622,6 +640,9 @@ impl Builder {
                 let address = self.inline_field_address(base, field_offset);
                 if self.is_inline_aggregate(&field_type) {
                     return Some(address);
+                }
+                if let HirType::Slice(_) = field_type {
+                    return self.load_slice_descriptor(address, &field_type);
                 }
                 let result = self.value();
                 self.emit(MirInstruction::LoadIndirect { result, address });
@@ -1351,7 +1372,7 @@ impl Builder {
                                     scale,
                                 });
                                 if let Some(data_type) = expected_type.as_ref()
-                                    && self.is_inline_aggregate(data_type)
+                                    && self.is_inline_storage_aggregate(data_type)
                                 {
                                     self.lower_inline_value_into(data_type, value, address)?;
                                 } else {
@@ -1399,7 +1420,7 @@ impl Builder {
                                     .clone();
                                 let base = self.expression(object)?;
                                 let address = self.inline_field_address(base, field_offset);
-                                if self.is_inline_aggregate(&field_type) {
+                                if self.is_inline_storage_aggregate(&field_type) {
                                     self.lower_inline_value_into(&field_type, value, address)?;
                                 } else {
                                     let value = self.expression_expected(value, &field_type)?;
@@ -1767,6 +1788,65 @@ impl Builder {
         }
     }
 
+    fn load_slice_descriptor(&mut self, address: ValueId, data_type: &HirType) -> Option<ValueId> {
+        let HirType::Slice(_) = data_type else {
+            return None;
+        };
+        let pointer = self.value();
+        self.emit(MirInstruction::LoadIndirect {
+            result: pointer,
+            address,
+        });
+        let length_address = self.byte_offset_address(address, self.layout.pointer_bytes());
+        let length = self.value();
+        self.emit(MirInstruction::LoadIndirect {
+            result: length,
+            address: length_address,
+        });
+        self.slice_value_lengths.insert(pointer, length);
+        self.value_types.insert(pointer, data_type.clone());
+        Some(pointer)
+    }
+
+    fn store_slice_descriptor(&mut self, address: ValueId, pointer: ValueId) -> Option<()> {
+        let length = self.slice_value_lengths.get(&pointer).copied()?;
+        self.emit(MirInstruction::StoreIndirect {
+            address,
+            value: pointer,
+        });
+        let length_address = self.byte_offset_address(address, self.layout.pointer_bytes());
+        self.emit(MirInstruction::StoreIndirect {
+            address: length_address,
+            value: length,
+        });
+        Some(())
+    }
+
+    fn copy_slice_descriptor(&mut self, source: ValueId, destination: ValueId) -> Option<()> {
+        let pointer = self.value();
+        self.emit(MirInstruction::LoadIndirect {
+            result: pointer,
+            address: source,
+        });
+        let source_length_address = self.byte_offset_address(source, self.layout.pointer_bytes());
+        let length = self.value();
+        self.emit(MirInstruction::LoadIndirect {
+            result: length,
+            address: source_length_address,
+        });
+        self.emit(MirInstruction::StoreIndirect {
+            address: destination,
+            value: pointer,
+        });
+        let destination_length_address =
+            self.byte_offset_address(destination, self.layout.pointer_bytes());
+        self.emit(MirInstruction::StoreIndirect {
+            address: destination_length_address,
+            value: length,
+        });
+        Some(())
+    }
+
     fn expression_type(&self, expression: &Expression) -> Option<HirType> {
         match expression {
             Expression::Identifier(name) => self
@@ -2079,6 +2159,15 @@ impl Builder {
         let previous_length = self.array_lengths.remove(binding);
         let previous_slice_length = self.slice_lengths.remove(binding);
         let previous_slice_scale = self.slice_scales.remove(binding);
+        let binding_slice_length_slot = if let HirType::Slice(element) = &element_type {
+            let slot = self.slot();
+            self.slice_lengths.insert(binding.to_string(), slot);
+            self.slice_scales
+                .insert(binding.to_string(), self.element_stride(element));
+            Some(slot)
+        } else {
+            None
+        };
 
         let condition_block = self.new_block();
         let body_block = self.new_block();
@@ -2133,9 +2222,21 @@ impl Builder {
             index,
             scale,
         });
-        let item = self.value();
-        self.emit_load_indirect(item, address, Some(&element_type));
+        let item = if matches!(element_type, HirType::Slice(_)) {
+            self.load_slice_descriptor(address, &element_type)?
+        } else {
+            let item = self.value();
+            self.emit_load_indirect(item, address, Some(&element_type));
+            item
+        };
         self.value_types.insert(item, element_type.clone());
+        if let Some(length_slot) = binding_slice_length_slot {
+            let length = self.slice_value_lengths.get(&item).copied()?;
+            self.emit(MirInstruction::StoreSlot {
+                slot: length_slot,
+                value: length,
+            });
+        }
         self.emit(MirInstruction::StoreSlot {
             slot: binding_slot,
             value: item,
@@ -2674,7 +2775,7 @@ impl Builder {
         let payload_address = self.byte_offset_address(address, slot_bytes);
         if let (Some(payload_expression), Some(payload_type)) = (payload, variant.payload.as_ref())
         {
-            if self.is_inline_aggregate(payload_type) {
+            if self.is_inline_storage_aggregate(payload_type) {
                 self.lower_inline_value_into(payload_type, payload_expression, payload_address)?;
             } else {
                 let payload_value = self.expression_expected(payload_expression, payload_type)?;
@@ -2727,7 +2828,9 @@ impl Builder {
     fn enum_payload(&mut self, value: ValueId, variant: &EnumVariant) -> Option<ValueId> {
         let payload_type = variant.payload.as_ref()?;
         let address = self.byte_offset_address(value, self.layout.stack_slot_bytes());
-        if self.is_inline_aggregate(payload_type) {
+        if matches!(payload_type, HirType::Slice(_)) {
+            self.load_slice_descriptor(address, payload_type)
+        } else if self.is_inline_aggregate(payload_type) {
             Some(address)
         } else {
             let payload = self.value();
@@ -2819,6 +2922,10 @@ impl Builder {
             HirType::Named(name) if self.enum_uses_storage(name) => {
                 self.enum_storage_slot_count_inner(name, visiting)
             }
+            HirType::Slice(_) => {
+                let bytes = self.layout.pointer_bytes() + self.layout.stack_slot_bytes();
+                u32::try_from(bytes.div_ceil(self.layout.stack_slot_bytes())).ok()
+            }
             HirType::Array { length, element } => {
                 let bytes = length.checked_mul(self.type_storage_stride(element, visiting)?)?;
                 u32::try_from(bytes.div_ceil(self.layout.stack_slot_bytes())).ok()
@@ -2837,6 +2944,7 @@ impl Builder {
         }
         match data_type {
             HirType::Pointer(_) | HirType::Function { .. } => Some(self.layout.pointer_bytes()),
+            HirType::Slice(_) => Some(self.layout.pointer_bytes() + self.layout.stack_slot_bytes()),
             HirType::Array { length, element } => {
                 length.checked_mul(self.type_storage_stride(element, visiting)?)
             }
@@ -2858,6 +2966,10 @@ impl Builder {
         self.is_inline_struct(data_type)
             || matches!(data_type, HirType::Array { .. })
             || matches!(data_type, HirType::Named(name) if self.enum_uses_storage(name))
+    }
+
+    fn is_inline_storage_aggregate(&self, data_type: &HirType) -> bool {
+        self.is_inline_aggregate(data_type) || matches!(data_type, HirType::Slice(_))
     }
 
     fn inline_aggregate_slot_count(&self, data_type: &HirType) -> Option<u32> {
@@ -2979,6 +3091,10 @@ impl Builder {
                 let bytes = length.checked_mul(self.type_storage_stride(element, visiting)?)?;
                 u32::try_from(bytes.div_ceil(self.layout.stack_slot_bytes())).ok()
             }
+            HirType::Slice(_) => {
+                let bytes = self.layout.pointer_bytes() + self.layout.stack_slot_bytes();
+                u32::try_from(bytes.div_ceil(self.layout.stack_slot_bytes())).ok()
+            }
             _ => Some(1),
         }
     }
@@ -3059,6 +3175,10 @@ impl Builder {
         destination: ValueId,
     ) -> Option<()> {
         match data_type {
+            HirType::Slice(_) => {
+                let value = self.expression_expected(expression, data_type)?;
+                self.store_slice_descriptor(destination, value)
+            }
             HirType::Named(name) if self.struct_fields.contains_key(name) => {
                 if let Expression::StructLiteral { fields, .. } = expression {
                     self.lower_struct_fields_into_address(name, fields, destination)
@@ -3116,7 +3236,9 @@ impl Builder {
                     let offset = index.checked_mul(stride)?;
                     let source_address = self.byte_offset_address(source, offset);
                     let destination_address = self.byte_offset_address(destination, offset);
-                    if self.is_inline_aggregate(element) {
+                    if matches!(element.as_ref(), HirType::Slice(_)) {
+                        self.copy_slice_descriptor(source_address, destination_address)?;
+                    } else if self.is_inline_storage_aggregate(element) {
                         self.copy_inline_value_to_address(
                             element,
                             source_address,
@@ -3130,6 +3252,7 @@ impl Builder {
                 }
                 Some(())
             }
+            HirType::Slice(_) => self.store_slice_descriptor(destination, source),
             _ => {
                 let value = self.value();
                 self.emit_load_indirect(value, source, Some(data_type));
@@ -3171,7 +3294,7 @@ impl Builder {
                 .clone();
             let offset = self.struct_field_offset(struct_name, &field_name)?;
             let target_address = self.inline_field_address(base_address, offset);
-            if self.is_inline_aggregate(&field_type) {
+            if self.is_inline_storage_aggregate(&field_type) {
                 self.lower_inline_value_into(&field_type, expression, target_address)?;
             } else {
                 let value = self.expression_expected(expression, &field_type)?;

@@ -775,6 +775,38 @@ fn builds_and_runs_multiword_enum_payloads() {
 }
 
 #[test]
+fn builds_and_runs_slices_inside_aggregates() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_aggregate_slice_source_{}.mi",
+        std::process::id()
+    ));
+    let path = std::env::temp_dir().join(format!(
+        "mimi_aggregate_slice_codegen_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "sum :: fn (values : []i32) i32 { values[0] + values[1] } holder :: struct { values : []i32 } choice :: enum { values([]i32), none } inspect :: fn (value : choice) i32 { match value { values(items) => sum(items), none => 0 } } main :: fn () i32 { first : [2]i32 = [1, 2] second : [2]i32 = [3, 4] wrapped := holder { values = first[:] } wrapped.values[1] = 7 slices : [2][]i32 = [first[:], second[:]] selected := slices[1] selected[0] = 9 option := values(wrapped.values) result := inspect(option) + sum(slices[0]) + sum(selected) result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(29));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_fixed_arrays_of_structs() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
