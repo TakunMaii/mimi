@@ -410,7 +410,7 @@ fn function_return_moves(
 
 fn validate_float_width(width: u16) -> Result<(), String> {
     match width {
-        32 | 64 => Ok(()),
+        16 | 32 | 64 => Ok(()),
         _ => Err(format!(
             "ARM64 backend does not support f{width} values yet"
         )),
@@ -1274,10 +1274,11 @@ fn encode_gpr_to_fp(
     width: u16,
 ) -> Result<(), String> {
     validate_float_width(width)?;
-    let instruction = if width == 32 {
-        0x1e27_0000 | (source << 5) | destination
-    } else {
-        0x9e67_0000 | (source << 5) | destination
+    let instruction = match width {
+        16 => 0x1ee7_0000 | (source << 5) | destination,
+        32 => 0x1e27_0000 | (source << 5) | destination,
+        64 => 0x9e67_0000 | (source << 5) | destination,
+        _ => return Err(format!("unsupported ARM64 floating-point width {width}")),
     };
     push_word(bytes, instruction);
     Ok(())
@@ -1290,10 +1291,11 @@ fn encode_fp_to_gpr(
     width: u16,
 ) -> Result<(), String> {
     validate_float_width(width)?;
-    let instruction = if width == 32 {
-        0x1e26_0000 | (source << 5) | destination
-    } else {
-        0x9e66_0000 | (source << 5) | destination
+    let instruction = match width {
+        16 => 0x1ee6_0000 | (source << 5) | destination,
+        32 => 0x1e26_0000 | (source << 5) | destination,
+        64 => 0x9e66_0000 | (source << 5) | destination,
+        _ => return Err(format!("unsupported ARM64 floating-point width {width}")),
     };
     push_word(bytes, instruction);
     Ok(())
@@ -1321,6 +1323,10 @@ fn encode_float_binary(
     encode_gpr_to_fp(bytes, 16, lhs.0, width)?;
     encode_gpr_to_fp(bytes, 17, rhs.0, width)?;
     let base = match (kind, width) {
+        (FloatBinaryKind::Add, 16) => 0x1ee0_2800,
+        (FloatBinaryKind::Subtract, 16) => 0x1ee0_3800,
+        (FloatBinaryKind::Multiply, 16) => 0x1ee0_0800,
+        (FloatBinaryKind::Divide, 16) => 0x1ee0_1800,
         (FloatBinaryKind::Add, 32) => 0x1e20_2800,
         (FloatBinaryKind::Subtract, 32) => 0x1e20_3800,
         (FloatBinaryKind::Multiply, 32) => 0x1e20_0800,
@@ -1347,6 +1353,7 @@ fn encode_float_neg(
 ) -> Result<(), String> {
     encode_gpr_to_fp(bytes, 16, value.0, width)?;
     let base = match width {
+        16 => 0x1ee1_4000,
         32 => 0x1e21_4000,
         64 => 0x1e61_4000,
         _ => {
@@ -1370,6 +1377,7 @@ fn encode_float_compare(
     encode_gpr_to_fp(bytes, 16, lhs.0, width)?;
     encode_gpr_to_fp(bytes, 17, rhs.0, width)?;
     let base = match width {
+        16 => 0x1ee0_2000,
         32 => 0x1e20_2000,
         64 => 0x1e60_2000,
         _ => {
@@ -2039,10 +2047,11 @@ fn emit_gpr_to_fp(
     width: u16,
 ) -> Result<(), String> {
     validate_float_width(width)?;
-    if width == 32 {
-        assembly.push_str(&format!("    fmov s{destination}, w{source}\n"));
-    } else {
-        assembly.push_str(&format!("    fmov d{destination}, x{source}\n"));
+    match width {
+        16 => assembly.push_str(&format!("    fmov h{destination}, w{source}\n")),
+        32 => assembly.push_str(&format!("    fmov s{destination}, w{source}\n")),
+        64 => assembly.push_str(&format!("    fmov d{destination}, x{source}\n")),
+        _ => return Err(format!("unsupported ARM64 floating-point width {width}")),
     }
     Ok(())
 }
@@ -2054,10 +2063,11 @@ fn emit_fp_to_gpr(
     width: u16,
 ) -> Result<(), String> {
     validate_float_width(width)?;
-    if width == 32 {
-        assembly.push_str(&format!("    fmov w{destination}, s{source}\n"));
-    } else {
-        assembly.push_str(&format!("    fmov x{destination}, d{source}\n"));
+    match width {
+        16 => assembly.push_str(&format!("    fmov w{destination}, h{source}\n")),
+        32 => assembly.push_str(&format!("    fmov w{destination}, s{source}\n")),
+        64 => assembly.push_str(&format!("    fmov x{destination}, d{source}\n")),
+        _ => return Err(format!("unsupported ARM64 floating-point width {width}")),
     }
     Ok(())
 }
@@ -2082,6 +2092,7 @@ fn emit_float_binary_assembly(
     width: u16,
 ) -> Result<(), String> {
     let register = match width {
+        16 => "h",
         32 => "s",
         64 => "d",
         _ => {
@@ -2111,6 +2122,7 @@ fn emit_float_neg_assembly(
     width: u16,
 ) -> Result<(), String> {
     let register = match width {
+        16 => "h",
         32 => "s",
         64 => "d",
         _ => {
@@ -2133,6 +2145,7 @@ fn emit_float_compare_assembly(
     width: u16,
 ) -> Result<(), String> {
     let register = match width {
+        16 => "h",
         32 => "s",
         64 => "d",
         _ => {

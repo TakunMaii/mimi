@@ -557,6 +557,7 @@ impl Builder {
                 if let Some(width) = expected_float.or_else(|| text.contains('.').then_some(64)) {
                     let value = text.parse::<f64>().ok()?;
                     let bits = match width {
+                        16 => f64_to_f16_bits(value) as u64,
                         32 => (value as f32).to_bits() as u64,
                         64 => value.to_bits(),
                         _ => value.to_bits(),
@@ -3090,6 +3091,55 @@ fn float_width(data_type: &HirType) -> Option<u16> {
         HirType::Float { bits } => Some(*bits),
         _ => None,
     }
+}
+
+fn f64_to_f16_bits(value: f64) -> u16 {
+    let bits = value.to_bits();
+    let sign = ((bits >> 48) & 0x8000) as u16;
+    let exponent = ((bits >> 52) & 0x7ff) as i32;
+    let fraction = bits & ((1u64 << 52) - 1);
+    if exponent == 0 {
+        return sign;
+    }
+    if exponent == 0x7ff {
+        if fraction == 0 {
+            return sign | 0x7c00;
+        }
+        return sign | 0x7e00;
+    }
+
+    let unbiased = exponent - 1023;
+    if unbiased > 15 {
+        return sign | 0x7c00;
+    }
+    if unbiased >= -14 {
+        let half_exponent = (unbiased + 15) as u16;
+        let significand = (1u64 << 52) | fraction;
+        let rounded = significand + (1u64 << 41) - 1 + ((significand >> 42) & 1);
+        let rounded = rounded >> 42;
+        if rounded >= 0x800 {
+            let next_exponent = half_exponent + 1;
+            return sign
+                | if next_exponent >= 0x1f {
+                    0x7c00
+                } else {
+                    next_exponent << 10
+                };
+        }
+        return sign | (half_exponent << 10) | ((rounded as u16) & 0x03ff);
+    }
+    if unbiased < -25 {
+        return sign;
+    }
+
+    let significand = (1u64 << 52) | fraction;
+    let shift = (28 - unbiased) as u32;
+    let halfway = 1u64 << (shift - 1);
+    let rounded = significand >> shift;
+    let remainder = significand & ((1u64 << shift) - 1);
+    let rounded =
+        rounded + u64::from(remainder > halfway || (remainder == halfway && rounded & 1 != 0));
+    sign | (rounded as u16)
 }
 
 fn pointer_scale_from_data_type(data_type: &crate::parser::DataType) -> u64 {

@@ -1286,6 +1286,32 @@ fn builds_and_runs_floating_point_operations_and_abi() {
 }
 
 #[test]
+fn builds_and_runs_f16_arithmetic_and_abi() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_f16_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_f16_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "add :: fn (left : f16, right : f16) f16 { left + right } apply :: fn (function : fn(f16, f16)f16, left : f16, right : f16) f16 { function(left, right) } negate :: fn (value : f16) f16 { -value } main :: fn () i32 { sum := apply(add, 1.5, 2.25) difference := 5.5 - 2.25 product := 1.5 * 2.5 quotient := 6.0 / 2.0 negative := negate(1.5) tie : f16 = 1.00048828125 tiny : f16 = 0.000000059604645 result := if sum == 3.75 && difference == 3.25 && product == 3.75 && quotient == 3.0 && negative == -1.5 && tie == 1.0 && tiny != 0.0 { 0 } else { 1 } result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn lowers_string_literals_to_data_symbols_in_lir() {
     let ast = parse(tokenize(r#"main :: fn () []u8 { "hello" }"#.chars()));
     let hir = hir::lower_ast(&ast);
