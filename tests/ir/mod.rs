@@ -1519,16 +1519,77 @@ fn builds_x86_64_executable_for_selected_target() {
     .unwrap();
     assert!(executable.is_file());
 
-    if cfg!(target_arch = "x86_64") {
-        let status = std::process::Command::new(&executable).status().unwrap();
-        assert_eq!(status.code(), Some(41));
-    } else if cfg!(target_os = "macos") {
-        let description = std::process::Command::new("file")
+    let status = if cfg!(target_arch = "x86_64") {
+        std::process::Command::new(&executable).status().unwrap()
+    } else {
+        std::process::Command::new("arch")
+            .args(["-x86_64"])
             .arg(&executable)
-            .output()
-            .unwrap();
-        assert!(description.status.success());
-        assert!(String::from_utf8_lossy(&description.stdout).contains("x86_64"));
+            .status()
+            .unwrap()
+    };
+    assert_eq!(status.code(), Some(41));
+
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
+fn builds_x86_64_arrays_slices_pointers_and_loops() {
+    let source =
+        std::env::temp_dir().join(format!("mimi_x86_memory_source_{}.mi", std::process::id()));
+    let executable =
+        std::env::temp_dir().join(format!("mimi_x86_memory_executable_{}", std::process::id()));
+    for (program, expected) in [
+        (
+            "main :: fn () i32 { values : [4]i32 = [3, 5, 7, 9] values[0] - 3 }",
+            0,
+        ),
+        (
+            "main :: fn () i32 { values : [4]i32 = [3, 5, 7, 9] values[1] = 11 values[1] - 11 }",
+            0,
+        ),
+        (
+            "main :: fn () i32 { values : [4]i32 = [3, 5, 7, 9] pointer := &values[0] pointer[2] = 13 values[2] - 13 }",
+            0,
+        ),
+        (
+            "main :: fn () i32 { values : [4]i32 = [3, 5, 7, 9] total := 0 for item in values { total = total + item } result := if total == 24 { 0 } else { 1 } result }",
+            0,
+        ),
+        (
+            "sum :: fn (values : []i32) i32 { total := 0 for item in values { total = total + item } total } main :: fn () i32 { values : [4]i32 = [3, 5, 7, 9] result := if sum(values[:]) == 24 { 0 } else { 1 } result }",
+            0,
+        ),
+        (
+            "point :: struct { x : i32, y : i32 } shift :: fn (value : point) point { point { x = value.x + 1, y = value.y + 2 } } main :: fn () i32 { value := shift(point { x = 4, y = 5 }) result := if value.x == 5 && value.y == 7 { 0 } else { 1 } result }",
+            0,
+        ),
+        (
+            "result :: enum { some(i32), none } make :: fn (value : i32) result { some(value) } main :: fn () i32 { match make(7) { some(value) => value - 7, none => 1 } }",
+            0,
+        ),
+    ] {
+        std::fs::write(&source, program).unwrap();
+        build_file_for_target(
+            source.to_str().unwrap(),
+            executable.to_str().unwrap(),
+            &[],
+            &[],
+            &[],
+            lir::TargetArch::X86_64,
+        )
+        .unwrap();
+        let status = if cfg!(target_arch = "x86_64") {
+            std::process::Command::new(&executable).status().unwrap()
+        } else {
+            std::process::Command::new("arch")
+                .args(["-x86_64"])
+                .arg(&executable)
+                .status()
+                .unwrap()
+        };
+        assert_eq!(status.code(), Some(expected), "program: {program}");
     }
 
     std::fs::remove_file(source).unwrap();

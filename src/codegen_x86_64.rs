@@ -310,7 +310,10 @@ fn emit_instruction(
             if slot.0 >= function.slot_count {
                 return Err(format!("invalid x86_64 stack slot {}", slot.0));
             }
-            assembly.push_str(&format!("    lea rax, [rbp - {}]\n", slot_offset(*slot)?));
+            assembly.push_str(&format!(
+                "    lea rax, [rbp - {}]\n",
+                slot_offset(function, *slot)?
+            ));
             store_value(assembly, function, *destination, "rax")?;
         }
         LirInstruction::IndexAddress {
@@ -772,10 +775,12 @@ fn value_offset(function: &LirFunction, value: ValueId) -> Result<u64, String> {
         .ok_or_else(|| "x86_64 value slot offset overflow".into())
 }
 
-fn slot_offset(slot: SlotId) -> Result<u64, String> {
-    u64::from(slot.0)
-        .checked_add(1)
-        .and_then(|index| index.checked_mul(8))
+fn slot_offset(function: &LirFunction, slot: SlotId) -> Result<u64, String> {
+    if slot.0 >= function.slot_count {
+        return Err(format!("invalid x86_64 stack slot {}", slot.0));
+    }
+    u64::from(function.slot_count - slot.0)
+        .checked_mul(8)
         .ok_or_else(|| "x86_64 stack slot offset overflow".into())
 }
 
@@ -809,7 +814,10 @@ fn slot_mem(function: &LirFunction, slot: SlotId) -> Result<String, String> {
     if slot.0 >= function.slot_count {
         return Err(format!("invalid x86_64 stack slot {}", slot.0));
     }
-    Ok(format!("qword ptr [rbp - {}]", slot_offset(slot)?))
+    Ok(format!(
+        "qword ptr [rbp - {}]",
+        slot_offset(function, slot)?
+    ))
 }
 
 fn symbol(name: &str) -> String {
