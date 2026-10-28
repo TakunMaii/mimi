@@ -342,17 +342,23 @@ impl Builder {
                     Some(HirType::Array { element, .. }) | Some(HirType::Slice(element)) => {
                         Some(element.as_ref().clone())
                     }
-                    _ => None,
+                    _ => values.first().and_then(|value| self.expression_type(value)),
                 };
                 let packed_size = expected_element
                     .as_ref()
                     .and_then(scalar_storage_size)
                     .filter(|size| *size < 8);
+                let element_slots = match expected_element.as_ref() {
+                    Some(HirType::Named(name)) if self.struct_fields.contains_key(name) => {
+                        self.struct_slot_count(name)?
+                    }
+                    _ => 1,
+                };
                 let base = self.slot();
                 let slot_count = if let Some(size) = packed_size {
                     (values.len() * usize::from(size)).div_ceil(8)
                 } else {
-                    values.len()
+                    values.len().checked_mul(element_slots as usize)?
                 };
                 self.next_slot += slot_count.saturating_sub(1) as u32;
                 let packed_base = if packed_size.is_some() {
@@ -366,6 +372,23 @@ impl Builder {
                     None
                 };
                 for (index, expression) in values.iter().enumerate() {
+                    if let Some(HirType::Named(name)) = expected_element.as_ref()
+                        && self.struct_fields.contains_key(name)
+                    {
+                        let element_base = SlotId(
+                            base.0
+                                .checked_add((index as u32).checked_mul(element_slots)?)?,
+                        );
+                        if let Expression::StructLiteral { fields, .. } = expression {
+                            self.lower_struct_fields_into(name, fields, element_base)?;
+                        } else {
+                            let value =
+                                self.expression_expected(expression, expected_element.as_ref()?)?;
+                            let destination = self.slot_address_value(element_base);
+                            self.copy_struct_to_address(name, value, destination)?;
+                        }
+                        continue;
+                    }
                     let value = match expected_element.as_ref() {
                         Some(data_type) => self.expression_expected(expression, data_type)?,
                         None => self.expression(expression)?,
@@ -428,7 +451,11 @@ impl Builder {
                     scale,
                 });
                 let data_type = self.expression_type(expression);
-                if matches!(data_type, Some(HirType::Array { .. })) {
+                if data_type.as_ref().is_some_and(|ty| match ty {
+                    HirType::Named(name) => self.struct_fields.contains_key(name),
+                    HirType::Array { .. } => true,
+                    _ => false,
+                }) {
                     return Some(address);
                 }
                 let result = self.value();
@@ -517,8 +544,7 @@ impl Builder {
                     .clone();
                 let base = self.expression(object)?;
                 let address = self.inline_field_address(base, field_offset);
-                if let HirType::Named(name) = &field_type
-                    && self.struct_fields.contains_key(name)
+                if self.is_inline_struct(&field_type) || matches!(field_type, HirType::Array { .. })
                 {
                     return Some(address);
                 }
@@ -1198,7 +1224,17 @@ impl Builder {
                                     index,
                                     scale,
                                 });
-                                self.emit_store_indirect(address, value, expected_type.as_ref());
+                                if let Some(HirType::Named(name)) = expected_type.as_ref()
+                                    && self.struct_fields.contains_key(name)
+                                {
+                                    self.copy_struct_to_address(name, value, address)?;
+                                } else {
+                                    self.emit_store_indirect(
+                                        address,
+                                        value,
+                                        expected_type.as_ref(),
+                                    );
+                                }
                             }
                             crate::parser::ASTNode::PointerAssignment { pointer, value } => {
                                 let address = self.expression(pointer)?;
@@ -1231,10 +1267,11 @@ impl Builder {
                                     .clone();
                                 let base = self.expression(object)?;
                                 let address = self.inline_field_address(base, field_offset);
-                                if let HirType::Named(name) = &field_type
-                                    && self.struct_fields.contains_key(name)
-                                {
+                                if self.is_inline_struct(&field_type) {
                                     let value = self.expression_expected(value, &field_type)?;
+                                    let HirType::Named(name) = &field_type else {
+                                        unreachable!();
+                                    };
                                     self.copy_struct_to_address(name, value, address)?;
                                 } else {
                                     let value = self.expression_expected(value, &field_type)?;
@@ -1659,6 +1696,10 @@ impl Builder {
                 Some(HirType::Pointer(inner)) => Some(*inner),
                 _ => None,
             },
+            Expression::StructLiteral {
+                type_name: Some(name),
+                ..
+            } => Some(HirType::Named((*name).to_string())),
             Expression::MemberAccess { object, member } => {
                 if let Expression::Identifier(package) = object.as_ref() {
                     let name = format!("{package}.{member}");
@@ -2082,9 +2123,9 @@ impl Builder {
 
     fn index_scale(&self, object: &Expression) -> u64 {
         match self.expression_type(object) {
-            Some(HirType::Pointer(element)) => return pointer_scale_from_hir_type(&element),
+            Some(HirType::Pointer(element)) => return self.element_stride(&element),
             Some(HirType::Array { element, .. }) | Some(HirType::Slice(element)) => {
-                return pointer_scale_from_hir_type(&element);
+                return self.element_stride(&element);
             }
             _ => {}
         }
@@ -2095,9 +2136,7 @@ impl Builder {
                 .copied()
                 .or_else(|| self.pointer_scales.get(name).copied())
                 .or_else(|| match self.variable_types.get(name) {
-                    Some(HirType::Array { element, .. }) => {
-                        Some(pointer_scale_from_hir_type(element))
-                    }
+                    Some(HirType::Array { element, .. }) => Some(self.element_stride(element)),
                     _ => None,
                 })
                 .unwrap_or(8),
@@ -2148,9 +2187,13 @@ impl Builder {
                 };
                 let scale = match self.expected_type_hint.as_ref() {
                     Some(HirType::Array { element, .. }) | Some(HirType::Slice(element)) => {
-                        pointer_scale_from_hir_type(element)
+                        self.element_stride(element)
                     }
-                    _ => 8,
+                    _ => values
+                        .first()
+                        .and_then(|value| self.expression_type(value))
+                        .map(|element| self.element_stride(&element))
+                        .unwrap_or(8),
                 };
                 Some((base, length, scale))
             }
@@ -2181,9 +2224,7 @@ impl Builder {
                         value: length as i128,
                     });
                     let scale = match self.variable_types.get(name) {
-                        Some(HirType::Array { element, .. }) => {
-                            pointer_scale_from_hir_type(element)
-                        }
+                        Some(HirType::Array { element, .. }) => self.element_stride(element),
                         _ => 8,
                     };
                     Some((base, length_value, scale))
@@ -2606,6 +2647,19 @@ impl Builder {
         None
     }
 
+    fn is_inline_struct(&self, data_type: &HirType) -> bool {
+        matches!(data_type, HirType::Named(name) if self.struct_fields.contains_key(name))
+    }
+
+    fn element_stride(&self, data_type: &HirType) -> u64 {
+        if let HirType::Named(name) = data_type
+            && let Some(slots) = self.struct_slot_count(name)
+        {
+            return u64::from(slots) * 8;
+        }
+        pointer_scale_from_hir_type(data_type)
+    }
+
     fn inline_field_address(&mut self, base: ValueId, slot_offset: u32) -> ValueId {
         let index = self.value();
         self.emit(MirInstruction::ConstInt {
@@ -2770,7 +2824,7 @@ fn lower_function(
             builder.slice_lengths.insert(name.clone(), length_slot);
             builder
                 .slice_scales
-                .insert(name.clone(), pointer_scale_from_hir_type(element));
+                .insert(name.clone(), builder.element_stride(element));
             builder.emit(MirInstruction::StoreSlot {
                 slot: length_slot,
                 value: length,

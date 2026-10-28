@@ -638,6 +638,11 @@ where
             index: *index,
             value,
         },
+        Expression::MemberAccess { object, member } => ASTNode::MemberAssignment {
+            object: *object,
+            member,
+            value,
+        },
         _ => panic!("indexed assignment requires an array index"),
     }
 }

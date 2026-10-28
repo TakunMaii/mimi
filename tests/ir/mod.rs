@@ -457,6 +457,36 @@ fn builds_and_runs_scalar_struct_fields_and_defaults() {
 }
 
 #[test]
+fn builds_and_runs_fixed_arrays_of_structs() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_struct_array_source_{}.mi",
+        std::process::id()
+    ));
+    let path =
+        std::env::temp_dir().join(format!("mimi_struct_array_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "point :: struct { x : i32, y : i32 } second_y :: fn (points : []point) i32 { points[1].y } main :: fn () i32 { original := point { x = 1, y = 2 } points : [2]point = [point { x = 3, y = 4 }, original] original.x = 9 first := points[1].x points[0].x = 7 points[1].x = 11 points[1].y = 12 first + points[0].x + points[0].y + points[1].x + points[1].y + second_y(points[:]) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(47));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_nested_struct_field_access() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

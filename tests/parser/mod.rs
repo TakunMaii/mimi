@@ -502,6 +502,28 @@ fn parses_fixed_array_element_assignment() {
 }
 
 #[test]
+fn parses_member_assignment_on_fixed_array_element() {
+    let nodes = parse(tokenize("main :: fn () void { points[1].x = 9 }".chars()));
+    assert!(matches!(
+        &nodes[0],
+        ASTNode::FunctionDefinition {
+            body: Expression::Block(items),
+            ..
+        } if matches!(
+            items.as_slice(),
+            [ASTNode::MemberAssignment {
+                object: Expression::Index { object, index },
+                member,
+                value: Expression::LiteralNumber(value),
+            }] if matches!(object.as_ref(), Expression::Identifier(name) if name == "points")
+                && matches!(index.as_ref(), Expression::LiteralNumber(index) if index == "1")
+                && member == "x"
+                && value == "9"
+        )
+    ));
+}
+
+#[test]
 fn parses_enum_definition_match_and_if_let() {
     let nodes = parse(tokenize("result :: enum { some(f32), error, none, } value := some(1.0) if some(x) := value { x } match value { some(x) => x, error => 0.0, none => 0.0 }".chars()));
     assert!(
