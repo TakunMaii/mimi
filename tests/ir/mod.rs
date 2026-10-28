@@ -32,6 +32,61 @@ fn lowers_function_through_all_ir_layers() {
 }
 
 #[test]
+fn lowers_capture_free_lambdas_to_indirectly_callable_functions() {
+    let ast = parse(tokenize(
+        "apply :: fn (function : fn(i32)i32, value : i32) i32 { function(value) } main :: fn () i32 { square := fn (value : i32) i32 { value * value } apply(square, 7) + apply(fn (value : i32) i32 { value + 1 }, 2) }".chars(),
+    ));
+    let hir = hir::lower_ast(&ast);
+    assert_eq!(hir.functions.len(), 4);
+    assert!(
+        hir.functions
+            .iter()
+            .any(|function| function.name == "__mimi_lambda_0")
+    );
+    assert!(
+        hir.functions
+            .iter()
+            .any(|function| function.name == "__mimi_lambda_1")
+    );
+
+    let mir = mir::lower_hir(&hir);
+    assert!(mir.functions.iter().any(|function| {
+        function.blocks.iter().any(|block| {
+            block
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, mir::MirInstruction::CallIndirect { .. }))
+        })
+    }));
+}
+
+#[test]
+fn builds_and_runs_capture_free_lambdas() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_lambda_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_lambda_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "apply :: fn (function : fn(i32)i32, value : i32) i32 { function(value) } main :: fn () i32 { square := fn (value : i32) i32 { value * value } apply(square, 7) + apply(fn (value : i32) i32 { value + 1 }, 2) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(52));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn lowers_dynamic_if_else_to_mir_blocks_and_phi() {
     let ast = parse(tokenize(
         "choose :: fn (condition : bool) i32 { value := if condition { 7 } else { 3 } value }"

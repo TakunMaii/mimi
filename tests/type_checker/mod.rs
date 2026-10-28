@@ -518,6 +518,17 @@ fn checks_function_values_and_static_methods() {
 }
 
 #[test]
+fn rejects_lambdas_that_capture_local_variables() {
+    let ast = parse(tokenize(
+        "main :: fn () i32 { outer := 5 add_outer := fn (value : i32) i32 { outer + value } add_outer(2) }"
+            .chars(),
+    ));
+    let errors = check(&ast).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].message.contains("undefined identifier 'outer'"));
+}
+
+#[test]
 fn supports_pointer_member_access_and_automatic_method_receivers() {
     let ast = parse(tokenize(
         "pos :: struct { x : i32, value() :: fn (self : Self) i32 { self.x } through_ptr() :: fn (self : *Self) i32 { self.x } } point : pos = pos { x = 4 } pointer := &point from_value := point.value() from_pointer := pointer.value() through_value := point.through_ptr() through_pointer := pointer.through_ptr() field := pointer.x"

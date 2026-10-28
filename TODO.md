@@ -57,7 +57,8 @@ and focused regression coverage; it does not imply support on every target.
 ## Functions and Modules
 
 - [x] Implement named function values, function-value parameters, and indirect calls.
-- [ ] Lower lambda bodies and captures.
+- [x] Lift capture-free lambda bodies into callable functions.
+- [ ] Capture outer values in lambda closure environments.
 - [x] Lower direct instance and static method calls with automatic or explicit receivers.
 - [x] Support static methods as function values and indirect calls.
 - [ ] Support bound instance methods as function values and indirect calls.

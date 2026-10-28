@@ -1179,6 +1179,8 @@ fn infer_expression(
             body,
         } => {
             let parameter_types: Vec<_> = parameters.iter().map(|(_, ty)| *ty).collect();
+            let global_scope = scopes.first().cloned().unwrap_or_default();
+            let outer_scopes = std::mem::replace(scopes, vec![global_scope]);
             scopes.push(HashMap::new());
             for (index, (name, data_type)) in parameters.iter().enumerate() {
                 if let Some(name) = name {
@@ -1194,7 +1196,7 @@ fn infer_expression(
             }
             let body_result =
                 infer_expression(body, scopes, functions, structs, Some(*return_type));
-            scopes.pop();
+            *scopes = outer_scopes;
             body_result?;
             Ok(DataType::Function(
                 Box::leak(parameter_types.into_boxed_slice()),
