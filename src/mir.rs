@@ -20,11 +20,24 @@ pub(crate) enum CompareKind {
     GreaterEqual,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FloatBinaryKind {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum MirInstruction {
     ConstInt {
         result: ValueId,
         value: i128,
+    },
+    ConstFloat {
+        result: ValueId,
+        bits: u64,
+        width: u16,
     },
     ConstBool {
         result: ValueId,
@@ -42,6 +55,13 @@ pub(crate) enum MirInstruction {
         result: ValueId,
         lhs: ValueId,
         rhs: ValueId,
+    },
+    FloatBinary {
+        result: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+        kind: FloatBinaryKind,
+        width: u16,
     },
     Sub {
         result: ValueId,
@@ -67,6 +87,11 @@ pub(crate) enum MirInstruction {
         result: ValueId,
         value: ValueId,
     },
+    FloatNeg {
+        result: ValueId,
+        value: ValueId,
+        width: u16,
+    },
     Not {
         result: ValueId,
         value: ValueId,
@@ -77,6 +102,13 @@ pub(crate) enum MirInstruction {
         rhs: ValueId,
         kind: CompareKind,
     },
+    FloatCompare {
+        result: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+        kind: CompareKind,
+        width: u16,
+    },
     Phi {
         result: ValueId,
         incoming: Vec<(BlockId, ValueId)>,
@@ -85,11 +117,15 @@ pub(crate) enum MirInstruction {
         result: Option<ValueId>,
         name: String,
         args: Vec<ValueId>,
+        float_args: Vec<(usize, u16)>,
+        result_float: Option<u16>,
     },
     CallIndirect {
         result: Option<ValueId>,
         callee: ValueId,
         args: Vec<ValueId>,
+        float_args: Vec<(usize, u16)>,
+        result_float: Option<u16>,
     },
     LoadSlot {
         result: ValueId,
@@ -147,6 +183,7 @@ pub(crate) struct MirFunction {
     pub(crate) name: String,
     pub(crate) params: Vec<(String, HirType, ValueId)>,
     pub(crate) abi_params: Vec<ValueId>,
+    pub(crate) abi_float_params: Vec<(ValueId, u16)>,
     pub(crate) result: HirType,
     pub(crate) slot_count: u32,
     pub(crate) blocks: Vec<MirBlock>,
@@ -169,11 +206,15 @@ struct Builder {
     pointer_scales: std::collections::HashMap<String, u8>,
     enum_variants: std::collections::HashMap<String, EnumVariant>,
     struct_fields: std::collections::HashMap<String, Vec<(String, Option<Expression>)>>,
-    function_struct_params: std::collections::HashMap<String, Vec<Option<String>>>,
+    struct_field_types: std::collections::HashMap<String, Vec<(String, HirType)>>,
     function_slice_params: std::collections::HashMap<String, Vec<bool>>,
     method_targets: std::collections::HashMap<(String, String), MethodTarget>,
     function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
     variable_function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
+    variable_types: std::collections::HashMap<String, HirType>,
+    value_types: std::collections::HashMap<ValueId, HirType>,
+    expected_type_hint: Option<HirType>,
+    return_type: HirType,
     variable_structs: std::collections::HashMap<String, String>,
     defer_scopes: Vec<Vec<Expression>>,
     loop_targets: Vec<LoopTargets>,
@@ -246,6 +287,9 @@ impl Builder {
                 Some(Variable::Slot(slot)) => {
                     let result = self.value();
                     self.emit(MirInstruction::LoadSlot { result, slot });
+                    if let Some(data_type) = self.variable_types.get(name).cloned() {
+                        self.value_types.insert(result, data_type);
+                    }
                     Some(result)
                 }
                 None => {
@@ -263,10 +307,19 @@ impl Builder {
                 }
             },
             Expression::ArrayLiteral(values) => {
+                let expected_element = match self.expected_type_hint.as_ref() {
+                    Some(HirType::Array { element, .. }) | Some(HirType::Slice(element)) => {
+                        Some(element.as_ref().clone())
+                    }
+                    _ => None,
+                };
                 let base = self.slot();
                 self.next_slot += values.len().saturating_sub(1) as u32;
                 for (index, expression) in values.iter().enumerate() {
-                    let value = self.expression(expression)?;
+                    let value = match expected_element.as_ref() {
+                        Some(data_type) => self.expression_expected(expression, data_type)?,
+                        None => self.expression(expression)?,
+                    };
                     self.emit(MirInstruction::StoreSlot {
                         slot: SlotId(base.0 + index as u32),
                         value,
@@ -291,6 +344,9 @@ impl Builder {
                     self.emit(MirInstruction::LoadByteIndirect { result, address });
                 } else {
                     self.emit(MirInstruction::LoadIndirect { result, address });
+                }
+                if let Some(data_type) = self.expression_type(expression) {
+                    self.value_types.insert(result, data_type);
                 }
                 Some(result)
             }
@@ -354,6 +410,14 @@ impl Builder {
                 });
                 let result = self.value();
                 self.emit(MirInstruction::LoadIndirect { result, address });
+                if let Some(data_type) = self
+                    .struct_field_types
+                    .get(&struct_name)
+                    .and_then(|fields| fields.iter().find(|(name, _)| name == member))
+                    .map(|(_, data_type)| data_type.clone())
+                {
+                    self.value_types.insert(result, data_type);
+                }
                 Some(result)
             }
             Expression::StaticAccess { type_name, member } => {
@@ -367,12 +431,47 @@ impl Builder {
                     result,
                     symbol: format!("_{symbol}"),
                 });
+                if let Some((parameters, result_type)) =
+                    self.function_signature_for_expression(expression)
+                {
+                    self.value_types.insert(
+                        result,
+                        HirType::Function {
+                            params: parameters,
+                            result: Box::new(result_type),
+                        },
+                    );
+                }
                 Some(result)
             }
             Expression::LiteralNumber(text) => {
                 let result = self.value();
-                let value = text.parse().ok()?;
-                self.emit(MirInstruction::ConstInt { result, value });
+                let expected_float = self.expected_type_hint.as_ref().and_then(float_width);
+                if let Some(width) = expected_float.or_else(|| text.contains('.').then_some(64)) {
+                    let value = text.parse::<f64>().ok()?;
+                    let bits = match width {
+                        32 => (value as f32).to_bits() as u64,
+                        64 => value.to_bits(),
+                        _ => value.to_bits(),
+                    };
+                    self.emit(MirInstruction::ConstFloat {
+                        result,
+                        bits,
+                        width,
+                    });
+                    self.value_types
+                        .insert(result, HirType::Float { bits: width });
+                } else {
+                    let value = text.parse().ok()?;
+                    self.emit(MirInstruction::ConstInt { result, value });
+                    self.value_types.insert(
+                        result,
+                        HirType::Integer {
+                            bits: 32,
+                            signed: true,
+                        },
+                    );
+                }
                 Some(result)
             }
             Expression::LiteralBool(value) => {
@@ -381,6 +480,7 @@ impl Builder {
                     result,
                     value: *value,
                 });
+                self.value_types.insert(result, HirType::Bool);
                 Some(result)
             }
             Expression::LiteralString(value) => {
@@ -389,6 +489,13 @@ impl Builder {
                     result,
                     bytes: value.as_bytes().to_vec(),
                 });
+                self.value_types.insert(
+                    result,
+                    HirType::Slice(Box::new(HirType::Integer {
+                        bits: 8,
+                        signed: false,
+                    })),
+                );
                 Some(result)
             }
             Expression::If {
@@ -452,12 +559,19 @@ impl Builder {
                     self.variable_function_signatures.get(name).cloned()
                 {
                     let callee = self.expression(&Expression::Identifier(name.clone()))?;
-                    let args = self.lower_function_value_arguments(arguments, &parameter_types)?;
+                    let (args, float_args) =
+                        self.lower_function_value_arguments(arguments, &parameter_types)?;
                     let result = (return_type != HirType::Void).then(|| self.value());
+                    if let Some(result) = result {
+                        self.value_types.insert(result, return_type.clone());
+                    }
+                    let result_float = float_width(&return_type);
                     self.emit(MirInstruction::CallIndirect {
                         result,
                         callee,
                         args,
+                        float_args,
+                        result_float,
                     });
                     return result;
                 }
@@ -469,14 +583,26 @@ impl Builder {
                     }
                     return self.lower_enum_value(&variant, arguments.first());
                 }
-                let args = self.lower_call_arguments(name, arguments)?;
-                let result = self.value();
+                let (args, float_args) = self.lower_call_arguments(name, arguments)?;
+                let return_type = self
+                    .function_signatures
+                    .get(name)
+                    .map(|(_, result)| result.clone());
+                let result = return_type
+                    .as_ref()
+                    .is_none_or(|ty| *ty != HirType::Void)
+                    .then(|| self.value());
+                if let (Some(result), Some(return_type)) = (result, return_type.as_ref()) {
+                    self.value_types.insert(result, return_type.clone());
+                }
                 self.emit(MirInstruction::Call {
-                    result: Some(result),
+                    result,
                     name: name.clone(),
                     args,
+                    float_args,
+                    result_float: return_type.as_ref().and_then(float_width),
                 });
-                Some(result)
+                result
             }
             Expression::CallValue { callee, arguments } => {
                 if let Expression::Identifier(name) = callee.as_ref()
@@ -487,12 +613,19 @@ impl Builder {
                         .or_else(|| self.function_signatures.get(name).cloned())
                 {
                     let callee = self.expression(callee)?;
-                    let args = self.lower_function_value_arguments(arguments, &parameter_types)?;
+                    let (args, float_args) =
+                        self.lower_function_value_arguments(arguments, &parameter_types)?;
                     let result = (return_type != HirType::Void).then(|| self.value());
+                    if let Some(result) = result {
+                        self.value_types.insert(result, return_type.clone());
+                    }
+                    let result_float = float_width(&return_type);
                     self.emit(MirInstruction::CallIndirect {
                         result,
                         callee,
                         args,
+                        float_args,
+                        result_float,
                     });
                     return result;
                 }
@@ -528,14 +661,27 @@ impl Builder {
                 if call_arguments.len() != target.parameter_count {
                     return None;
                 }
-                let args = self.lower_call_arguments(&target.symbol, &call_arguments)?;
-                let result = self.value();
+                let (args, float_args) =
+                    self.lower_call_arguments(&target.symbol, &call_arguments)?;
+                let return_type = self
+                    .function_signatures
+                    .get(&target.symbol)
+                    .map(|(_, result)| result.clone());
+                let result = return_type
+                    .as_ref()
+                    .is_none_or(|ty| *ty != HirType::Void)
+                    .then(|| self.value());
+                if let (Some(result), Some(return_type)) = (result, return_type.as_ref()) {
+                    self.value_types.insert(result, return_type.clone());
+                }
                 self.emit(MirInstruction::Call {
-                    result: Some(result),
+                    result,
                     name: target.symbol,
                     args,
+                    float_args,
+                    result_float: return_type.as_ref().and_then(float_width),
                 });
-                Some(result)
+                result
             }
             Expression::Add(lhs, rhs) => self.binary(lhs, rhs, 0),
             Expression::Subtract(lhs, rhs) => self.binary(lhs, rhs, 1),
@@ -543,9 +689,31 @@ impl Builder {
             Expression::Divide(lhs, rhs) => self.binary(lhs, rhs, 3),
             Expression::Remainder(lhs, rhs) => self.binary(lhs, rhs, 4),
             Expression::Negate(value) => {
-                let value = self.expression(value)?;
+                let expected = self
+                    .expected_type_hint
+                    .clone()
+                    .filter(|ty| float_width(ty).is_some())
+                    .or_else(|| self.expression_type(value));
+                let value = if let Some(data_type) = expected.as_ref() {
+                    self.expression_expected(value, data_type)
+                } else {
+                    self.expression(value)
+                }?;
                 let result = self.value();
-                self.emit(MirInstruction::Neg { result, value });
+                if let Some(width) = self.value_type(value).and_then(|ty| float_width(&ty)) {
+                    self.emit(MirInstruction::FloatNeg {
+                        result,
+                        value,
+                        width,
+                    });
+                    self.value_types
+                        .insert(result, HirType::Float { bits: width });
+                } else {
+                    self.emit(MirInstruction::Neg { result, value });
+                    if let Some(data_type) = self.value_type(value) {
+                        self.value_types.insert(result, data_type);
+                    }
+                }
                 Some(result)
             }
             Expression::Not(value) => {
@@ -562,8 +730,17 @@ impl Builder {
             | Expression::LessThanOrEqual(lhs, rhs)
             | Expression::GreaterThan(lhs, rhs)
             | Expression::GreaterThanOrEqual(lhs, rhs) => {
-                let lhs = self.expression(lhs)?;
-                let rhs = self.expression(rhs)?;
+                let operand_type = self.float_operation_type(lhs, rhs);
+                let lhs = if let Some(data_type) = operand_type.as_ref() {
+                    self.expression_expected(lhs, data_type)
+                } else {
+                    self.expression(lhs)
+                }?;
+                let rhs = if let Some(data_type) = operand_type.as_ref() {
+                    self.expression_expected(rhs, data_type)
+                } else {
+                    self.expression(rhs)
+                }?;
                 let kind = match expression {
                     Expression::Equal(_, _) => CompareKind::Equal,
                     Expression::NotEqual(_, _) => CompareKind::NotEqual,
@@ -573,16 +750,28 @@ impl Builder {
                     _ => CompareKind::GreaterEqual,
                 };
                 let result = self.value();
-                self.emit(MirInstruction::Compare {
-                    result,
-                    lhs,
-                    rhs,
-                    kind,
-                });
+                if let Some(width) = operand_type.as_ref().and_then(float_width) {
+                    self.emit(MirInstruction::FloatCompare {
+                        result,
+                        lhs,
+                        rhs,
+                        kind,
+                        width,
+                    });
+                } else {
+                    self.emit(MirInstruction::Compare {
+                        result,
+                        lhs,
+                        rhs,
+                        kind,
+                    });
+                }
+                self.value_types.insert(result, HirType::Bool);
                 Some(result)
             }
             Expression::Block(items) => {
                 let outer_variables = self.variables.clone();
+                let outer_variable_types = self.variable_types.clone();
                 let outer_array_lengths = self.array_lengths.clone();
                 let outer_slice_lengths = self.slice_lengths.clone();
                 let outer_slice_scales = self.slice_scales.clone();
@@ -637,8 +826,17 @@ impl Builder {
                                     }
                                     _ => self.function_signature_for_expression(value),
                                 };
+                                let value_type = data_type
+                                    .map(Into::into)
+                                    .or_else(|| self.expression_type(value));
                                 let (value, slice_view) = if is_slice {
-                                    let (base, length, scale) = self.lower_array_view(value)?;
+                                    let view = match value_type.as_ref() {
+                                        Some(data_type) => {
+                                            self.lower_array_view_expected(value, data_type)
+                                        }
+                                        None => self.lower_array_view(value),
+                                    }?;
+                                    let (base, length, scale) = view;
                                     (base, Some((length, scale)))
                                 } else {
                                     let value = match (value, struct_name.as_deref()) {
@@ -649,13 +847,21 @@ impl Builder {
                                             },
                                             Some(struct_name),
                                         ) => self.lower_struct_literal(struct_name, fields)?,
-                                        _ => self.expression(value)?,
+                                        _ => match value_type.as_ref() {
+                                            Some(data_type) => {
+                                                self.expression_expected(value, data_type)?
+                                            }
+                                            None => self.expression(value)?,
+                                        },
                                     };
                                     (value, None)
                                 };
                                 let slot = self.slot();
                                 self.emit(MirInstruction::StoreSlot { slot, value });
                                 self.variables.insert(name.clone(), Variable::Slot(slot));
+                                if let Some(data_type) = value_type {
+                                    self.variable_types.insert(name.clone(), data_type);
+                                }
                                 if let Some((length, scale)) = slice_view {
                                     let length_slot = self.slot();
                                     self.emit(MirInstruction::StoreSlot {
@@ -700,8 +906,17 @@ impl Builder {
                                 let struct_name = self.expression_struct_name(value);
                                 let function_signature =
                                     self.function_signature_for_expression(value);
-                                let value = self.expression(value)?;
+                                let value_type = self.expression_type(value);
+                                let value = match value_type.as_ref() {
+                                    Some(data_type) => {
+                                        self.expression_expected(value, data_type)?
+                                    }
+                                    None => self.expression(value)?,
+                                };
                                 self.variables.insert(name.clone(), Variable::Value(value));
+                                if let Some(data_type) = value_type {
+                                    self.variable_types.insert(name.clone(), data_type);
+                                }
                                 if let Some(signature) = function_signature {
                                     self.variable_function_signatures
                                         .insert(name.clone(), signature);
@@ -716,6 +931,7 @@ impl Builder {
                                 let struct_name = self.expression_struct_name(value);
                                 let function_signature =
                                     self.function_signature_for_expression(value);
+                                let expected_type = self.variable_types.get(name).cloned();
                                 let slice_length_slot = self.slice_lengths.get(name).copied();
                                 let slice_assignment =
                                     slice_length_slot.is_some() || self.is_slice_value(value);
@@ -723,7 +939,13 @@ impl Builder {
                                     let (base, length, scale) = self.lower_array_view(value)?;
                                     (base, Some((length, scale)))
                                 } else {
-                                    (self.expression(value)?, None)
+                                    let value = match expected_type.as_ref() {
+                                        Some(data_type) => {
+                                            self.expression_expected(value, data_type)?
+                                        }
+                                        None => self.expression(value)?,
+                                    };
+                                    (value, None)
                                 };
                                 match self.variables.get(name).copied() {
                                     Some(Variable::Slot(slot)) => {
@@ -760,9 +982,18 @@ impl Builder {
                                 index,
                                 value,
                             } => {
+                                let expected_type = self.expression_type(&Expression::Index {
+                                    object: Box::new(object.clone()),
+                                    index: Box::new(index.clone()),
+                                });
                                 let base = self.expression(object)?;
                                 let index = self.expression(index)?;
-                                let value = self.expression(value)?;
+                                let value = match expected_type.as_ref() {
+                                    Some(data_type) => {
+                                        self.expression_expected(value, data_type)?
+                                    }
+                                    None => self.expression(value)?,
+                                };
                                 let address = self.value();
                                 let scale = self.index_scale(object);
                                 self.emit(MirInstruction::IndexAddress {
@@ -775,7 +1006,16 @@ impl Builder {
                             }
                             crate::parser::ASTNode::PointerAssignment { pointer, value } => {
                                 let address = self.expression(pointer)?;
-                                let value = self.expression(value)?;
+                                let expected_type = match self.expression_type(pointer) {
+                                    Some(HirType::Pointer(inner)) => Some(*inner),
+                                    _ => None,
+                                };
+                                let value = match expected_type.as_ref() {
+                                    Some(data_type) => {
+                                        self.expression_expected(value, data_type)?
+                                    }
+                                    None => self.expression(value)?,
+                                };
                                 self.emit(MirInstruction::StoreIndirect { address, value });
                             }
                             crate::parser::ASTNode::MemberAssignment {
@@ -787,6 +1027,13 @@ impl Builder {
                                 let fields = self.struct_fields.get(&struct_name)?;
                                 let field_index =
                                     fields.iter().position(|(name, _)| name == member)?;
+                                let field_type = self
+                                    .struct_field_types
+                                    .get(&struct_name)?
+                                    .iter()
+                                    .find(|(name, _)| name == member)?
+                                    .1
+                                    .clone();
                                 let base = self.expression(object)?;
                                 let index = self.value();
                                 self.emit(MirInstruction::ConstInt {
@@ -800,7 +1047,7 @@ impl Builder {
                                     index,
                                     scale: 8,
                                 });
-                                let value = self.expression(value)?;
+                                let value = self.expression_expected(value, &field_type)?;
                                 self.emit(MirInstruction::StoreIndirect { address, value });
                             }
                             crate::parser::ASTNode::While { condition, body } => {
@@ -857,9 +1104,12 @@ impl Builder {
                                 result = self.expression(expression);
                             }
                             crate::parser::ASTNode::Return(value) => {
-                                let value = value
-                                    .as_ref()
-                                    .and_then(|expression| self.expression(expression));
+                                let value = if let Some(expression) = value {
+                                    let return_type = self.return_type.clone();
+                                    self.expression_expected(expression, &return_type)
+                                } else {
+                                    None
+                                };
                                 self.run_all_defers();
                                 self.terminate(MirTerminator::Return(value));
                                 break;
@@ -889,6 +1139,7 @@ impl Builder {
                 }
                 self.defer_scopes.pop();
                 self.variables = outer_variables;
+                self.variable_types = outer_variable_types;
                 self.array_lengths = outer_array_lengths;
                 self.slice_lengths = outer_slice_lengths;
                 self.slice_scales = outer_slice_scales;
@@ -905,26 +1156,31 @@ impl Builder {
         &mut self,
         name: &str,
         arguments: &[Expression],
-    ) -> Option<Vec<ValueId>> {
-        let parameter_structs = self.function_struct_params.get(name).cloned();
-        let parameter_slices = self.function_slice_params.get(name).cloned();
+    ) -> Option<(Vec<ValueId>, Vec<(usize, u16)>)> {
+        let parameter_types = self
+            .function_signatures
+            .get(name)
+            .map(|(parameters, _)| parameters.clone());
         let mut values = Vec::new();
+        let mut float_args = Vec::new();
         for (index, argument) in arguments.iter().enumerate() {
-            if parameter_slices
+            let parameter_type = parameter_types
                 .as_ref()
-                .and_then(|parameters| parameters.get(index))
-                .copied()
-                .unwrap_or(false)
-            {
-                let (base, length, _) = self.lower_array_view(argument)?;
-                values.push(base);
-                values.push(length);
+                .and_then(|parameters| parameters.get(index));
+            if matches!(parameter_type, Some(HirType::Slice(_))) {
+                let (base, length, _) = self.lower_array_view_expected(
+                    argument,
+                    parameter_type.expect("checked slice parameter"),
+                )?;
+                values.extend([base, length]);
                 continue;
             }
-            let expected_struct = parameter_structs
-                .as_ref()
-                .and_then(|parameters| parameters.get(index))
-                .and_then(Option::as_deref);
+            let expected_struct = match parameter_type {
+                Some(HirType::Named(name)) if self.struct_fields.contains_key(name) => {
+                    Some(name.as_str())
+                }
+                _ => None,
+            };
             let value = match (argument, expected_struct) {
                 (
                     Expression::StructLiteral {
@@ -933,26 +1189,34 @@ impl Builder {
                     },
                     Some(struct_name),
                 ) => self.lower_struct_literal(struct_name, fields)?,
-                _ => self.expression(argument)?,
+                _ => match parameter_type {
+                    Some(data_type) => self.expression_expected(argument, data_type)?,
+                    None => self.expression(argument)?,
+                },
             };
+            if let Some(width) = parameter_type.and_then(float_width) {
+                float_args.push((values.len(), width));
+            }
             values.push(value);
         }
-        Some(values)
+        Some((values, float_args))
     }
 
     fn lower_function_value_arguments(
         &mut self,
         arguments: &[Expression],
         parameter_types: &[HirType],
-    ) -> Option<Vec<ValueId>> {
+    ) -> Option<(Vec<ValueId>, Vec<(usize, u16)>)> {
         if arguments.len() != parameter_types.len() {
             return None;
         }
         let mut values = Vec::new();
+        let mut float_args = Vec::new();
         for (argument, parameter_type) in arguments.iter().zip(parameter_types) {
             match parameter_type {
                 HirType::Slice(_) => {
-                    let (base, length, _) = self.lower_array_view(argument)?;
+                    let (base, length, _) =
+                        self.lower_array_view_expected(argument, parameter_type)?;
                     values.push(base);
                     values.push(length);
                 }
@@ -962,20 +1226,53 @@ impl Builder {
                             type_name: None,
                             fields,
                         } => self.lower_struct_literal(name, fields)?,
-                        _ => self.expression(argument)?,
+                        _ => self.expression_expected(argument, parameter_type)?,
                     };
                     values.push(value);
                 }
-                _ => values.push(self.expression(argument)?),
+                _ => {
+                    if let Some(width) = float_width(parameter_type) {
+                        float_args.push((values.len(), width));
+                    }
+                    values.push(self.expression_expected(argument, parameter_type)?);
+                }
             }
         }
-        Some(values)
+        Some((values, float_args))
     }
 
     fn binary(&mut self, lhs: &Expression, rhs: &Expression, kind: u8) -> Option<ValueId> {
-        let lhs = self.expression(lhs)?;
-        let rhs = self.expression(rhs)?;
+        let operation_type = self.float_operation_type(lhs, rhs);
+        let lhs = if let Some(data_type) = operation_type.as_ref() {
+            self.expression_expected(lhs, data_type)
+        } else {
+            self.expression(lhs)
+        }?;
+        let rhs = if let Some(data_type) = operation_type.as_ref() {
+            self.expression_expected(rhs, data_type)
+        } else {
+            self.expression(rhs)
+        }?;
         let result = self.value();
+        if let Some(width) = operation_type.as_ref().and_then(float_width) {
+            let kind = match kind {
+                0 => FloatBinaryKind::Add,
+                1 => FloatBinaryKind::Subtract,
+                2 => FloatBinaryKind::Multiply,
+                3 => FloatBinaryKind::Divide,
+                _ => return None,
+            };
+            self.emit(MirInstruction::FloatBinary {
+                result,
+                lhs,
+                rhs,
+                kind,
+                width,
+            });
+            self.value_types
+                .insert(result, HirType::Float { bits: width });
+            return Some(result);
+        }
         let instruction = match kind {
             0 => MirInstruction::Add { result, lhs, rhs },
             1 => MirInstruction::Sub { result, lhs, rhs },
@@ -984,7 +1281,156 @@ impl Builder {
             _ => MirInstruction::Rem { result, lhs, rhs },
         };
         self.emit(instruction);
+        if let Some(data_type) = self.value_type(lhs) {
+            self.value_types.insert(result, data_type);
+        }
         Some(result)
+    }
+
+    fn expression_expected(
+        &mut self,
+        expression: &Expression,
+        expected: &HirType,
+    ) -> Option<ValueId> {
+        let previous = self.expected_type_hint.replace(expected.clone());
+        let result = self.expression(expression);
+        self.expected_type_hint = previous;
+        result
+    }
+
+    fn lower_array_view_expected(
+        &mut self,
+        expression: &Expression,
+        expected: &HirType,
+    ) -> Option<(ValueId, ValueId, u8)> {
+        let previous = self.expected_type_hint.replace(expected.clone());
+        let result = self.lower_array_view(expression);
+        self.expected_type_hint = previous;
+        result
+    }
+
+    fn value_type(&self, value: ValueId) -> Option<HirType> {
+        self.value_types.get(&value).cloned()
+    }
+
+    fn expression_type(&self, expression: &Expression) -> Option<HirType> {
+        match expression {
+            Expression::Identifier(name) => self.variable_types.get(name).cloned().or_else(|| {
+                self.function_signature_for_expression(expression)
+                    .map(|(params, result)| HirType::Function {
+                        params,
+                        result: Box::new(result),
+                    })
+            }),
+            Expression::StaticAccess { .. } => self
+                .function_signature_for_expression(expression)
+                .map(|(params, result)| HirType::Function {
+                    params,
+                    result: Box::new(result),
+                }),
+            Expression::LiteralNumber(text) if text.contains('.') => {
+                Some(HirType::Float { bits: 64 })
+            }
+            Expression::LiteralNumber(_) => Some(HirType::Integer {
+                bits: 32,
+                signed: true,
+            }),
+            Expression::LiteralBool(_) => Some(HirType::Bool),
+            Expression::LiteralString(_) => Some(HirType::Slice(Box::new(HirType::Integer {
+                bits: 8,
+                signed: false,
+            }))),
+            Expression::AddressOf(inner) => self
+                .expression_type(inner)
+                .map(|inner| HirType::Pointer(Box::new(inner))),
+            Expression::Dereference(pointer) => match self.expression_type(pointer) {
+                Some(HirType::Pointer(inner)) => Some(*inner),
+                _ => None,
+            },
+            Expression::MemberAccess { object, member } => {
+                let struct_name = self.expression_struct_name(object)?;
+                self.struct_field_types
+                    .get(&struct_name)?
+                    .iter()
+                    .find(|(name, _)| name == member)
+                    .map(|(_, data_type)| data_type.clone())
+            }
+            Expression::Index { object, .. } => match self.expression_type(object) {
+                Some(HirType::Array { element, .. }) | Some(HirType::Slice(element)) => {
+                    Some(*element)
+                }
+                Some(HirType::Pointer(element)) => Some(*element),
+                _ => None,
+            },
+            Expression::ArrayLiteral(values) => values.first().and_then(|value| {
+                self.expression_type(value).map(|element| HirType::Array {
+                    length: values.len() as u64,
+                    element: Box::new(element),
+                })
+            }),
+            Expression::Call { name, .. } => self
+                .variable_function_signatures
+                .get(name)
+                .map(|(_, result)| result.clone())
+                .or_else(|| {
+                    self.function_signatures
+                        .get(name)
+                        .map(|(_, result)| result.clone())
+                }),
+            Expression::CallValue { callee, .. } => self
+                .function_signature_for_expression(callee)
+                .map(|(_, result)| result),
+            Expression::Negate(inner) => self.expression_type(inner),
+            Expression::Add(lhs, rhs)
+            | Expression::Subtract(lhs, rhs)
+            | Expression::Multiply(lhs, rhs)
+            | Expression::Divide(lhs, rhs)
+            | Expression::Remainder(lhs, rhs) => self
+                .float_operation_type(lhs, rhs)
+                .or_else(|| self.expression_type(lhs))
+                .or_else(|| self.expression_type(rhs)),
+            Expression::If {
+                then_branch,
+                else_branch,
+                ..
+            } => self
+                .expression_type(then_branch)
+                .or_else(|| self.expression_type(else_branch)),
+            Expression::Block(items) => items.iter().rev().find_map(|item| match item {
+                crate::parser::ASTNode::Expression(expression) => self.expression_type(expression),
+                _ => None,
+            }),
+            _ => None,
+        }
+    }
+
+    fn float_operation_type(&self, lhs: &Expression, rhs: &Expression) -> Option<HirType> {
+        let is_literal = |expression: &Expression| {
+            matches!(expression, Expression::LiteralNumber(_))
+                || matches!(expression, Expression::Negate(inner) if matches!(inner.as_ref(), Expression::LiteralNumber(_)))
+        };
+        let lhs_type = (!is_literal(lhs))
+            .then(|| self.expression_type(lhs))
+            .flatten();
+        let rhs_type = (!is_literal(rhs))
+            .then(|| self.expression_type(rhs))
+            .flatten();
+        lhs_type
+            .filter(|ty| float_width(ty).is_some())
+            .or_else(|| rhs_type.filter(|ty| float_width(ty).is_some()))
+            .or_else(|| {
+                self.expected_type_hint
+                    .clone()
+                    .filter(|ty| float_width(ty).is_some())
+            })
+            .or_else(|| {
+                self.expression_type(lhs)
+                    .filter(|ty| float_width(ty).is_some())
+            })
+            .or_else(|| {
+                self.expression_type(rhs)
+                    .filter(|ty| float_width(ty).is_some())
+            })
     }
 
     fn is_open(&self, block: BlockId) -> bool {
@@ -1701,7 +2147,15 @@ impl Builder {
                 .find(|(name, _)| name == field_name)
                 .map(|(_, expression)| expression)
                 .or(default.as_ref())?;
-            let value = self.expression(expression)?;
+            let field_type = self
+                .struct_field_types
+                .get(struct_name)?
+                .iter()
+                .find(|(name, _)| name == field_name)?
+                .1
+                .clone();
+            let value = self.expression_expected(expression, &field_type)?;
+            self.value_types.insert(value, field_type);
             self.emit(MirInstruction::StoreSlot {
                 slot: SlotId(base.0 + index as u32),
                 value,
@@ -1717,7 +2171,7 @@ fn lower_function(
     function: &HirFunction,
     enum_variants: &std::collections::HashMap<String, EnumVariant>,
     struct_fields: &std::collections::HashMap<String, Vec<(String, Option<Expression>)>>,
-    function_struct_params: &std::collections::HashMap<String, Vec<Option<String>>>,
+    struct_field_types: &std::collections::HashMap<String, Vec<(String, HirType)>>,
     function_slice_params: &std::collections::HashMap<String, Vec<bool>>,
     method_targets: &std::collections::HashMap<(String, String), MethodTarget>,
     function_signatures: &std::collections::HashMap<String, (Vec<HirType>, HirType)>,
@@ -1738,20 +2192,31 @@ fn lower_function(
         pointer_scales: std::collections::HashMap::new(),
         enum_variants: enum_variants.clone(),
         struct_fields: struct_fields.clone(),
-        function_struct_params: function_struct_params.clone(),
+        struct_field_types: struct_field_types.clone(),
         function_slice_params: function_slice_params.clone(),
         method_targets: method_targets.clone(),
         function_signatures: function_signatures.clone(),
         variable_function_signatures: std::collections::HashMap::new(),
+        variable_types: std::collections::HashMap::new(),
+        value_types: std::collections::HashMap::new(),
+        expected_type_hint: None,
+        return_type: function.result.clone(),
         variable_structs: std::collections::HashMap::new(),
         defer_scopes: Vec::new(),
         loop_targets: Vec::new(),
     };
     let mut params = Vec::new();
     let mut abi_params = Vec::new();
+    let mut abi_float_params = Vec::new();
     for (name, ty) in &function.params {
         let incoming = builder.value();
-        abi_params.push(incoming);
+        if let Some(width) = float_width(ty) {
+            abi_float_params.push((incoming, width));
+        } else {
+            abi_params.push(incoming);
+        }
+        builder.variable_types.insert(name.clone(), ty.clone());
+        builder.value_types.insert(incoming, ty.clone());
         let slot = builder.slot();
         builder.variables.insert(name.clone(), Variable::Slot(slot));
         if let HirType::Array { length, .. } = ty {
@@ -1800,7 +2265,7 @@ fn lower_function(
         });
         params.push((name.clone(), ty.clone(), incoming));
     }
-    let result = builder.expression(&function.body);
+    let result = builder.expression_expected(&function.body, &function.result);
     let result = if function.result == HirType::Void {
         None
     } else {
@@ -1815,6 +2280,7 @@ fn lower_function(
         name: function.name.clone(),
         params,
         abi_params,
+        abi_float_params,
         result: function.result.clone(),
         slot_count: builder.next_slot,
         blocks,
@@ -1918,18 +2384,29 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
     let struct_fields = module
         .structs
         .iter()
-        .map(|structure| (structure.name.clone(), structure.fields.clone()))
+        .map(|structure| {
+            (
+                structure.name.clone(),
+                structure
+                    .fields
+                    .iter()
+                    .map(|(name, _, default)| (name.clone(), default.clone()))
+                    .collect(),
+            )
+        })
         .collect::<std::collections::HashMap<_, _>>();
-    let function_struct_params = module
-        .functions
+    let struct_field_types = module
+        .structs
         .iter()
-        .map(|function| {
-            let parameters = function
-                .params
-                .iter()
-                .map(|(_, data_type)| struct_name_from_hir_type(data_type, &struct_fields))
-                .collect();
-            (function.name.clone(), parameters)
+        .map(|structure| {
+            (
+                structure.name.clone(),
+                structure
+                    .fields
+                    .iter()
+                    .map(|(name, data_type, _)| (name.clone(), data_type.clone()))
+                    .collect(),
+            )
         })
         .collect::<std::collections::HashMap<_, _>>();
     let function_slice_params = module
@@ -2012,7 +2489,7 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
                     function,
                     &enum_variants,
                     &struct_fields,
-                    &function_struct_params,
+                    &struct_field_types,
                     &function_slice_params,
                     &method_targets,
                     &function_signatures,
@@ -2040,6 +2517,13 @@ fn pointer_scale_from_hir_type(data_type: &HirType) -> u8 {
             signed: false,
         } => 1,
         _ => 8,
+    }
+}
+
+fn float_width(data_type: &HirType) -> Option<u16> {
+    match data_type {
+        HirType::Float { bits } => Some(*bits),
+        _ => None,
     }
 }
 

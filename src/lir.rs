@@ -1,5 +1,7 @@
+use crate::hir::HirType;
 use crate::mir::{
-    CompareKind, MirFunction, MirInstruction, MirModule, MirTerminator, SlotId, ValueId,
+    CompareKind, FloatBinaryKind, MirFunction, MirInstruction, MirModule, MirTerminator, SlotId,
+    ValueId,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,11 +46,20 @@ pub(crate) enum LirInstruction {
         result: Option<ValueId>,
         callee: ValueId,
         args: Vec<ValueId>,
+        float_args: Vec<(usize, u16)>,
+        result_float: Option<u16>,
     },
     Add {
         destination: ValueId,
         lhs: ValueId,
         rhs: ValueId,
+    },
+    FloatBinary {
+        destination: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+        kind: FloatBinaryKind,
+        width: u16,
     },
     Sub {
         destination: ValueId,
@@ -74,6 +85,11 @@ pub(crate) enum LirInstruction {
         destination: ValueId,
         value: ValueId,
     },
+    FloatNeg {
+        destination: ValueId,
+        value: ValueId,
+        width: u16,
+    },
     Not {
         destination: ValueId,
         value: ValueId,
@@ -84,10 +100,19 @@ pub(crate) enum LirInstruction {
         rhs: ValueId,
         kind: CompareKind,
     },
+    FloatCompare {
+        destination: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+        kind: CompareKind,
+        width: u16,
+    },
     Call {
         result: Option<ValueId>,
         name: String,
         args: Vec<ValueId>,
+        float_args: Vec<(usize, u16)>,
+        result_float: Option<u16>,
     },
     Phi {
         destination: ValueId,
@@ -129,6 +154,8 @@ pub(crate) enum LirInstruction {
 pub(crate) struct LirFunction {
     pub(crate) name: String,
     pub(crate) params: Vec<ValueId>,
+    pub(crate) float_params: Vec<(ValueId, u16)>,
+    pub(crate) result: HirType,
     pub(crate) slot_count: u32,
     pub(crate) blocks: Vec<LirBlock>,
 }
@@ -176,10 +203,29 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                                 value: *value,
                             }
                         }
+                        MirInstruction::ConstFloat { result, bits, .. } => {
+                            LirInstruction::LoadImmediate {
+                                register: *result,
+                                value: *bits as i128,
+                            }
+                        }
                         MirInstruction::Add { result, lhs, rhs } => LirInstruction::Add {
                             destination: *result,
                             lhs: *lhs,
                             rhs: *rhs,
+                        },
+                        MirInstruction::FloatBinary {
+                            result,
+                            lhs,
+                            rhs,
+                            kind,
+                            width,
+                        } => LirInstruction::FloatBinary {
+                            destination: *result,
+                            lhs: *lhs,
+                            rhs: *rhs,
+                            kind: *kind,
+                            width: *width,
                         },
                         MirInstruction::Sub { result, lhs, rhs } => LirInstruction::Sub {
                             destination: *result,
@@ -205,6 +251,15 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                             destination: *result,
                             value: *value,
                         },
+                        MirInstruction::FloatNeg {
+                            result,
+                            value,
+                            width,
+                        } => LirInstruction::FloatNeg {
+                            destination: *result,
+                            value: *value,
+                            width: *width,
+                        },
                         MirInstruction::Not { result, value } => LirInstruction::Not {
                             destination: *result,
                             value: *value,
@@ -219,6 +274,19 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                             lhs: *lhs,
                             rhs: *rhs,
                             kind: *kind,
+                        },
+                        MirInstruction::FloatCompare {
+                            result,
+                            lhs,
+                            rhs,
+                            kind,
+                            width,
+                        } => LirInstruction::FloatCompare {
+                            destination: *result,
+                            lhs: *lhs,
+                            rhs: *rhs,
+                            kind: *kind,
+                            width: *width,
                         },
                         MirInstruction::Phi { result, incoming } => LirInstruction::Phi {
                             destination: *result,
@@ -244,19 +312,31 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                                 symbol: symbol.clone(),
                             }
                         }
-                        MirInstruction::Call { result, name, args } => LirInstruction::Call {
+                        MirInstruction::Call {
+                            result,
+                            name,
+                            args,
+                            float_args,
+                            result_float,
+                        } => LirInstruction::Call {
                             result: *result,
                             name: name.clone(),
                             args: args.clone(),
+                            float_args: float_args.clone(),
+                            result_float: *result_float,
                         },
                         MirInstruction::CallIndirect {
                             result,
                             callee,
                             args,
+                            float_args,
+                            result_float,
                         } => LirInstruction::CallIndirect {
                             result: *result,
                             callee: *callee,
                             args: args.clone(),
+                            float_args: float_args.clone(),
+                            result_float: *result_float,
                         },
                         MirInstruction::LoadSlot { result, slot } => LirInstruction::LoadSlot {
                             destination: *result,
@@ -314,6 +394,8 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
     LirFunction {
         name: function.name.clone(),
         params: function.abi_params.clone(),
+        float_params: function.abi_float_params.clone(),
+        result: function.result.clone(),
         slot_count: function.slot_count,
         blocks,
     }

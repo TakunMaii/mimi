@@ -49,11 +49,17 @@ pub(crate) fn allocate_registers(function: &LirFunction) -> Result<LirFunction, 
     }
 
     let mut colors = HashMap::<ValueId, u32>::new();
+    if function.float_params.len() > 8 {
+        return Err("ARM64 backend currently supports at most 8 floating-point parameters".into());
+    }
     for (index, parameter) in function.params.iter().enumerate() {
         if index >= 16 {
             return Err("ARM64 register allocator supports at most 16 integer parameters".into());
         }
         colors.insert(*parameter, index as u32);
+    }
+    for (index, (parameter, _)) in function.float_params.iter().enumerate() {
+        colors.insert(*parameter, 19 + index as u32);
     }
     let mut order = interference.keys().copied().collect::<Vec<_>>();
     order.sort_by_key(|value| std::cmp::Reverse(interference.get(value).map_or(0, HashSet::len)));
@@ -268,6 +274,12 @@ fn instruction_uses_defs(instruction: &LirInstruction) -> (Vec<ValueId>, Vec<Val
             lhs,
             rhs,
         }
+        | LirInstruction::FloatBinary {
+            destination,
+            lhs,
+            rhs,
+            ..
+        }
         | LirInstruction::IndexAddress {
             destination,
             base: lhs,
@@ -284,10 +296,19 @@ fn instruction_uses_defs(instruction: &LirInstruction) -> (Vec<ValueId>, Vec<Val
             lhs,
             rhs,
             ..
+        }
+        | LirInstruction::FloatCompare {
+            destination,
+            lhs,
+            rhs,
+            ..
         } => (vec![*lhs, *rhs], vec![*destination]),
         LirInstruction::Neg { destination, value } | LirInstruction::Not { destination, value } => {
             (vec![*value], vec![*destination])
         }
+        LirInstruction::FloatNeg {
+            destination, value, ..
+        } => (vec![*value], vec![*destination]),
         LirInstruction::Call { result, args, .. } => {
             (args.clone(), result.iter().copied().collect())
         }
@@ -295,6 +316,7 @@ fn instruction_uses_defs(instruction: &LirInstruction) -> (Vec<ValueId>, Vec<Val
             result,
             callee,
             args,
+            ..
         } => (
             std::iter::once(*callee)
                 .chain(args.iter().copied())
@@ -331,6 +353,9 @@ fn rewrite_function(
         Ok(())
     };
     for parameter in &mut function.params {
+        map_value(parameter)?;
+    }
+    for (parameter, _) in &mut function.float_params {
         map_value(parameter)?;
     }
     for block in &mut function.blocks {
@@ -379,8 +404,30 @@ fn rewrite_function(
                     map_value(lhs)?;
                     map_value(rhs)?;
                 }
+                LirInstruction::FloatBinary {
+                    destination,
+                    lhs,
+                    rhs,
+                    ..
+                }
+                | LirInstruction::FloatCompare {
+                    destination,
+                    lhs,
+                    rhs,
+                    ..
+                } => {
+                    map_value(destination)?;
+                    map_value(lhs)?;
+                    map_value(rhs)?;
+                }
                 LirInstruction::Neg { destination, value }
                 | LirInstruction::Not { destination, value } => {
+                    map_value(destination)?;
+                    map_value(value)?;
+                }
+                LirInstruction::FloatNeg {
+                    destination, value, ..
+                } => {
                     map_value(destination)?;
                     map_value(value)?;
                 }
@@ -396,6 +443,7 @@ fn rewrite_function(
                     result,
                     callee,
                     args,
+                    ..
                 } => {
                     if let Some(result) = result {
                         map_value(result)?;

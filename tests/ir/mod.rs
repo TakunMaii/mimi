@@ -962,6 +962,32 @@ fn builds_and_runs_static_method_values() {
 }
 
 #[test]
+fn builds_and_runs_floating_point_operations_and_abi() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_float_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_float_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "add64 :: fn (left : f64, right : f64) f64 { left + right } apply64 :: fn (function : fn(f64,f64)f64, left : f64, right : f64) f64 { function(left, right) } add32 :: fn (left : f32, right : f32) f32 { left + right } apply32 :: fn (function : fn(f32,f32)f32, left : f32, right : f32) f32 { function(left, right) } return32 :: fn () f32 { return 1.5 } transform :: fn (value : f64) f64 { ((-value + 4.0) * 2.0) / 2.0 } pos :: struct { x : f32 } main :: fn () i32 { before := 17 result64 := apply64(add64, 1.25, 2.25) result32 := apply32(add32, 1.5, 2) point := pos { x = return32() } point.x = result32 result := if result64 >= 3.5 && result64 < 4.0 && transform(1.0) == 3.0 && point.x == 3.5 && before == 17 { 0 } else { 1 } result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn lowers_string_literals_to_data_symbols_in_lir() {
     let ast = parse(tokenize(r#"main :: fn () []u8 { "hello" }"#.chars()));
     let hir = hir::lower_ast(&ast);

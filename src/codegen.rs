@@ -1,8 +1,9 @@
 use std::path::Path;
 use std::process::Command;
 
+use crate::hir::HirType;
 use crate::lir::{LirFunction, LirInstruction, LirModule, TargetArch};
-use crate::mir::{CompareKind, MirTerminator, ValueId};
+use crate::mir::{CompareKind, FloatBinaryKind, MirTerminator, ValueId};
 use crate::regalloc::allocate_registers;
 
 #[derive(Clone, Copy)]
@@ -165,6 +166,7 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
     let frame_size = stack_frame_size(function);
     let save_frame = saves_frame_pointer(has_calls);
     size += function.params.len().saturating_sub(8) * 4;
+    size += function.float_params.len() * 4;
     size += saved_registers
         .iter()
         .enumerate()
@@ -188,6 +190,8 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 | LirInstruction::Mul { .. }
                 | LirInstruction::Div { .. }
                 | LirInstruction::Neg { .. } => 1,
+                LirInstruction::FloatBinary { .. } => 4,
+                LirInstruction::FloatNeg { .. } => 3,
                 LirInstruction::LoadSlot { .. } | LirInstruction::StoreSlot { .. } => 1,
                 LirInstruction::SlotAddress { slot, .. } => slot_address_words(*slot),
                 LirInstruction::IndexAddress { .. }
@@ -196,45 +200,59 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 | LirInstruction::StoreIndirect { .. } => 1,
                 LirInstruction::Not { .. } => 2,
                 LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
+                LirInstruction::FloatCompare { .. } => 4,
                 LirInstruction::Phi { .. } => 0,
-                LirInstruction::Call { args, result, .. }
-                | LirInstruction::CallIndirect { args, result, .. } => {
-                    encoded_call_words(args, *result)?
-                }
+                LirInstruction::Call {
+                    args,
+                    result,
+                    float_args,
+                    result_float,
+                    ..
+                } => encoded_call_words(args, *result, float_args, *result_float, false)?,
+                LirInstruction::CallIndirect {
+                    args,
+                    result,
+                    float_args,
+                    result_float,
+                    ..
+                } => encoded_call_words(args, *result, float_args, *result_float, true)?,
             } * 4;
         }
-        size += match block.terminator {
-            MirTerminator::Return(value) => {
-                usize::from(value.is_some_and(|value| value.0 != 0)) * 4
-                    + if function.name == "main" {
-                        8 + usize::from(value.is_none()) * 4
-                    } else {
-                        (1 + usize::from(save_frame)
-                            + saved_registers
-                                .iter()
-                                .enumerate()
-                                .map(|(index, _)| {
-                                    stack_access_words(saved_register_offset(function, index))
-                                })
-                                .sum::<usize>()
-                            + stack_adjust_words(frame_size))
-                            * 4
-                    }
-            }
-            MirTerminator::Jump(target) => 4 + phi_move_count(function, block.id, target) * 4,
-            MirTerminator::Branch {
-                then_block,
-                else_block,
-                ..
-            } => {
-                12 + (phi_move_count(function, block.id, then_block)
-                    + phi_move_count(function, block.id, else_block))
-                    * 4
-            }
-            MirTerminator::Unreachable => {
-                return Err("unreachable terminator reached ARM64 backend".into());
-            }
-        };
+        size +=
+            match block.terminator {
+                MirTerminator::Return(value) => {
+                    usize::from(value.is_some_and(|value| {
+                        value.0 != 0 || float_width(&function.result).is_some()
+                    })) * 4
+                        + if function.name == "main" {
+                            8 + usize::from(value.is_none()) * 4
+                        } else {
+                            (1 + usize::from(save_frame)
+                                + saved_registers
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, _)| {
+                                        stack_access_words(saved_register_offset(function, index))
+                                    })
+                                    .sum::<usize>()
+                                + stack_adjust_words(frame_size))
+                                * 4
+                        }
+                }
+                MirTerminator::Jump(target) => 4 + phi_move_count(function, block.id, target) * 4,
+                MirTerminator::Branch {
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    12 + (phi_move_count(function, block.id, then_block)
+                        + phi_move_count(function, block.id, else_block))
+                        * 4
+                }
+                MirTerminator::Unreachable => {
+                    return Err("unreachable terminator reached ARM64 backend".into());
+                }
+            };
     }
     if save_frame {
         size += 4;
@@ -301,16 +319,58 @@ fn stack_argument_size(argument_count: usize) -> u32 {
     (argument_count.saturating_sub(8) as u32 * 8).next_multiple_of(16)
 }
 
-fn encoded_call_words(args: &[ValueId], result: Option<ValueId>) -> Result<usize, String> {
-    if args.len() > 16 {
+fn integer_arguments(
+    args: &[ValueId],
+    float_args: &[(usize, u16)],
+) -> Result<Vec<ValueId>, String> {
+    let mut float_positions = std::collections::HashSet::new();
+    for (position, width) in float_args {
+        if *position >= args.len() || !float_positions.insert(*position) {
+            return Err("invalid floating-point argument metadata".into());
+        }
+        validate_float_width(*width)?;
+    }
+    if float_args.len() > 8 {
+        return Err("ARM64 backend currently supports at most 8 floating-point arguments".into());
+    }
+    Ok(args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| (!float_positions.contains(&index)).then_some(*value))
+        .collect())
+}
+
+fn encoded_call_words(
+    args: &[ValueId],
+    result: Option<ValueId>,
+    float_args: &[(usize, u16)],
+    result_float: Option<u16>,
+    indirect: bool,
+) -> Result<usize, String> {
+    if let Some(width) = result_float {
+        validate_float_width(width)?;
+    }
+    let integer_args = integer_arguments(args, float_args)?;
+    if integer_args.len() > 16 {
         return Err("ARM64 backend currently supports at most 16 integer arguments".into());
     }
-    let stack_args = args.len().saturating_sub(8);
-    Ok(argument_moves(&args[..args.len().min(8)]).len()
+    let stack_args = integer_args.len().saturating_sub(8);
+    Ok(float_args.len()
+        + argument_moves(&integer_args[..integer_args.len().min(8)]).len()
         + stack_args
-        + stack_adjust_words(stack_argument_size(args.len())) * 2
+        + stack_adjust_words(stack_argument_size(integer_args.len())) * 2
         + 1
-        + usize::from(result.is_some_and(|value| value.0 != 0)))
+        + usize::from(indirect)
+        + usize::from(result.is_some_and(|value| value.0 != 0 || result_float.is_some())))
+}
+
+fn validate_float_width(width: u16) -> Result<(), String> {
+    match width {
+        32 | 64 => Ok(()),
+        _ => Err(format!(
+            "ARM64 backend does not support f{width} values yet"
+        )),
+    }
 }
 
 fn slot_address_words(slot: crate::mir::SlotId) -> usize {
@@ -378,6 +438,9 @@ fn encode_function(
     if function.params.len() > 16 {
         return Err("ARM64 backend currently supports at most 16 integer parameters".into());
     }
+    if function.float_params.len() > 8 {
+        return Err("ARM64 backend currently supports at most 8 floating-point parameters".into());
+    }
     let has_calls = function
         .blocks
         .iter()
@@ -404,6 +467,9 @@ fn encode_function(
             return Err("ARM64 stack-passed parameter offset exceeds the load range".into());
         }
         push_word(bytes, 0xf940_03e0 | ((offset / 8) << 10) | parameter.0);
+    }
+    for (index, (parameter, width)) in function.float_params.iter().enumerate() {
+        encode_fp_to_gpr(bytes, parameter.0, index as u32, *width)?;
     }
     let mut block_offsets = std::collections::HashMap::new();
     let mut cursor = bytes.len();
@@ -445,6 +511,16 @@ fn encode_function(
                     lhs,
                     rhs,
                 } => 0x8b00_0000 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+                LirInstruction::FloatBinary {
+                    destination,
+                    lhs,
+                    rhs,
+                    kind,
+                    width,
+                } => {
+                    encode_float_binary(*destination, *lhs, *rhs, *kind, *width, bytes)?;
+                    continue;
+                }
                 LirInstruction::Sub {
                     destination,
                     lhs,
@@ -463,6 +539,14 @@ fn encode_function(
                 LirInstruction::Not { destination, value } => {
                     push_word(bytes, 0xf100_001f | (value.0 << 5));
                     push_word(bytes, 0x9a9f_17e0 | destination.0);
+                    continue;
+                }
+                LirInstruction::FloatNeg {
+                    destination,
+                    value,
+                    width,
+                } => {
+                    encode_float_neg(*destination, *value, *width, bytes)?;
                     continue;
                 }
                 LirInstruction::Neg { destination, value } => {
@@ -550,15 +634,32 @@ fn encode_function(
                     );
                     continue;
                 }
-                LirInstruction::Call { result, name, args } => {
-                    if args.len() > 16 {
+                LirInstruction::FloatCompare {
+                    destination,
+                    lhs,
+                    rhs,
+                    kind,
+                    width,
+                } => {
+                    encode_float_compare(*destination, *lhs, *rhs, *kind, *width, bytes)?;
+                    continue;
+                }
+                LirInstruction::Call {
+                    result,
+                    name,
+                    args,
+                    float_args,
+                    result_float,
+                } => {
+                    let integer_args = integer_arguments(args, float_args)?;
+                    if integer_args.len() > 16 {
                         return Err(
                             "ARM64 backend currently supports at most 16 integer arguments".into(),
                         );
                     }
-                    let stack_size = stack_argument_size(args.len());
+                    let stack_size = stack_argument_size(integer_args.len());
                     encode_stack_adjust(bytes, stack_size, true)?;
-                    for (index, argument) in args.iter().enumerate().skip(8) {
+                    for (index, argument) in integer_args.iter().enumerate().skip(8) {
                         let offset = (index as u32 - 8) * 8;
                         if offset > 32760 {
                             return Err(
@@ -567,7 +668,11 @@ fn encode_function(
                         }
                         push_word(bytes, 0xf900_03e0 | ((offset / 8) << 10) | argument.0);
                     }
-                    encode_parallel_argument_moves(&args[..args.len().min(8)], bytes);
+                    encode_float_argument_moves(args, float_args, bytes)?;
+                    encode_parallel_argument_moves(
+                        &integer_args[..integer_args.len().min(8)],
+                        bytes,
+                    );
                     let call_address = bytes.len() as u64;
                     let target_name = format!("_{name}");
                     if let Some(target) = offsets.get(&target_name) {
@@ -587,10 +692,12 @@ fn encode_function(
                         push_word(bytes, 0x9400_0000);
                     }
                     encode_stack_adjust(bytes, stack_size, false)?;
-                    if let Some(result) = result
-                        && result.0 != 0
-                    {
-                        push_word(bytes, 0xaa00_03e0 | result.0);
+                    if let Some(result) = result {
+                        if let Some(width) = result_float {
+                            encode_fp_to_gpr(bytes, result.0, 0, *width)?;
+                        } else if result.0 != 0 {
+                            push_word(bytes, 0xaa00_03e0 | result.0);
+                        }
                     }
                     continue;
                 }
@@ -598,15 +705,18 @@ fn encode_function(
                     result,
                     callee,
                     args,
+                    float_args,
+                    result_float,
                 } => {
-                    if args.len() > 16 {
+                    let integer_args = integer_arguments(args, float_args)?;
+                    if integer_args.len() > 16 {
                         return Err(
                             "ARM64 backend currently supports at most 16 integer arguments".into(),
                         );
                     }
-                    let stack_size = stack_argument_size(args.len());
+                    let stack_size = stack_argument_size(integer_args.len());
                     encode_stack_adjust(bytes, stack_size, true)?;
-                    for (index, argument) in args.iter().enumerate().skip(8) {
+                    for (index, argument) in integer_args.iter().enumerate().skip(8) {
                         let offset = (index as u32 - 8) * 8;
                         if offset > 32760 {
                             return Err(
@@ -615,14 +725,20 @@ fn encode_function(
                         }
                         push_word(bytes, 0xf900_03e0 | ((offset / 8) << 10) | argument.0);
                     }
+                    encode_float_argument_moves(args, float_args, bytes)?;
                     push_word(bytes, 0xaa00_03e0 | (callee.0 << 16) | 17);
-                    encode_parallel_argument_moves(&args[..args.len().min(8)], bytes);
+                    encode_parallel_argument_moves(
+                        &integer_args[..integer_args.len().min(8)],
+                        bytes,
+                    );
                     push_word(bytes, 0xd63f_0000 | (17 << 5));
                     encode_stack_adjust(bytes, stack_size, false)?;
-                    if let Some(result) = result
-                        && result.0 != 0
-                    {
-                        push_word(bytes, 0xaa00_03e0 | result.0);
+                    if let Some(result) = result {
+                        if let Some(width) = result_float {
+                            encode_fp_to_gpr(bytes, result.0, 0, *width)?;
+                        } else if result.0 != 0 {
+                            push_word(bytes, 0xaa00_03e0 | result.0);
+                        }
                     }
                     continue;
                 }
@@ -659,7 +775,9 @@ fn encode_function(
             }
             MirTerminator::Return(result) => {
                 if let Some(value) = result {
-                    if value.0 != 0 {
+                    if let Some(width) = float_width(&function.result) {
+                        encode_gpr_to_fp(bytes, 0, value.0, width)?;
+                    } else if value.0 != 0 {
                         push_word(bytes, 0xaa00_03e0 | (value.0 << 16));
                     }
                 }
@@ -725,6 +843,8 @@ fn block_encoded_size(
             | LirInstruction::Mul { .. }
             | LirInstruction::Div { .. }
             | LirInstruction::Neg { .. } => 1,
+            LirInstruction::FloatBinary { .. } => 4,
+            LirInstruction::FloatNeg { .. } => 3,
             LirInstruction::LoadSlot { .. } | LirInstruction::StoreSlot { .. } => 1,
             LirInstruction::SlotAddress { slot, .. } => slot_address_words(*slot),
             LirInstruction::IndexAddress { .. }
@@ -733,11 +853,22 @@ fn block_encoded_size(
             | LirInstruction::StoreIndirect { .. } => 1,
             LirInstruction::Not { .. } => 2,
             LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
+            LirInstruction::FloatCompare { .. } => 4,
             LirInstruction::Phi { .. } => 0,
-            LirInstruction::Call { args, result, .. }
-            | LirInstruction::CallIndirect { args, result, .. } => {
-                encoded_call_words(args, *result)?
-            }
+            LirInstruction::Call {
+                args,
+                result,
+                float_args,
+                result_float,
+                ..
+            } => encoded_call_words(args, *result, float_args, *result_float, false)?,
+            LirInstruction::CallIndirect {
+                args,
+                result,
+                float_args,
+                result_float,
+                ..
+            } => encoded_call_words(args, *result, float_args, *result_float, true)?,
         } * 4;
     }
     size += match block.terminator {
@@ -755,7 +886,8 @@ fn block_encoded_size(
             let frame_size = stack_frame_size(function);
             let saved_registers = callee_saved_registers(function);
             let save_frame = saves_frame_pointer(has_calls);
-            usize::from(value.is_some_and(|v| v.0 != 0)) * 4
+            usize::from(value.is_some_and(|v| v.0 != 0 || float_width(&function.result).is_some()))
+                * 4
                 + if function.name == "main" {
                     8 + usize::from(value.is_none()) * 4
                 } else {
@@ -811,6 +943,12 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
             destination,
             lhs,
             rhs,
+        }
+        | LirInstruction::FloatBinary {
+            destination,
+            lhs,
+            rhs,
+            ..
         } => vec![*destination, *lhs, *rhs],
         LirInstruction::Rem {
             destination,
@@ -822,10 +960,19 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
             lhs,
             rhs,
             ..
+        }
+        | LirInstruction::FloatCompare {
+            destination,
+            lhs,
+            rhs,
+            ..
         } => {
             vec![*destination, *lhs, *rhs]
         }
         LirInstruction::Neg { destination, value } => vec![*destination, *value],
+        LirInstruction::FloatNeg {
+            destination, value, ..
+        } => vec![*destination, *value],
         LirInstruction::Not { destination, value } => vec![*destination, *value],
         LirInstruction::LoadSlot { destination, .. } => vec![*destination],
         LirInstruction::StoreSlot { value, .. } => vec![*value],
@@ -852,6 +999,7 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
             result,
             callee,
             args,
+            ..
         } => std::iter::once(*callee)
             .chain(result.iter().copied())
             .chain(args.iter().copied())
@@ -939,6 +1087,140 @@ fn encode_immediate(register: u32, value: u64, bytes: &mut Vec<u8>) -> Result<()
 
 fn push_word(bytes: &mut Vec<u8>, word: u32) {
     bytes.extend_from_slice(&word.to_le_bytes());
+}
+
+fn float_width(data_type: &HirType) -> Option<u16> {
+    match data_type {
+        HirType::Float { bits } => Some(*bits),
+        _ => None,
+    }
+}
+
+fn encode_gpr_to_fp(
+    bytes: &mut Vec<u8>,
+    destination: u32,
+    source: u32,
+    width: u16,
+) -> Result<(), String> {
+    validate_float_width(width)?;
+    let instruction = if width == 32 {
+        0x1e27_0000 | (source << 5) | destination
+    } else {
+        0x9e67_0000 | (source << 5) | destination
+    };
+    push_word(bytes, instruction);
+    Ok(())
+}
+
+fn encode_fp_to_gpr(
+    bytes: &mut Vec<u8>,
+    destination: u32,
+    source: u32,
+    width: u16,
+) -> Result<(), String> {
+    validate_float_width(width)?;
+    let instruction = if width == 32 {
+        0x1e26_0000 | (source << 5) | destination
+    } else {
+        0x9e66_0000 | (source << 5) | destination
+    };
+    push_word(bytes, instruction);
+    Ok(())
+}
+
+fn encode_float_argument_moves(
+    args: &[ValueId],
+    float_args: &[(usize, u16)],
+    bytes: &mut Vec<u8>,
+) -> Result<(), String> {
+    for (index, (argument, width)) in float_args.iter().enumerate() {
+        encode_gpr_to_fp(bytes, index as u32, args[*argument].0, *width)?;
+    }
+    Ok(())
+}
+
+fn encode_float_binary(
+    destination: ValueId,
+    lhs: ValueId,
+    rhs: ValueId,
+    kind: FloatBinaryKind,
+    width: u16,
+    bytes: &mut Vec<u8>,
+) -> Result<(), String> {
+    encode_gpr_to_fp(bytes, 16, lhs.0, width)?;
+    encode_gpr_to_fp(bytes, 17, rhs.0, width)?;
+    let base = match (kind, width) {
+        (FloatBinaryKind::Add, 32) => 0x1e20_2800,
+        (FloatBinaryKind::Subtract, 32) => 0x1e20_3800,
+        (FloatBinaryKind::Multiply, 32) => 0x1e20_0800,
+        (FloatBinaryKind::Divide, 32) => 0x1e20_1800,
+        (FloatBinaryKind::Add, 64) => 0x1e60_2800,
+        (FloatBinaryKind::Subtract, 64) => 0x1e60_3800,
+        (FloatBinaryKind::Multiply, 64) => 0x1e60_0800,
+        (FloatBinaryKind::Divide, 64) => 0x1e60_1800,
+        _ => {
+            return Err(format!(
+                "ARM64 backend does not support f{width} arithmetic yet"
+            ));
+        }
+    };
+    push_word(bytes, base | (17 << 16) | (16 << 5) | 16);
+    encode_fp_to_gpr(bytes, destination.0, 16, width)
+}
+
+fn encode_float_neg(
+    destination: ValueId,
+    value: ValueId,
+    width: u16,
+    bytes: &mut Vec<u8>,
+) -> Result<(), String> {
+    encode_gpr_to_fp(bytes, 16, value.0, width)?;
+    let base = match width {
+        32 => 0x1e21_4000,
+        64 => 0x1e61_4000,
+        _ => {
+            return Err(format!(
+                "ARM64 backend does not support f{width} negation yet"
+            ));
+        }
+    };
+    push_word(bytes, base | (16 << 5) | 16);
+    encode_fp_to_gpr(bytes, destination.0, 16, width)
+}
+
+fn encode_float_compare(
+    destination: ValueId,
+    lhs: ValueId,
+    rhs: ValueId,
+    kind: CompareKind,
+    width: u16,
+    bytes: &mut Vec<u8>,
+) -> Result<(), String> {
+    encode_gpr_to_fp(bytes, 16, lhs.0, width)?;
+    encode_gpr_to_fp(bytes, 17, rhs.0, width)?;
+    let base = match width {
+        32 => 0x1e20_2000,
+        64 => 0x1e60_2000,
+        _ => {
+            return Err(format!(
+                "ARM64 backend does not support f{width} comparisons yet"
+            ));
+        }
+    };
+    push_word(bytes, base | (17 << 16) | (16 << 5));
+    let condition = match kind {
+        CompareKind::Equal => 0,
+        CompareKind::NotEqual => 1,
+        CompareKind::GreaterEqual => 10,
+        CompareKind::Less => 3,
+        CompareKind::Greater => 12,
+        CompareKind::LessEqual => 9,
+    };
+    push_word(
+        bytes,
+        0x9a9f_07e0 | (((condition ^ 1) as u32) << 12) | destination.0,
+    );
+    Ok(())
 }
 
 fn encode_parallel_argument_moves(args: &[ValueId], bytes: &mut Vec<u8>) {
@@ -1171,6 +1453,9 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
         let offset = frame_size + u32::from(save_frame) * 16 + (index as u32 - 8) * 8;
         emit_stack_load(assembly, parameter.0, offset);
     }
+    for (index, (parameter, width)) in function.float_params.iter().enumerate() {
+        emit_fp_to_gpr(assembly, parameter.0, index as u32, *width)?;
+    }
 
     for block in &function.blocks {
         assembly.push_str(&format!(".L{}_{}:\n", function.name, block.id.0));
@@ -1193,6 +1478,13 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     "    add x{}, x{}, x{}\n",
                     destination.0, lhs.0, rhs.0
                 )),
+                LirInstruction::FloatBinary {
+                    destination,
+                    lhs,
+                    rhs,
+                    kind,
+                    width,
+                } => emit_float_binary_assembly(assembly, *destination, *lhs, *rhs, *kind, *width)?,
                 LirInstruction::Sub {
                     destination,
                     lhs,
@@ -1228,6 +1520,11 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                 LirInstruction::Neg { destination, value } => {
                     assembly.push_str(&format!("    neg x{}, x{}\n", destination.0, value.0))
                 }
+                LirInstruction::FloatNeg {
+                    destination,
+                    value,
+                    width,
+                } => emit_float_neg_assembly(assembly, *destination, *value, *width)?,
                 LirInstruction::Not { destination, value } => assembly.push_str(&format!(
                     "    cmp x{}, #0\n    cset x{}, eq\n",
                     value.0, destination.0
@@ -1251,22 +1548,44 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                         lhs.0, rhs.0, destination.0
                     ));
                 }
-                LirInstruction::Call { result, name, args } => {
-                    if args.len() > 16 {
+                LirInstruction::FloatCompare {
+                    destination,
+                    lhs,
+                    rhs,
+                    kind,
+                    width,
+                } => {
+                    emit_float_compare_assembly(assembly, *destination, *lhs, *rhs, *kind, *width)?
+                }
+                LirInstruction::Call {
+                    result,
+                    name,
+                    args,
+                    float_args,
+                    result_float,
+                } => {
+                    let integer_args = integer_arguments(args, float_args)?;
+                    if integer_args.len() > 16 {
                         return Err(
                             "ARM64 assembly emitter supports at most 16 integer arguments".into(),
                         );
                     }
-                    let stack_size = stack_argument_size(args.len());
+                    let stack_size = stack_argument_size(integer_args.len());
                     emit_stack_adjust(assembly, stack_size, true);
-                    for (index, argument) in args.iter().enumerate().skip(8) {
+                    for (index, argument) in integer_args.iter().enumerate().skip(8) {
                         emit_stack_store(assembly, argument.0, (index as u32 - 8) * 8);
                     }
-                    emit_register_moves(assembly, &argument_moves(&args[..args.len().min(8)]));
+                    emit_float_argument_moves_assembly(assembly, args, float_args)?;
+                    emit_register_moves(
+                        assembly,
+                        &argument_moves(&integer_args[..integer_args.len().min(8)]),
+                    );
                     assembly.push_str(&format!("    bl _{name}\n"));
                     emit_stack_adjust(assembly, stack_size, false);
                     if let Some(result) = result {
-                        if result.0 != 0 {
+                        if let Some(width) = result_float {
+                            emit_fp_to_gpr(assembly, result.0, 0, *width)?;
+                        } else if result.0 != 0 {
                             assembly.push_str(&format!("    mov x{}, x0\n", result.0));
                         }
                     }
@@ -1275,23 +1594,32 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     result,
                     callee,
                     args,
+                    float_args,
+                    result_float,
                 } => {
-                    if args.len() > 16 {
+                    let integer_args = integer_arguments(args, float_args)?;
+                    if integer_args.len() > 16 {
                         return Err(
                             "ARM64 assembly emitter supports at most 16 integer arguments".into(),
                         );
                     }
-                    let stack_size = stack_argument_size(args.len());
+                    let stack_size = stack_argument_size(integer_args.len());
                     emit_stack_adjust(assembly, stack_size, true);
-                    for (index, argument) in args.iter().enumerate().skip(8) {
+                    for (index, argument) in integer_args.iter().enumerate().skip(8) {
                         emit_stack_store(assembly, argument.0, (index as u32 - 8) * 8);
                     }
+                    emit_float_argument_moves_assembly(assembly, args, float_args)?;
                     assembly.push_str(&format!("    mov x17, x{}\n", callee.0));
-                    emit_register_moves(assembly, &argument_moves(&args[..args.len().min(8)]));
+                    emit_register_moves(
+                        assembly,
+                        &argument_moves(&integer_args[..integer_args.len().min(8)]),
+                    );
                     assembly.push_str("    blr x17\n");
                     emit_stack_adjust(assembly, stack_size, false);
                     if let Some(result) = result {
-                        if result.0 != 0 {
+                        if let Some(width) = result_float {
+                            emit_fp_to_gpr(assembly, result.0, 0, *width)?;
+                        } else if result.0 != 0 {
                             assembly.push_str(&format!("    mov x{}, x0\n", result.0));
                         }
                     }
@@ -1359,10 +1687,12 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                 assembly.push_str(&format!("    b .L{}_{}\n", function.name, else_block.0));
             }
             MirTerminator::Return(value) => {
-                if let Some(value) = value
-                    && value.0 != 0
-                {
-                    assembly.push_str(&format!("    mov x0, x{}\n", value.0));
+                if let Some(value) = value {
+                    if let Some(width) = float_width(&function.result) {
+                        emit_gpr_to_fp(assembly, 0, value.0, width)?;
+                    } else if value.0 != 0 {
+                        assembly.push_str(&format!("    mov x0, x{}\n", value.0));
+                    }
                 }
                 for (index, register) in saved_registers.iter().enumerate() {
                     emit_stack_load(assembly, *register, saved_register_offset(function, index));
@@ -1450,6 +1780,132 @@ fn emit_register_moves(assembly: &mut String, moves: &[(u32, u32)]) {
     for (destination, source) in moves {
         assembly.push_str(&format!("    mov x{destination}, x{source}\n"));
     }
+}
+
+fn emit_gpr_to_fp(
+    assembly: &mut String,
+    destination: u32,
+    source: u32,
+    width: u16,
+) -> Result<(), String> {
+    validate_float_width(width)?;
+    if width == 32 {
+        assembly.push_str(&format!("    fmov s{destination}, w{source}\n"));
+    } else {
+        assembly.push_str(&format!("    fmov d{destination}, x{source}\n"));
+    }
+    Ok(())
+}
+
+fn emit_fp_to_gpr(
+    assembly: &mut String,
+    destination: u32,
+    source: u32,
+    width: u16,
+) -> Result<(), String> {
+    validate_float_width(width)?;
+    if width == 32 {
+        assembly.push_str(&format!("    fmov w{destination}, s{source}\n"));
+    } else {
+        assembly.push_str(&format!("    fmov x{destination}, d{source}\n"));
+    }
+    Ok(())
+}
+
+fn emit_float_argument_moves_assembly(
+    assembly: &mut String,
+    args: &[ValueId],
+    float_args: &[(usize, u16)],
+) -> Result<(), String> {
+    for (index, (argument, width)) in float_args.iter().enumerate() {
+        emit_gpr_to_fp(assembly, index as u32, args[*argument].0, *width)?;
+    }
+    Ok(())
+}
+
+fn emit_float_binary_assembly(
+    assembly: &mut String,
+    destination: ValueId,
+    lhs: ValueId,
+    rhs: ValueId,
+    kind: FloatBinaryKind,
+    width: u16,
+) -> Result<(), String> {
+    let register = match width {
+        32 => "s",
+        64 => "d",
+        _ => {
+            return Err(format!(
+                "ARM64 backend does not support f{width} arithmetic yet"
+            ));
+        }
+    };
+    emit_gpr_to_fp(assembly, 16, lhs.0, width)?;
+    emit_gpr_to_fp(assembly, 17, rhs.0, width)?;
+    let operation = match kind {
+        FloatBinaryKind::Add => "fadd",
+        FloatBinaryKind::Subtract => "fsub",
+        FloatBinaryKind::Multiply => "fmul",
+        FloatBinaryKind::Divide => "fdiv",
+    };
+    assembly.push_str(&format!(
+        "    {operation} {register}16, {register}16, {register}17\n"
+    ));
+    emit_fp_to_gpr(assembly, destination.0, 16, width)
+}
+
+fn emit_float_neg_assembly(
+    assembly: &mut String,
+    destination: ValueId,
+    value: ValueId,
+    width: u16,
+) -> Result<(), String> {
+    let register = match width {
+        32 => "s",
+        64 => "d",
+        _ => {
+            return Err(format!(
+                "ARM64 backend does not support f{width} negation yet"
+            ));
+        }
+    };
+    emit_gpr_to_fp(assembly, 16, value.0, width)?;
+    assembly.push_str(&format!("    fneg {register}16, {register}16\n"));
+    emit_fp_to_gpr(assembly, destination.0, 16, width)
+}
+
+fn emit_float_compare_assembly(
+    assembly: &mut String,
+    destination: ValueId,
+    lhs: ValueId,
+    rhs: ValueId,
+    kind: CompareKind,
+    width: u16,
+) -> Result<(), String> {
+    let register = match width {
+        32 => "s",
+        64 => "d",
+        _ => {
+            return Err(format!(
+                "ARM64 backend does not support f{width} comparisons yet"
+            ));
+        }
+    };
+    emit_gpr_to_fp(assembly, 16, lhs.0, width)?;
+    emit_gpr_to_fp(assembly, 17, rhs.0, width)?;
+    let condition = match kind {
+        CompareKind::Equal => "eq",
+        CompareKind::NotEqual => "ne",
+        CompareKind::GreaterEqual => "ge",
+        CompareKind::Less => "lo",
+        CompareKind::Greater => "gt",
+        CompareKind::LessEqual => "ls",
+    };
+    assembly.push_str(&format!(
+        "    fcmp {register}16, {register}17\n    cset x{}, {condition}\n",
+        destination.0
+    ));
+    Ok(())
 }
 
 fn emit_assembly_phi_copies(

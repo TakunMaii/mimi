@@ -20,6 +20,8 @@ and focused regression coverage; it does not imply support on every target.
 ## Values and Memory
 
 - [ ] Implement floating-point literals, arithmetic, comparisons, and ABI handling.
+  - [x] Support f32/f64 scalar literals, arithmetic, comparisons, function arguments, and returns.
+  - [ ] Support f8/f16 lowering and ABI representation.
 - [ ] Define target data layout and ABI rules for all supported value types.
 - [x] Implement 64-bit stack slots, loads/stores, and mutable locals across loops and branches.
 - [x] Lower scalar struct literals, 64-bit field slots, defaults, reads, writes, parameters, and inferred arguments.

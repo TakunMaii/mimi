@@ -92,7 +92,7 @@ pub(crate) struct HirEnum {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct HirStruct {
     pub(crate) name: String,
-    pub(crate) fields: Vec<(String, Option<Expression>)>,
+    pub(crate) fields: Vec<(String, HirType, Option<Expression>)>,
     pub(crate) methods: Vec<(String, String, bool)>,
 }
 
@@ -178,7 +178,9 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                 name: (*name).to_string(),
                 fields: fields
                     .iter()
-                    .map(|(field, _, default, _)| (field.clone(), default.clone()))
+                    .map(|(field, data_type, default, _)| {
+                        (field.clone(), (*data_type).into(), default.clone())
+                    })
                     .collect(),
                 methods: method_symbols,
             });
