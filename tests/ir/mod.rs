@@ -1535,6 +1535,72 @@ fn builds_x86_64_executable_for_selected_target() {
 }
 
 #[test]
+fn builds_x86_64_executable_linked_with_c_print_library() {
+    if !cfg!(target_os = "macos") && !cfg!(target_arch = "x86_64") {
+        return;
+    }
+    let directory = std::env::temp_dir().join(format!("mimi_x86_print_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let object = directory.join("print.o");
+    let library = directory.join("libprint.a");
+    let source = directory.join("main.mi");
+    let executable = directory.join("main");
+
+    let runtime_source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime/print.c");
+    let mut compile = std::process::Command::new("cc");
+    if cfg!(target_os = "macos") {
+        compile.args(["-arch", "x86_64"]);
+    }
+    assert!(
+        compile
+            .arg("-c")
+            .arg(runtime_source)
+            .arg("-o")
+            .arg(&object)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        std::process::Command::new("ar")
+            .arg("rcs")
+            .arg(&library)
+            .arg(&object)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    std::fs::write(
+        &source,
+        "extern print : fn(str : []u8)void main :: fn () i32 { print(\"hello\") 0 }",
+    )
+    .unwrap();
+    build_file_for_target(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        std::slice::from_ref(&directory),
+        &["print".to_string()],
+        lir::TargetArch::X86_64,
+    )
+    .unwrap();
+    let output = if cfg!(target_arch = "x86_64") {
+        std::process::Command::new(&executable).output().unwrap()
+    } else {
+        std::process::Command::new("arch")
+            .args(["-x86_64"])
+            .arg(&executable)
+            .output()
+            .unwrap()
+    };
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"hello");
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn builds_x86_64_arrays_slices_pointers_and_loops() {
     let source =
         std::env::temp_dir().join(format!("mimi_x86_memory_source_{}.mi", std::process::id()));
