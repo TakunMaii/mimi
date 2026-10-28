@@ -155,6 +155,12 @@ pub(crate) enum MirInstruction {
         result: ValueId,
         address: ValueId,
     },
+    LoadSizedIndirect {
+        result: ValueId,
+        address: ValueId,
+        bytes: u8,
+        signed: bool,
+    },
     StoreIndirect {
         address: ValueId,
         value: ValueId,
@@ -162,6 +168,11 @@ pub(crate) enum MirInstruction {
     StoreByteIndirect {
         address: ValueId,
         value: ValueId,
+    },
+    StoreSizedIndirect {
+        address: ValueId,
+        value: ValueId,
+        bytes: u8,
     },
 }
 
@@ -331,21 +342,18 @@ impl Builder {
                     }
                     _ => None,
                 };
-                let packed_bytes = matches!(
-                    expected_element.as_ref(),
-                    Some(HirType::Integer {
-                        bits: 8,
-                        signed: false
-                    })
-                );
+                let packed_size = expected_element
+                    .as_ref()
+                    .and_then(scalar_storage_size)
+                    .filter(|size| *size < 8);
                 let base = self.slot();
-                let slot_count = if packed_bytes {
-                    values.len().div_ceil(8)
+                let slot_count = if let Some(size) = packed_size {
+                    (values.len() * usize::from(size)).div_ceil(8)
                 } else {
                     values.len()
                 };
                 self.next_slot += slot_count.saturating_sub(1) as u32;
-                let packed_base = if packed_bytes {
+                let packed_base = if packed_size.is_some() {
                     let address = self.value();
                     self.emit(MirInstruction::SlotAddress {
                         result: address,
@@ -371,9 +379,16 @@ impl Builder {
                             result: address,
                             base,
                             index: index_value,
-                            scale: 1,
+                            scale: packed_size.expect("packed array has an element size"),
                         });
-                        self.emit(MirInstruction::StoreByteIndirect { address, value });
+                        match packed_size.expect("packed array has an element size") {
+                            1 => self.emit(MirInstruction::StoreByteIndirect { address, value }),
+                            bytes => self.emit(MirInstruction::StoreSizedIndirect {
+                                address,
+                                value,
+                                bytes,
+                            }),
+                        }
                     } else {
                         self.emit(MirInstruction::StoreSlot {
                             slot: SlotId(base.0 + index as u32),
@@ -409,12 +424,9 @@ impl Builder {
                     scale,
                 });
                 let result = self.value();
-                if scale == 1 {
-                    self.emit(MirInstruction::LoadByteIndirect { result, address });
-                } else {
-                    self.emit(MirInstruction::LoadIndirect { result, address });
-                }
-                if let Some(data_type) = self.expression_type(expression) {
+                let data_type = self.expression_type(expression);
+                self.emit_load_indirect(result, address, data_type.as_ref());
+                if let Some(data_type) = data_type {
                     self.value_types.insert(result, data_type);
                 }
                 Some(result)
@@ -454,11 +466,10 @@ impl Builder {
             Expression::Dereference(pointer) => {
                 let address = self.expression(pointer)?;
                 let result = self.value();
-                if matches!(self.expression_type(pointer), Some(HirType::Pointer(inner)) if matches!(*inner, HirType::Integer { bits: 8, signed: false }))
-                {
-                    self.emit(MirInstruction::LoadByteIndirect { result, address });
-                } else {
-                    self.emit(MirInstruction::LoadIndirect { result, address });
+                let data_type = self.expression_type(expression);
+                self.emit_load_indirect(result, address, data_type.as_ref());
+                if let Some(data_type) = data_type {
+                    self.value_types.insert(result, data_type);
                 }
                 Some(result)
             }
@@ -1133,11 +1144,7 @@ impl Builder {
                                     index,
                                     scale,
                                 });
-                                if scale == 1 {
-                                    self.emit(MirInstruction::StoreByteIndirect { address, value });
-                                } else {
-                                    self.emit(MirInstruction::StoreIndirect { address, value });
-                                }
+                                self.emit_store_indirect(address, value, expected_type.as_ref());
                             }
                             crate::parser::ASTNode::PointerAssignment { pointer, value } => {
                                 let address = self.expression(pointer)?;
@@ -1151,17 +1158,7 @@ impl Builder {
                                     }
                                     None => self.expression(value)?,
                                 };
-                                if matches!(
-                                    expected_type,
-                                    Some(HirType::Integer {
-                                        bits: 8,
-                                        signed: false
-                                    })
-                                ) {
-                                    self.emit(MirInstruction::StoreByteIndirect { address, value });
-                                } else {
-                                    self.emit(MirInstruction::StoreIndirect { address, value });
-                                }
+                                self.emit_store_indirect(address, value, expected_type.as_ref());
                             }
                             crate::parser::ASTNode::MemberAssignment {
                                 object,
@@ -1466,6 +1463,43 @@ impl Builder {
         self.value_types.get(&value).cloned()
     }
 
+    fn emit_load_indirect(
+        &mut self,
+        result: ValueId,
+        address: ValueId,
+        data_type: Option<&HirType>,
+    ) {
+        let bytes = data_type.and_then(scalar_storage_size);
+        let signed = matches!(data_type, Some(HirType::Integer { signed: true, .. }));
+        match bytes {
+            Some(1) if !signed => self.emit(MirInstruction::LoadByteIndirect { result, address }),
+            Some(bytes @ (1 | 2 | 4)) => self.emit(MirInstruction::LoadSizedIndirect {
+                result,
+                address,
+                bytes,
+                signed,
+            }),
+            _ => self.emit(MirInstruction::LoadIndirect { result, address }),
+        }
+    }
+
+    fn emit_store_indirect(
+        &mut self,
+        address: ValueId,
+        value: ValueId,
+        data_type: Option<&HirType>,
+    ) {
+        match data_type.and_then(scalar_storage_size) {
+            Some(1) => self.emit(MirInstruction::StoreByteIndirect { address, value }),
+            Some(bytes @ (2 | 4)) => self.emit(MirInstruction::StoreSizedIndirect {
+                address,
+                value,
+                bytes,
+            }),
+            _ => self.emit(MirInstruction::StoreIndirect { address, value }),
+        }
+    }
+
     fn expression_type(&self, expression: &Expression) -> Option<HirType> {
         match expression {
             Expression::Identifier(name) => self.variable_types.get(name).cloned().or_else(|| {
@@ -1701,6 +1735,10 @@ impl Builder {
     }
 
     fn lower_for(&mut self, binding: &str, iterable: &Expression, body: &Expression) -> Option<()> {
+        let element_type = match self.expression_type(iterable)? {
+            HirType::Array { element, .. } | HirType::Slice(element) => Some(*element),
+            _ => None,
+        }?;
         let (array, length, scale) = self.lower_array_view(iterable)?;
         let array_slot = self.slot();
         self.emit(MirInstruction::StoreSlot {
@@ -1727,6 +1765,9 @@ impl Builder {
         let previous_binding = self
             .variables
             .insert(binding.to_string(), Variable::Slot(binding_slot));
+        let previous_binding_type = self
+            .variable_types
+            .insert(binding.to_string(), element_type.clone());
         let previous_length = self.array_lengths.remove(binding);
         let previous_slice_length = self.slice_lengths.remove(binding);
         let previous_slice_scale = self.slice_scales.remove(binding);
@@ -1785,17 +1826,8 @@ impl Builder {
             scale,
         });
         let item = self.value();
-        if scale == 1 {
-            self.emit(MirInstruction::LoadByteIndirect {
-                result: item,
-                address,
-            });
-        } else {
-            self.emit(MirInstruction::LoadIndirect {
-                result: item,
-                address,
-            });
-        }
+        self.emit_load_indirect(item, address, Some(&element_type));
+        self.value_types.insert(item, element_type.clone());
         self.emit(MirInstruction::StoreSlot {
             slot: binding_slot,
             value: item,
@@ -1836,6 +1868,11 @@ impl Builder {
             self.variables.insert(binding.to_string(), previous);
         } else {
             self.variables.remove(binding);
+        }
+        if let Some(previous) = previous_binding_type {
+            self.variable_types.insert(binding.to_string(), previous);
+        } else {
+            self.variable_types.remove(binding);
         }
         if let Some(length) = previous_length {
             self.array_lengths.insert(binding.to_string(), length);
@@ -2418,20 +2455,9 @@ fn lower_function(
             abi_params.push(length);
             let length_slot = builder.slot();
             builder.slice_lengths.insert(name.clone(), length_slot);
-            builder.slice_scales.insert(
-                name.clone(),
-                if matches!(
-                    element.as_ref(),
-                    HirType::Integer {
-                        bits: 8,
-                        signed: false
-                    }
-                ) {
-                    1
-                } else {
-                    8
-                },
-            );
+            builder
+                .slice_scales
+                .insert(name.clone(), pointer_scale_from_hir_type(element));
             builder.emit(MirInstruction::StoreSlot {
                 slot: length_slot,
                 value: length,
@@ -2710,12 +2736,20 @@ fn struct_name_from_hir_type(
 }
 
 fn pointer_scale_from_hir_type(data_type: &HirType) -> u8 {
+    scalar_storage_size(data_type).unwrap_or(8)
+}
+
+fn scalar_storage_size(data_type: &HirType) -> Option<u8> {
     match data_type {
-        HirType::Integer {
-            bits: 8,
-            signed: false,
-        } => 1,
-        _ => 8,
+        HirType::Integer { bits, .. } | HirType::Float { bits } => match bits {
+            8 => Some(1),
+            16 => Some(2),
+            32 => Some(4),
+            64 => Some(8),
+            _ => None,
+        },
+        HirType::Bool => Some(1),
+        _ => None,
     }
 }
 
@@ -2728,7 +2762,16 @@ fn float_width(data_type: &HirType) -> Option<u16> {
 
 fn pointer_scale_from_data_type(data_type: &crate::parser::DataType) -> u8 {
     match data_type {
-        crate::parser::DataType::U8 => 1,
+        crate::parser::DataType::U8 | crate::parser::DataType::I8 | crate::parser::DataType::F8 => {
+            1
+        }
+        crate::parser::DataType::U16
+        | crate::parser::DataType::I16
+        | crate::parser::DataType::F16 => 2,
+        crate::parser::DataType::U32
+        | crate::parser::DataType::I32
+        | crate::parser::DataType::F32 => 4,
+        crate::parser::DataType::Bool => 1,
         _ => 8,
     }
 }

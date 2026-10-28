@@ -197,8 +197,10 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 LirInstruction::IndexAddress { .. }
                 | LirInstruction::LoadIndirect { .. }
                 | LirInstruction::LoadByteIndirect { .. }
+                | LirInstruction::LoadSizedIndirect { .. }
                 | LirInstruction::StoreIndirect { .. }
-                | LirInstruction::StoreByteIndirect { .. } => 1,
+                | LirInstruction::StoreByteIndirect { .. }
+                | LirInstruction::StoreSizedIndirect { .. } => 1,
                 LirInstruction::Not { .. } => 2,
                 LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
                 LirInstruction::FloatCompare { .. } => 4,
@@ -615,6 +617,8 @@ fn encode_function(
                 } => {
                     let shift = match scale {
                         1 => 0,
+                        2 => 1,
+                        4 => 2,
                         8 => 3,
                         _ => return Err(format!("unsupported ARM64 index scale {scale}")),
                     };
@@ -632,11 +636,40 @@ fn encode_function(
                     destination,
                     address,
                 } => 0x3940_0000 | (address.0 << 5) | destination.0,
+                LirInstruction::LoadSizedIndirect {
+                    destination,
+                    address,
+                    bytes,
+                    signed,
+                } => {
+                    let base = match (bytes, signed) {
+                        (1, false) => 0x3940_0000,
+                        (1, true) => 0x3980_0000,
+                        (2, false) => 0x7940_0000,
+                        (2, true) => 0x7980_0000,
+                        (4, false) => 0xb940_0000,
+                        (4, true) => 0xb980_0000,
+                        _ => return Err(format!("unsupported ARM64 load width {bytes}")),
+                    };
+                    base | (address.0 << 5) | destination.0
+                }
                 LirInstruction::StoreIndirect { address, value } => {
                     0xf900_0000 | (address.0 << 5) | value.0
                 }
                 LirInstruction::StoreByteIndirect { address, value } => {
                     0x3900_0000 | (address.0 << 5) | value.0
+                }
+                LirInstruction::StoreSizedIndirect {
+                    address,
+                    value,
+                    bytes,
+                } => {
+                    let base = match bytes {
+                        2 => 0x7900_0000,
+                        4 => 0xb900_0000,
+                        _ => return Err(format!("unsupported ARM64 store width {bytes}")),
+                    };
+                    base | (address.0 << 5) | value.0
                 }
                 LirInstruction::StoreSlot { slot, value } => {
                     let offset = slot.0 * 8;
@@ -912,8 +945,10 @@ fn block_encoded_size(
             LirInstruction::IndexAddress { .. }
             | LirInstruction::LoadIndirect { .. }
             | LirInstruction::LoadByteIndirect { .. }
+            | LirInstruction::LoadSizedIndirect { .. }
             | LirInstruction::StoreIndirect { .. }
-            | LirInstruction::StoreByteIndirect { .. } => 1,
+            | LirInstruction::StoreByteIndirect { .. }
+            | LirInstruction::StoreSizedIndirect { .. } => 1,
             LirInstruction::Not { .. } => 2,
             LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
             LirInstruction::FloatCompare { .. } => 4,
@@ -1071,9 +1106,17 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
         | LirInstruction::LoadByteIndirect {
             destination,
             address,
+        }
+        | LirInstruction::LoadSizedIndirect {
+            destination,
+            address,
+            ..
         } => vec![*destination, *address],
         LirInstruction::StoreIndirect { address, value }
-        | LirInstruction::StoreByteIndirect { address, value } => vec![*address, *value],
+        | LirInstruction::StoreByteIndirect { address, value }
+        | LirInstruction::StoreSizedIndirect { address, value, .. } => {
+            vec![*address, *value]
+        }
         LirInstruction::Call {
             result,
             result_slice_length,
@@ -1754,6 +1797,14 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                         "    add x{}, x{}, x{}\n",
                         destination.0, base.0, index.0
                     )),
+                    2 => assembly.push_str(&format!(
+                        "    add x{}, x{}, x{}, lsl #1\n",
+                        destination.0, base.0, index.0
+                    )),
+                    4 => assembly.push_str(&format!(
+                        "    add x{}, x{}, x{}, lsl #2\n",
+                        destination.0, base.0, index.0
+                    )),
                     8 => assembly.push_str(&format!(
                         "    add x{}, x{}, x{}, lsl #3\n",
                         destination.0, base.0, index.0
@@ -1768,11 +1819,46 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     destination,
                     address,
                 } => assembly.push_str(&format!("    ldrb w{}, [x{}]\n", destination.0, address.0)),
+                LirInstruction::LoadSizedIndirect {
+                    destination,
+                    address,
+                    bytes,
+                    signed,
+                } => {
+                    let (operation, register) = match (bytes, signed) {
+                        (1, false) => ("ldrb", "w"),
+                        (1, true) => ("ldrsb", "x"),
+                        (2, false) => ("ldrh", "w"),
+                        (2, true) => ("ldrsh", "x"),
+                        (4, false) => ("ldr", "w"),
+                        (4, true) => ("ldrsw", "x"),
+                        _ => return Err(format!("unsupported ARM64 load width {bytes}")),
+                    };
+                    assembly.push_str(&format!(
+                        "    {operation} {register}{}, [x{}]\n",
+                        destination.0, address.0
+                    ));
+                }
                 LirInstruction::StoreIndirect { address, value } => {
                     assembly.push_str(&format!("    str x{}, [x{}]\n", value.0, address.0))
                 }
                 LirInstruction::StoreByteIndirect { address, value } => {
                     assembly.push_str(&format!("    strb w{}, [x{}]\n", value.0, address.0))
+                }
+                LirInstruction::StoreSizedIndirect {
+                    address,
+                    value,
+                    bytes,
+                } => {
+                    let (operation, register) = match bytes {
+                        2 => ("strh", "w"),
+                        4 => ("str", "w"),
+                        _ => return Err(format!("unsupported ARM64 store width {bytes}")),
+                    };
+                    assembly.push_str(&format!(
+                        "    {operation} {register}{}, [x{}]\n",
+                        value.0, address.0
+                    ));
                 }
             }
         }

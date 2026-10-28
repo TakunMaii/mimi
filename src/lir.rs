@@ -146,6 +146,12 @@ pub(crate) enum LirInstruction {
         destination: ValueId,
         address: ValueId,
     },
+    LoadSizedIndirect {
+        destination: ValueId,
+        address: ValueId,
+        bytes: u8,
+        signed: bool,
+    },
     StoreIndirect {
         address: ValueId,
         value: ValueId,
@@ -153,6 +159,11 @@ pub(crate) enum LirInstruction {
     StoreByteIndirect {
         address: ValueId,
         value: ValueId,
+    },
+    StoreSizedIndirect {
+        address: ValueId,
+        value: ValueId,
+        bytes: u8,
     },
 }
 
@@ -385,6 +396,17 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                                 address: *address,
                             }
                         }
+                        MirInstruction::LoadSizedIndirect {
+                            result,
+                            address,
+                            bytes,
+                            signed,
+                        } => LirInstruction::LoadSizedIndirect {
+                            destination: *result,
+                            address: *address,
+                            bytes: *bytes,
+                            signed: *signed,
+                        },
                         MirInstruction::StoreIndirect { address, value } => {
                             LirInstruction::StoreIndirect {
                                 address: *address,
@@ -397,6 +419,15 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                                 value: *value,
                             }
                         }
+                        MirInstruction::StoreSizedIndirect {
+                            address,
+                            value,
+                            bytes,
+                        } => LirInstruction::StoreSizedIndirect {
+                            address: *address,
+                            value: *value,
+                            bytes: *bytes,
+                        },
                     })
                 })
                 .collect();

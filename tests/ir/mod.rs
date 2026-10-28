@@ -555,7 +555,7 @@ fn passes_slice_pointer_and_length_to_functions() {
 }
 
 #[test]
-fn builds_and_runs_u8_arrays_across_slice_boundaries() {
+fn builds_and_runs_packed_arrays_across_slice_boundaries() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
     }
@@ -570,6 +570,18 @@ fn builds_and_runs_u8_arrays_across_slice_boundaries() {
         (
             "sum_bytes :: fn (values : []u8) i32 { total := 0 for byte in values { total = total + byte } total } main :: fn () i32 { sum_bytes([65, 66, 67]) }",
             198,
+        ),
+        (
+            "sum_words :: fn (values : []i16) i32 { total := 0 for word in values { total = total + word } total } main :: fn () i32 { values : [6]i16 = [-2, 50, 60, 70, 80, 90] values[1] = 51 result := if sum_words(values[:]) == 349 { 0 } else { 1 } result }",
+            0,
+        ),
+        (
+            "sum_floats :: fn (values : []f32) f32 { total : f32 = 0 for value in values { total = total + value } total } main :: fn () i32 { result := if sum_floats([1.25, 2.25]) == 3.5 { 0 } else { 1 } result }",
+            0,
+        ),
+        (
+            "sum_words :: fn (values : []u32) u32 { total : u32 = 0 for word in values { total = total + word } total } main :: fn () u32 { sum_words([40, 50]) }",
+            90,
         ),
     ] {
         std::fs::write(&source, program).unwrap();
