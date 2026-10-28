@@ -466,7 +466,7 @@ fn builds_and_runs_for_loops_over_array_slices() {
     ));
     std::fs::write(
         &source,
-        "main :: fn () i32 { values := [1, 2, 3, 4] start := 2 sum := 0 for item in values[1:3] { sum = sum + item } for item in values[start:] { sum = sum + item } view := values[1:3] for item in view { sum = sum + item } subview := view[1:] for item in subview { sum = sum + item } sum = sum + view[0] sum }",
+        "main :: fn () i32 { values := [1, 2, 3, 4] start := 2 sum := 0 for item in values[1:3] { sum = sum + item } for item in values[start:] { sum = sum + item } view := values[1:3] for item in view { sum = sum + item } view = values[0:1] for item in view { sum = sum + item } subview := view[1:] for item in subview { sum = sum + item } sum = sum + view[0] sum }",
     )
     .unwrap();
     build_file(
@@ -478,7 +478,7 @@ fn builds_and_runs_for_loops_over_array_slices() {
     )
     .unwrap();
     let status = std::process::Command::new(&path).status().unwrap();
-    assert_eq!(status.code(), Some(22));
+    assert_eq!(status.code(), Some(19));
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();
 }
@@ -498,7 +498,7 @@ fn builds_and_runs_for_loops_over_string_slices() {
     ));
     std::fs::write(
         &source,
-        "main :: fn () i32 { text := \"ABC\" sum := 0 for byte in text { sum = sum + byte } for byte in \"DE\" { sum = sum + byte } sum = sum + text[1] sum }",
+        "main :: fn () i32 { text := \"ABC\" sum := 0 for byte in text { sum = sum + byte } for byte in \"DE\" { sum = sum + byte } sum = sum + text[1] text = \"D\" for byte in text { sum = sum + byte } sum = sum + text[0] sum }",
     )
     .unwrap();
     build_file(
@@ -510,7 +510,7 @@ fn builds_and_runs_for_loops_over_string_slices() {
     )
     .unwrap();
     let status = std::process::Command::new(&path).status().unwrap();
-    assert_eq!(status.code(), Some(145));
+    assert_eq!(status.code(), Some(25));
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();
 }

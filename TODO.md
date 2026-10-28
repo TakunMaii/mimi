@@ -30,7 +30,8 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Store indexed elements in fixed-size scalar arrays.
 - [ ] Support array element layouts beyond the current 64-bit scalar slots, including byte arrays across slice boundaries.
 - [x] Represent local slices with pointer/length slots; support indexing, slicing, and parameter passing.
-- [ ] Complete slice return values and reassignment.
+- [x] Lower local slice reassignment with updated pointer, length, and element scale.
+- [ ] Implement slice return values in the function ABI.
 - [x] Implement local addresses, pointer loads/stores, and pointer type checks.
 - [x] Lower pointer member access and typed pointer indexing in MIR.
 - [ ] Implement pointer-to-array layouts and general pointer arithmetic.

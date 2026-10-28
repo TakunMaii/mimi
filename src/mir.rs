@@ -604,7 +604,15 @@ impl Builder {
                             }
                             crate::parser::ASTNode::Assignment { name, value } => {
                                 let struct_name = self.expression_struct_name(value);
-                                let value = self.expression(value)?;
+                                let slice_length_slot = self.slice_lengths.get(name).copied();
+                                let slice_assignment =
+                                    slice_length_slot.is_some() || self.is_slice_value(value);
+                                let (value, slice_view) = if slice_assignment {
+                                    let (base, length, scale) = self.lower_array_view(value)?;
+                                    (base, Some((length, scale)))
+                                } else {
+                                    (self.expression(value)?, None)
+                                };
                                 match self.variables.get(name).copied() {
                                     Some(Variable::Slot(slot)) => {
                                         self.emit(MirInstruction::StoreSlot { slot, value });
@@ -612,6 +620,20 @@ impl Builder {
                                     _ => {
                                         self.variables.insert(name.clone(), Variable::Value(value));
                                     }
+                                }
+                                if let Some((length, scale)) = slice_view {
+                                    let length_slot = if let Some(slot) = slice_length_slot {
+                                        slot
+                                    } else {
+                                        let slot = self.slot();
+                                        self.slice_lengths.insert(name.clone(), slot);
+                                        slot
+                                    };
+                                    self.emit(MirInstruction::StoreSlot {
+                                        slot: length_slot,
+                                        value: length,
+                                    });
+                                    self.slice_scales.insert(name.clone(), scale);
                                 }
                                 if let Some(struct_name) = struct_name {
                                     self.variable_structs.insert(name.clone(), struct_name);
