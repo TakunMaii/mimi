@@ -34,6 +34,10 @@ pub(crate) enum MirInstruction {
         result: ValueId,
         bytes: Vec<u8>,
     },
+    LoadFunctionAddress {
+        result: ValueId,
+        symbol: String,
+    },
     Add {
         result: ValueId,
         lhs: ValueId,
@@ -80,6 +84,11 @@ pub(crate) enum MirInstruction {
     Call {
         result: Option<ValueId>,
         name: String,
+        args: Vec<ValueId>,
+    },
+    CallIndirect {
+        result: Option<ValueId>,
+        callee: ValueId,
         args: Vec<ValueId>,
     },
     LoadSlot {
@@ -163,6 +172,8 @@ struct Builder {
     function_struct_params: std::collections::HashMap<String, Vec<Option<String>>>,
     function_slice_params: std::collections::HashMap<String, Vec<bool>>,
     method_targets: std::collections::HashMap<(String, String), MethodTarget>,
+    function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
+    variable_function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
     variable_structs: std::collections::HashMap<String, String>,
     defer_scopes: Vec<Vec<Expression>>,
     loop_targets: Vec<LoopTargets>,
@@ -238,8 +249,17 @@ impl Builder {
                     Some(result)
                 }
                 None => {
-                    let variant = self.enum_variants.get(name)?.clone();
-                    self.lower_enum_value(&variant, None)
+                    if let Some(variant) = self.enum_variants.get(name).cloned() {
+                        self.lower_enum_value(&variant, None)
+                    } else {
+                        self.function_signatures.get(name)?;
+                        let result = self.value();
+                        self.emit(MirInstruction::LoadFunctionAddress {
+                            result,
+                            symbol: format!("_{name}"),
+                        });
+                        Some(result)
+                    }
                 }
             },
             Expression::ArrayLiteral(values) => {
@@ -415,6 +435,19 @@ impl Builder {
             }
             Expression::Match { value, arms } => self.lower_match(value, arms),
             Expression::Call { name, arguments } => {
+                if let Some((parameter_types, return_type)) =
+                    self.variable_function_signatures.get(name).cloned()
+                {
+                    let callee = self.expression(&Expression::Identifier(name.clone()))?;
+                    let args = self.lower_function_value_arguments(arguments, &parameter_types)?;
+                    let result = (return_type != HirType::Void).then(|| self.value());
+                    self.emit(MirInstruction::CallIndirect {
+                        result,
+                        callee,
+                        args,
+                    });
+                    return result;
+                }
                 if !self.function_slice_params.contains_key(name)
                     && let Some(variant) = self.enum_variants.get(name).cloned()
                 {
@@ -433,6 +466,23 @@ impl Builder {
                 Some(result)
             }
             Expression::CallValue { callee, arguments } => {
+                if let Expression::Identifier(name) = callee.as_ref()
+                    && let Some((parameter_types, return_type)) = self
+                        .variable_function_signatures
+                        .get(name)
+                        .cloned()
+                        .or_else(|| self.function_signatures.get(name).cloned())
+                {
+                    let callee = self.expression(callee)?;
+                    let args = self.lower_function_value_arguments(arguments, &parameter_types)?;
+                    let result = (return_type != HirType::Void).then(|| self.value());
+                    self.emit(MirInstruction::CallIndirect {
+                        result,
+                        callee,
+                        args,
+                    });
+                    return result;
+                }
                 let (target, receiver) = match callee.as_ref() {
                     Expression::StaticAccess { type_name, member } => (
                         self.method_targets
@@ -524,6 +574,7 @@ impl Builder {
                 let outer_slice_lengths = self.slice_lengths.clone();
                 let outer_slice_scales = self.slice_scales.clone();
                 let outer_pointer_scales = self.pointer_scales.clone();
+                let outer_function_signatures = self.variable_function_signatures.clone();
                 let outer_variable_structs = self.variable_structs.clone();
                 self.defer_scopes.push(Vec::new());
                 let result = (|| {
@@ -563,6 +614,15 @@ impl Builder {
                                         Some(self.address_target_scale(inner))
                                     }
                                     _ => None,
+                                };
+                                let function_signature = match data_type {
+                                    Some(crate::parser::DataType::Function(params, result)) => {
+                                        Some((
+                                            params.iter().map(|ty| (*ty).into()).collect(),
+                                            (**result).into(),
+                                        ))
+                                    }
+                                    _ => self.function_signature_for_expression(value),
                                 };
                                 let (value, slice_view) = if is_slice {
                                     let (base, length, scale) = self.lower_array_view(value)?;
@@ -606,6 +666,12 @@ impl Builder {
                                 } else {
                                     self.pointer_scales.remove(name);
                                 }
+                                if let Some(signature) = function_signature {
+                                    self.variable_function_signatures
+                                        .insert(name.clone(), signature);
+                                } else {
+                                    self.variable_function_signatures.remove(name);
+                                }
                                 if let Some(length) = array_length {
                                     self.array_lengths.insert(name.clone(), length);
                                 } else {
@@ -619,14 +685,24 @@ impl Builder {
                             }
                             crate::parser::ASTNode::CompileTimeConstant { name, value, .. } => {
                                 let struct_name = self.expression_struct_name(value);
+                                let function_signature =
+                                    self.function_signature_for_expression(value);
                                 let value = self.expression(value)?;
                                 self.variables.insert(name.clone(), Variable::Value(value));
+                                if let Some(signature) = function_signature {
+                                    self.variable_function_signatures
+                                        .insert(name.clone(), signature);
+                                } else {
+                                    self.variable_function_signatures.remove(name);
+                                }
                                 if let Some(struct_name) = struct_name {
                                     self.variable_structs.insert(name.clone(), struct_name);
                                 }
                             }
                             crate::parser::ASTNode::Assignment { name, value } => {
                                 let struct_name = self.expression_struct_name(value);
+                                let function_signature =
+                                    self.function_signature_for_expression(value);
                                 let slice_length_slot = self.slice_lengths.get(name).copied();
                                 let slice_assignment =
                                     slice_length_slot.is_some() || self.is_slice_value(value);
@@ -660,6 +736,10 @@ impl Builder {
                                 }
                                 if let Some(struct_name) = struct_name {
                                     self.variable_structs.insert(name.clone(), struct_name);
+                                }
+                                if let Some(signature) = function_signature {
+                                    self.variable_function_signatures
+                                        .insert(name.clone(), signature);
                                 }
                             }
                             crate::parser::ASTNode::IndexAssignment {
@@ -800,6 +880,7 @@ impl Builder {
                 self.slice_lengths = outer_slice_lengths;
                 self.slice_scales = outer_slice_scales;
                 self.pointer_scales = outer_pointer_scales;
+                self.variable_function_signatures = outer_function_signatures;
                 self.variable_structs = outer_variable_structs;
                 result
             }
@@ -842,6 +923,38 @@ impl Builder {
                 _ => self.expression(argument)?,
             };
             values.push(value);
+        }
+        Some(values)
+    }
+
+    fn lower_function_value_arguments(
+        &mut self,
+        arguments: &[Expression],
+        parameter_types: &[HirType],
+    ) -> Option<Vec<ValueId>> {
+        if arguments.len() != parameter_types.len() {
+            return None;
+        }
+        let mut values = Vec::new();
+        for (argument, parameter_type) in arguments.iter().zip(parameter_types) {
+            match parameter_type {
+                HirType::Slice(_) => {
+                    let (base, length, _) = self.lower_array_view(argument)?;
+                    values.push(base);
+                    values.push(length);
+                }
+                HirType::Named(name) if self.struct_fields.contains_key(name) => {
+                    let value = match argument {
+                        Expression::StructLiteral {
+                            type_name: None,
+                            fields,
+                        } => self.lower_struct_literal(name, fields)?,
+                        _ => self.expression(argument)?,
+                    };
+                    values.push(value);
+                }
+                _ => values.push(self.expression(argument)?),
+            }
         }
         Some(values)
     }
@@ -1123,6 +1236,20 @@ impl Builder {
             Expression::LiteralString(_) | Expression::Slice { .. } => true,
             Expression::Identifier(name) => self.slice_lengths.contains_key(name),
             _ => false,
+        }
+    }
+
+    fn function_signature_for_expression(
+        &self,
+        expression: &Expression,
+    ) -> Option<(Vec<HirType>, HirType)> {
+        match expression {
+            Expression::Identifier(name) => self
+                .variable_function_signatures
+                .get(name)
+                .cloned()
+                .or_else(|| self.function_signatures.get(name).cloned()),
+            _ => None,
         }
     }
 
@@ -1574,6 +1701,7 @@ fn lower_function(
     function_struct_params: &std::collections::HashMap<String, Vec<Option<String>>>,
     function_slice_params: &std::collections::HashMap<String, Vec<bool>>,
     method_targets: &std::collections::HashMap<(String, String), MethodTarget>,
+    function_signatures: &std::collections::HashMap<String, (Vec<HirType>, HirType)>,
 ) -> MirFunction {
     let mut builder = Builder {
         next_value: 0,
@@ -1594,6 +1722,8 @@ fn lower_function(
         function_struct_params: function_struct_params.clone(),
         function_slice_params: function_slice_params.clone(),
         method_targets: method_targets.clone(),
+        function_signatures: function_signatures.clone(),
+        variable_function_signatures: std::collections::HashMap::new(),
         variable_structs: std::collections::HashMap::new(),
         defer_scopes: Vec::new(),
         loop_targets: Vec::new(),
@@ -1636,6 +1766,11 @@ fn lower_function(
             builder
                 .pointer_scales
                 .insert(name.clone(), pointer_scale_from_hir_type(element));
+        }
+        if let HirType::Function { params, result } = ty {
+            builder
+                .variable_function_signatures
+                .insert(name.clone(), (params.clone(), (**result).clone()));
         }
         if let Some(struct_name) = struct_name_from_hir_type(ty, &builder.struct_fields) {
             builder.variable_structs.insert(name.clone(), struct_name);
@@ -1826,6 +1961,29 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
                 })
         })
         .collect::<std::collections::HashMap<_, _>>();
+    let function_signatures = module
+        .functions
+        .iter()
+        .map(|function| {
+            (
+                function.name.clone(),
+                (
+                    function
+                        .params
+                        .iter()
+                        .map(|(_, data_type)| data_type.clone())
+                        .collect(),
+                    function.result.clone(),
+                ),
+            )
+        })
+        .chain(module.extern_functions.iter().map(|function| {
+            (
+                function.name.clone(),
+                (function.params.clone(), function.result.clone()),
+            )
+        }))
+        .collect::<std::collections::HashMap<_, _>>();
     MirModule {
         functions: module
             .functions
@@ -1838,6 +1996,7 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
                     &function_struct_params,
                     &function_slice_params,
                     &method_targets,
+                    &function_signatures,
                 )
             })
             .collect(),

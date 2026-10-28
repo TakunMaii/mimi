@@ -38,7 +38,8 @@ and focused regression coverage; it does not imply support on every target.
 
 ## Functions and Modules
 
-- [ ] Implement function values, indirect calls, and lambda bodies.
+- [x] Implement named function values, function-value parameters, and indirect calls.
+- [ ] Lower lambda bodies and captures.
 - [x] Lower direct instance and static method calls with automatic or explicit receivers.
 - [ ] Support methods as function values and indirect method calls.
 - [x] Allocate virtual registers with liveness and preserve values live across calls.

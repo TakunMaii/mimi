@@ -875,6 +875,63 @@ fn builds_and_runs_an_internal_function_call() {
 }
 
 #[test]
+fn lowers_function_values_and_indirect_calls() {
+    let ast = parse(tokenize(
+        "square :: fn (value : i32) i32 { value * value } apply :: fn (function : fn(i32)i32, value : i32) i32 { function(value) } main :: fn () i32 { apply(square, 6) }"
+            .chars(),
+    ));
+    let mir = mir::lower_hir(&hir::lower_ast(&ast));
+    let main = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .unwrap();
+    assert!(
+        main.blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| matches!(
+                instruction,
+                mir::MirInstruction::LoadFunctionAddress { symbol, .. } if symbol == "_square"
+            ))
+    );
+    assert!(mir.functions.iter().any(|function| {
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| matches!(instruction, mir::MirInstruction::CallIndirect { .. }))
+    }));
+}
+
+#[test]
+fn builds_and_runs_function_values_and_indirect_calls() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_fn_value_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_fn_value_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "square :: fn (value : i32) i32 { value * value } apply :: fn (function : fn(i32)i32, value : i32) i32 { function(value) } main :: fn () i32 { before := 9 constant :: square function := constant result := apply(function, 5) + function(6) + before + constant(4) result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(86));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn lowers_string_literals_to_data_symbols_in_lir() {
     let ast = parse(tokenize(r#"main :: fn () []u8 { "hello" }"#.chars()));
     let hir = hir::lower_ast(&ast);

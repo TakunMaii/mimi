@@ -155,7 +155,12 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
         .blocks
         .iter()
         .flat_map(|block| &block.instructions)
-        .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
+        .any(|instruction| {
+            matches!(
+                instruction,
+                LirInstruction::Call { .. } | LirInstruction::CallIndirect { .. }
+            )
+        });
     let saved_registers = callee_saved_registers(function);
     let frame_size = stack_frame_size(function);
     let save_frame = saves_frame_pointer(has_calls);
@@ -192,7 +197,10 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 LirInstruction::Not { .. } => 2,
                 LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
                 LirInstruction::Phi { .. } => 0,
-                LirInstruction::Call { args, result, .. } => encoded_call_words(args, *result)?,
+                LirInstruction::Call { args, result, .. }
+                | LirInstruction::CallIndirect { args, result, .. } => {
+                    encoded_call_words(args, *result)?
+                }
             } * 4;
         }
         size += match block.terminator {
@@ -374,7 +382,12 @@ fn encode_function(
         .blocks
         .iter()
         .flat_map(|block| &block.instructions)
-        .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
+        .any(|instruction| {
+            matches!(
+                instruction,
+                LirInstruction::Call { .. } | LirInstruction::CallIndirect { .. }
+            )
+        });
     let saved_registers = callee_saved_registers(function);
     let frame_size = stack_frame_size(function);
     let save_frame = saves_frame_pointer(has_calls);
@@ -581,6 +594,38 @@ fn encode_function(
                     }
                     continue;
                 }
+                LirInstruction::CallIndirect {
+                    result,
+                    callee,
+                    args,
+                } => {
+                    if args.len() > 16 {
+                        return Err(
+                            "ARM64 backend currently supports at most 16 integer arguments".into(),
+                        );
+                    }
+                    let stack_size = stack_argument_size(args.len());
+                    encode_stack_adjust(bytes, stack_size, true)?;
+                    for (index, argument) in args.iter().enumerate().skip(8) {
+                        let offset = (index as u32 - 8) * 8;
+                        if offset > 32760 {
+                            return Err(
+                                "ARM64 outgoing argument offset exceeds the store range".into()
+                            );
+                        }
+                        push_word(bytes, 0xf900_03e0 | ((offset / 8) << 10) | argument.0);
+                    }
+                    push_word(bytes, 0xaa00_03e0 | (callee.0 << 16) | 17);
+                    encode_parallel_argument_moves(&args[..args.len().min(8)], bytes);
+                    push_word(bytes, 0xd63f_0000 | (17 << 5));
+                    encode_stack_adjust(bytes, stack_size, false)?;
+                    if let Some(result) = result
+                        && result.0 != 0
+                    {
+                        push_word(bytes, 0xaa00_03e0 | result.0);
+                    }
+                    continue;
+                }
                 LirInstruction::Phi { .. } => {
                     continue;
                 }
@@ -689,7 +734,10 @@ fn block_encoded_size(
             LirInstruction::Not { .. } => 2,
             LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
             LirInstruction::Phi { .. } => 0,
-            LirInstruction::Call { args, result, .. } => encoded_call_words(args, *result)?,
+            LirInstruction::Call { args, result, .. }
+            | LirInstruction::CallIndirect { args, result, .. } => {
+                encoded_call_words(args, *result)?
+            }
         } * 4;
     }
     size += match block.terminator {
@@ -698,7 +746,12 @@ fn block_encoded_size(
                 .blocks
                 .iter()
                 .flat_map(|block| &block.instructions)
-                .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
+                .any(|instruction| {
+                    matches!(
+                        instruction,
+                        LirInstruction::Call { .. } | LirInstruction::CallIndirect { .. }
+                    )
+                });
             let frame_size = stack_frame_size(function);
             let saved_registers = callee_saved_registers(function);
             let save_frame = saves_frame_pointer(has_calls);
@@ -795,6 +848,14 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
         LirInstruction::Call { result, args, .. } => {
             result.iter().copied().chain(args.iter().copied()).collect()
         }
+        LirInstruction::CallIndirect {
+            result,
+            callee,
+            args,
+        } => std::iter::once(*callee)
+            .chain(result.iter().copied())
+            .chain(args.iter().copied())
+            .collect(),
         LirInstruction::Phi {
             destination,
             incoming,
@@ -1091,7 +1152,12 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
         .blocks
         .iter()
         .flat_map(|block| &block.instructions)
-        .any(|instruction| matches!(instruction, LirInstruction::Call { .. }));
+        .any(|instruction| {
+            matches!(
+                instruction,
+                LirInstruction::Call { .. } | LirInstruction::CallIndirect { .. }
+            )
+        });
     let saved_registers = callee_saved_registers(function);
     let save_frame = saves_frame_pointer(has_calls);
     if save_frame {
@@ -1198,6 +1264,31 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     }
                     emit_register_moves(assembly, &argument_moves(&args[..args.len().min(8)]));
                     assembly.push_str(&format!("    bl _{name}\n"));
+                    emit_stack_adjust(assembly, stack_size, false);
+                    if let Some(result) = result {
+                        if result.0 != 0 {
+                            assembly.push_str(&format!("    mov x{}, x0\n", result.0));
+                        }
+                    }
+                }
+                LirInstruction::CallIndirect {
+                    result,
+                    callee,
+                    args,
+                } => {
+                    if args.len() > 16 {
+                        return Err(
+                            "ARM64 assembly emitter supports at most 16 integer arguments".into(),
+                        );
+                    }
+                    let stack_size = stack_argument_size(args.len());
+                    emit_stack_adjust(assembly, stack_size, true);
+                    for (index, argument) in args.iter().enumerate().skip(8) {
+                        emit_stack_store(assembly, argument.0, (index as u32 - 8) * 8);
+                    }
+                    assembly.push_str(&format!("    mov x17, x{}\n", callee.0));
+                    emit_register_moves(assembly, &argument_moves(&args[..args.len().min(8)]));
+                    assembly.push_str("    blr x17\n");
                     emit_stack_adjust(assembly, stack_size, false);
                     if let Some(result) = result {
                         if result.0 != 0 {

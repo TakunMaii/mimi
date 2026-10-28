@@ -90,7 +90,9 @@ fn spill_values_across_calls(function: &LirFunction) -> LirFunction {
         .map(|block| {
             let mut instructions = Vec::new();
             for (index, instruction) in block.instructions.iter().enumerate() {
-                let values = if let LirInstruction::Call { result, .. } = instruction {
+                let values = if let LirInstruction::Call { result, .. }
+                | LirInstruction::CallIndirect { result, .. } = instruction
+                {
                     live_after[block.id.0 as usize][index]
                         .iter()
                         .copied()
@@ -289,6 +291,16 @@ fn instruction_uses_defs(instruction: &LirInstruction) -> (Vec<ValueId>, Vec<Val
         LirInstruction::Call { result, args, .. } => {
             (args.clone(), result.iter().copied().collect())
         }
+        LirInstruction::CallIndirect {
+            result,
+            callee,
+            args,
+        } => (
+            std::iter::once(*callee)
+                .chain(args.iter().copied())
+                .collect(),
+            result.iter().copied().collect(),
+        ),
         LirInstruction::Phi { destination, .. } => (Vec::new(), vec![*destination]),
         LirInstruction::LoadSlot { destination, .. }
         | LirInstruction::SlotAddress { destination, .. } => (Vec::new(), vec![*destination]),
@@ -376,6 +388,19 @@ fn rewrite_function(
                     if let Some(result) = result {
                         map_value(result)?;
                     }
+                    for argument in args {
+                        map_value(argument)?;
+                    }
+                }
+                LirInstruction::CallIndirect {
+                    result,
+                    callee,
+                    args,
+                } => {
+                    if let Some(result) = result {
+                        map_value(result)?;
+                    }
+                    map_value(callee)?;
                     for argument in args {
                         map_value(argument)?;
                     }

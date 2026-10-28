@@ -40,6 +40,11 @@ pub(crate) enum LirInstruction {
         register: ValueId,
         symbol: String,
     },
+    CallIndirect {
+        result: Option<ValueId>,
+        callee: ValueId,
+        args: Vec<ValueId>,
+    },
     Add {
         destination: ValueId,
         lhs: ValueId,
@@ -233,9 +238,24 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                                 symbol,
                             }
                         }
+                        MirInstruction::LoadFunctionAddress { result, symbol } => {
+                            LirInstruction::LoadAddress {
+                                register: *result,
+                                symbol: symbol.clone(),
+                            }
+                        }
                         MirInstruction::Call { result, name, args } => LirInstruction::Call {
                             result: *result,
                             name: name.clone(),
+                            args: args.clone(),
+                        },
+                        MirInstruction::CallIndirect {
+                            result,
+                            callee,
+                            args,
+                        } => LirInstruction::CallIndirect {
+                            result: *result,
+                            callee: *callee,
                             args: args.clone(),
                         },
                         MirInstruction::LoadSlot { result, slot } => LirInstruction::LoadSlot {
