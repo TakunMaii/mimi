@@ -86,7 +86,7 @@ pub(crate) struct HirExternalFunction {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct HirEnum {
     pub(crate) name: String,
-    pub(crate) variants: Vec<(String, bool)>,
+    pub(crate) variants: Vec<(String, Option<HirType>)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -144,7 +144,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                 name: (*name).to_string(),
                 variants: variants
                     .iter()
-                    .map(|(variant, payload)| (variant.clone(), payload.is_some()))
+                    .map(|(variant, payload)| (variant.clone(), payload.map(Into::into)))
                     .collect(),
             });
         }

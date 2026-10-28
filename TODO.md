@@ -15,7 +15,7 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Lower `break` and `continue`, including loop-body `defer` exits.
 - [x] Lower `defer` at each scope exit and return path in LIFO order.
 - [x] Lower `match` and `if-let` for payloadless enums.
-- [ ] Lower enum payloads and bind them in `match` and `if-let`.
+- [x] Lower one-slot enum payload construction and bind payloads in `match` and `if-let`.
 
 ## Values and Memory
 
@@ -24,7 +24,8 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Implement 64-bit stack slots, loads/stores, and mutable locals across loops and branches.
 - [x] Lower scalar struct literals, 64-bit field slots, defaults, reads, writes, parameters, and inferred arguments.
 - [ ] Implement nested fields, compound layouts, and value return ABI.
-- [ ] Implement enum layout, construction, and payload access.
+- [x] Implement tag-plus-one-slot enum construction and payload access.
+- [ ] Add target-aware enum layouts for payloads larger than one machine word and value returns.
 - [x] Implement fixed-size scalar array literals, stack layout, indexing, and reads.
 - [x] Store indexed elements in fixed-size scalar arrays.
 - [ ] Support array element layouts beyond the current 64-bit scalar slots, including byte arrays across slice boundaries.

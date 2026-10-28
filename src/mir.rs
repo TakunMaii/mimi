@@ -157,7 +157,7 @@ struct Builder {
     array_lengths: std::collections::HashMap<String, u64>,
     slice_lengths: std::collections::HashMap<String, SlotId>,
     slice_scales: std::collections::HashMap<String, u8>,
-    enum_tags: std::collections::HashMap<String, u64>,
+    enum_variants: std::collections::HashMap<String, EnumVariant>,
     struct_fields: std::collections::HashMap<String, Vec<(String, Option<Expression>)>>,
     function_struct_params: std::collections::HashMap<String, Vec<Option<String>>>,
     function_slice_params: std::collections::HashMap<String, Vec<bool>>,
@@ -170,6 +170,13 @@ struct Builder {
 enum Variable {
     Value(ValueId),
     Slot(SlotId),
+}
+
+#[derive(Clone)]
+struct EnumVariant {
+    tag: u64,
+    payload: Option<HirType>,
+    uses_storage: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -222,13 +229,8 @@ impl Builder {
                     Some(result)
                 }
                 None => {
-                    let tag = *self.enum_tags.get(name)?;
-                    let result = self.value();
-                    self.emit(MirInstruction::ConstInt {
-                        result,
-                        value: tag as i128,
-                    });
-                    Some(result)
+                    let variant = self.enum_variants.get(name)?.clone();
+                    self.lower_enum_value(&variant, None)
                 }
             },
             Expression::ArrayLiteral(values) => {
@@ -401,6 +403,14 @@ impl Builder {
             }
             Expression::Match { value, arms } => self.lower_match(value, arms),
             Expression::Call { name, arguments } => {
+                if !self.function_slice_params.contains_key(name)
+                    && let Some(variant) = self.enum_variants.get(name).cloned()
+                {
+                    if arguments.len() != usize::from(variant.payload.is_some()) {
+                        return None;
+                    }
+                    return self.lower_enum_value(&variant, arguments.first());
+                }
                 let mut args = Vec::new();
                 let parameter_structs = self.function_struct_params.get(name).cloned();
                 let parameter_slices = self.function_slice_params.get(name).cloned();
@@ -673,23 +683,13 @@ impl Builder {
                                 then_branch,
                                 else_branch,
                             } => {
-                                if binding.is_some() {
-                                    return None;
-                                }
-                                let tag = *self.enum_tags.get(variant)?;
-                                let expression = Expression::If {
-                                    condition: Box::new(Expression::Equal(
-                                        Box::new(value.clone()),
-                                        Box::new(Expression::LiteralNumber(tag.to_string())),
-                                    )),
-                                    then_branch: Box::new(then_branch.clone()),
-                                    else_branch: Box::new(
-                                        else_branch
-                                            .clone()
-                                            .unwrap_or_else(|| Expression::Block(Vec::new())),
-                                    ),
-                                };
-                                self.expression(&expression);
+                                self.lower_if_let(
+                                    variant,
+                                    binding.as_deref(),
+                                    value,
+                                    then_branch,
+                                    else_branch.as_ref(),
+                                )?;
                             }
                             crate::parser::ASTNode::For {
                                 binding,
@@ -1147,17 +1147,7 @@ impl Builder {
         value: &Expression,
         arms: &[(crate::parser::Pattern, Expression)],
     ) -> Option<ValueId> {
-        if arms.is_empty()
-            || arms.iter().any(|(pattern, _)| {
-                matches!(
-                    pattern,
-                    crate::parser::Pattern::Variant {
-                        binding: Some(_),
-                        ..
-                    }
-                )
-            })
-        {
+        if arms.is_empty() {
             return None;
         }
         let value = self.expression(value)?;
@@ -1166,22 +1156,23 @@ impl Builder {
         let mut test_block = self.current;
 
         for (index, (pattern, body)) in arms.iter().enumerate() {
-            let crate::parser::Pattern::Variant { name, .. } = pattern;
+            let crate::parser::Pattern::Variant { name, binding } = pattern;
+            let variant = self.enum_variants.get(name)?.clone();
             let arm_block = self.new_block();
             self.current = test_block;
             if index + 1 == arms.len() {
                 self.terminate(MirTerminator::Jump(arm_block));
             } else {
-                let tag = *self.enum_tags.get(name)?;
+                let discriminant = self.enum_discriminant(value, &variant)?;
                 let expected = self.value();
                 self.emit(MirInstruction::ConstInt {
                     result: expected,
-                    value: tag as i128,
+                    value: variant.tag as i128,
                 });
                 let condition = self.value();
                 self.emit(MirInstruction::Compare {
                     result: condition,
-                    lhs: value,
+                    lhs: discriminant,
                     rhs: expected,
                     kind: CompareKind::Equal,
                 });
@@ -1195,7 +1186,25 @@ impl Builder {
             }
 
             self.current = arm_block;
+            let previous_binding = if let Some(binding) = binding {
+                let payload = self.enum_payload(value)?;
+                let slot = self.slot();
+                self.emit(MirInstruction::StoreSlot {
+                    slot,
+                    value: payload,
+                });
+                self.variables.insert(binding.clone(), Variable::Slot(slot))
+            } else {
+                None
+            };
             let result = self.expression(body);
+            if let Some(binding) = binding {
+                if let Some(previous) = previous_binding {
+                    self.variables.insert(binding.clone(), previous);
+                } else {
+                    self.variables.remove(binding);
+                }
+            }
             let end_block = self.current;
             if self.is_open(end_block) {
                 self.terminate(MirTerminator::Jump(merge_block));
@@ -1220,6 +1229,171 @@ impl Builder {
             incoming: values,
         });
         Some(result)
+    }
+
+    fn lower_if_let(
+        &mut self,
+        variant_name: &str,
+        binding: Option<&str>,
+        value_expression: &Expression,
+        then_branch: &Expression,
+        else_branch: Option<&Expression>,
+    ) -> Option<()> {
+        let variant = self.enum_variants.get(variant_name)?.clone();
+        let value = self.expression(value_expression)?;
+        let discriminant = self.enum_discriminant(value, &variant)?;
+        let expected = self.value();
+        self.emit(MirInstruction::ConstInt {
+            result: expected,
+            value: variant.tag as i128,
+        });
+        let condition = self.value();
+        self.emit(MirInstruction::Compare {
+            result: condition,
+            lhs: discriminant,
+            rhs: expected,
+            kind: CompareKind::Equal,
+        });
+        let then_block = self.new_block();
+        let else_block = self.new_block();
+        let merge_block = self.new_block();
+        self.terminate(MirTerminator::Branch {
+            condition,
+            then_block,
+            else_block,
+        });
+
+        self.current = then_block;
+        let previous_binding = if let Some(binding) = binding {
+            let payload = self.enum_payload(value)?;
+            let slot = self.slot();
+            self.emit(MirInstruction::StoreSlot {
+                slot,
+                value: payload,
+            });
+            self.variables
+                .insert(binding.to_string(), Variable::Slot(slot))
+        } else {
+            None
+        };
+        self.expression(then_branch);
+        if let Some(binding) = binding {
+            if let Some(previous) = previous_binding {
+                self.variables.insert(binding.to_string(), previous);
+            } else {
+                self.variables.remove(binding);
+            }
+        }
+        let then_end = self.current;
+        let then_live = self.is_open(then_end);
+        if then_live {
+            self.terminate(MirTerminator::Jump(merge_block));
+        }
+
+        self.current = else_block;
+        if let Some(else_branch) = else_branch {
+            self.expression(else_branch);
+        }
+        let else_end = self.current;
+        let else_live = self.is_open(else_end);
+        if else_live {
+            self.terminate(MirTerminator::Jump(merge_block));
+        }
+        self.current = if then_live || else_live {
+            merge_block
+        } else {
+            then_end
+        };
+        Some(())
+    }
+
+    fn lower_enum_value(
+        &mut self,
+        variant: &EnumVariant,
+        payload: Option<&Expression>,
+    ) -> Option<ValueId> {
+        if !variant.uses_storage {
+            let result = self.value();
+            self.emit(MirInstruction::ConstInt {
+                result,
+                value: variant.tag as i128,
+            });
+            return Some(result);
+        }
+
+        let base = self.slot();
+        self.next_slot += 1;
+        let tag = self.value();
+        self.emit(MirInstruction::ConstInt {
+            result: tag,
+            value: variant.tag as i128,
+        });
+        self.emit(MirInstruction::StoreSlot {
+            slot: base,
+            value: tag,
+        });
+        let payload_value = if let Some(payload) = payload {
+            self.expression(payload)?
+        } else {
+            let zero = self.value();
+            self.emit(MirInstruction::ConstInt {
+                result: zero,
+                value: 0,
+            });
+            zero
+        };
+        self.emit(MirInstruction::StoreSlot {
+            slot: SlotId(base.0 + 1),
+            value: payload_value,
+        });
+        let result = self.value();
+        self.emit(MirInstruction::SlotAddress { result, slot: base });
+        Some(result)
+    }
+
+    fn enum_discriminant(&mut self, value: ValueId, variant: &EnumVariant) -> Option<ValueId> {
+        if !variant.uses_storage {
+            return Some(value);
+        }
+        let zero = self.value();
+        self.emit(MirInstruction::ConstInt {
+            result: zero,
+            value: 0,
+        });
+        let address = self.value();
+        self.emit(MirInstruction::IndexAddress {
+            result: address,
+            base: value,
+            index: zero,
+            scale: 8,
+        });
+        let discriminant = self.value();
+        self.emit(MirInstruction::LoadIndirect {
+            result: discriminant,
+            address,
+        });
+        Some(discriminant)
+    }
+
+    fn enum_payload(&mut self, value: ValueId) -> Option<ValueId> {
+        let one = self.value();
+        self.emit(MirInstruction::ConstInt {
+            result: one,
+            value: 1,
+        });
+        let address = self.value();
+        self.emit(MirInstruction::IndexAddress {
+            result: address,
+            base: value,
+            index: one,
+            scale: 8,
+        });
+        let payload = self.value();
+        self.emit(MirInstruction::LoadIndirect {
+            result: payload,
+            address,
+        });
+        Some(payload)
     }
 
     fn expression_struct_name(&self, expression: &Expression) -> Option<String> {
@@ -1262,7 +1436,7 @@ impl Builder {
 
 fn lower_function(
     function: &HirFunction,
-    enum_tags: &std::collections::HashMap<String, u64>,
+    enum_variants: &std::collections::HashMap<String, EnumVariant>,
     struct_fields: &std::collections::HashMap<String, Vec<(String, Option<Expression>)>>,
     function_struct_params: &std::collections::HashMap<String, Vec<Option<String>>>,
     function_slice_params: &std::collections::HashMap<String, Vec<bool>>,
@@ -1280,7 +1454,7 @@ fn lower_function(
         array_lengths: std::collections::HashMap::new(),
         slice_lengths: std::collections::HashMap::new(),
         slice_scales: std::collections::HashMap::new(),
-        enum_tags: enum_tags.clone(),
+        enum_variants: enum_variants.clone(),
         struct_fields: struct_fields.clone(),
         function_struct_params: function_struct_params.clone(),
         function_slice_params: function_slice_params.clone(),
@@ -1422,15 +1596,28 @@ fn prune_unreachable_blocks(blocks: &mut Vec<MirBlock>) {
 }
 
 pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
-    let enum_tags = module
+    let enum_variants = module
         .enums
         .iter()
         .flat_map(|enumeration| {
+            let uses_storage = enumeration
+                .variants
+                .iter()
+                .any(|(_, payload)| payload.is_some());
             enumeration
                 .variants
                 .iter()
                 .enumerate()
-                .map(|(tag, (variant, _))| (variant.clone(), tag as u64))
+                .map(move |(tag, (variant, payload))| {
+                    (
+                        variant.clone(),
+                        EnumVariant {
+                            tag: tag as u64,
+                            payload: payload.clone(),
+                            uses_storage,
+                        },
+                    )
+                })
         })
         .collect::<std::collections::HashMap<_, _>>();
     let struct_fields = module
@@ -1481,7 +1668,7 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
             .map(|function| {
                 lower_function(
                     function,
-                    &enum_tags,
+                    &enum_variants,
                     &struct_fields,
                     &function_struct_params,
                     &function_slice_params,

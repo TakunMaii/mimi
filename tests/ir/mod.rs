@@ -339,6 +339,36 @@ fn builds_and_runs_match_and_if_let_for_payloadless_enums() {
 }
 
 #[test]
+fn builds_and_runs_payload_enum_construction_match_and_if_let() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_payload_enum_source_{}.mi",
+        std::process::id()
+    ));
+    let path =
+        std::env::temp_dir().join(format!("mimi_payload_enum_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "result :: enum { some(i32), error, none } choose :: fn (value : result) i32 { match value { some(x) => x, error => 3, none => 5 } } unwrap :: fn (value : result) i32 { output := 0 if some(x) := value { output = x } output } main :: fn () i32 { choose(some(7)) + choose(error) + choose(none) + unwrap(some(4)) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(19));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_scalar_struct_fields_and_defaults() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

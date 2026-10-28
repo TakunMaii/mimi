@@ -341,7 +341,7 @@ where
             matches!(tokens.next(), Some(Token::Equal)),
             "expected '=' in if-let"
         );
-        let value = parse_expression(tokens, 0);
+        let value = parse_block_condition(tokens);
         let then_branch = parse_block_expression(tokens);
         let else_branch = if matches!(tokens.peek(), Some(Token::Else)) {
             tokens.next();
@@ -357,7 +357,7 @@ where
             else_branch,
         };
     }
-    let condition = parse_expression(tokens, 0);
+    let condition = parse_block_condition(tokens);
     let then_branch = parse_block_expression(tokens);
     let else_branch = if matches!(tokens.peek(), Some(Token::Else)) {
         tokens.next();
@@ -455,7 +455,7 @@ fn parse_while<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
 where
     I: Iterator<Item = Token> + Clone,
 {
-    let condition = parse_expression(tokens, 0);
+    let condition = parse_block_condition(tokens);
     ASTNode::While {
         condition,
         body: parse_block_expression(tokens),
@@ -471,7 +471,7 @@ where
         matches!(tokens.next(), Some(Token::While)),
         "expected 'while' after do-while body"
     );
-    let condition = parse_expression(tokens, 0);
+    let condition = parse_block_condition(tokens);
     ASTNode::DoWhile { body, condition }
 }
 
@@ -523,7 +523,7 @@ fn parse_if_expression<I>(tokens: &mut std::iter::Peekable<I>) -> Expression
 where
     I: Iterator<Item = Token> + Clone,
 {
-    let condition = parse_expression(tokens, 0);
+    let condition = parse_block_condition(tokens);
     let then_branch = parse_block_expression(tokens);
     assert!(
         matches!(tokens.next(), Some(Token::Else)),
@@ -936,7 +936,15 @@ where
     I: Iterator<Item = Token> + Clone,
 {
     let first = tokens.next().expect("expected an expression");
-    parse_expression_from(first, tokens, min_precedence)
+    parse_expression_from_mode(first, tokens, min_precedence, true)
+}
+
+fn parse_block_condition<I>(tokens: &mut std::iter::Peekable<I>) -> Expression
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let first = tokens.next().expect("expected an expression");
+    parse_expression_from_mode(first, tokens, 0, false)
 }
 
 fn parse_expression_from<I>(
@@ -947,15 +955,47 @@ fn parse_expression_from<I>(
 where
     I: Iterator<Item = Token> + Clone,
 {
+    parse_expression_from_mode(first, tokens, min_precedence, true)
+}
+
+fn parse_expression_from_mode<I>(
+    first: Token,
+    tokens: &mut std::iter::Peekable<I>,
+    min_precedence: u8,
+    allow_struct_literal: bool,
+) -> Expression
+where
+    I: Iterator<Item = Token> + Clone,
+{
     let mut lhs = match first {
         Token::Identifier(name) => Expression::Identifier(name),
         Token::LiteralNumber(value) => Expression::LiteralNumber(value),
         Token::LiteralString(value) => Expression::LiteralString(value),
         Token::LiteralBool(value) => Expression::LiteralBool(value),
-        Token::Minus => Expression::Negate(Box::new(parse_expression(tokens, 6))),
-        Token::Bang => Expression::Not(Box::new(parse_expression(tokens, 6))),
-        Token::Ampersand => Expression::AddressOf(Box::new(parse_expression(tokens, 6))),
-        Token::Star => Expression::Dereference(Box::new(parse_expression(tokens, 6))),
+        Token::Minus => Expression::Negate(Box::new(parse_expression_from_mode(
+            tokens.next().expect("expected an expression"),
+            tokens,
+            6,
+            allow_struct_literal,
+        ))),
+        Token::Bang => Expression::Not(Box::new(parse_expression_from_mode(
+            tokens.next().expect("expected an expression"),
+            tokens,
+            6,
+            allow_struct_literal,
+        ))),
+        Token::Ampersand => Expression::AddressOf(Box::new(parse_expression_from_mode(
+            tokens.next().expect("expected an expression"),
+            tokens,
+            6,
+            allow_struct_literal,
+        ))),
+        Token::Star => Expression::Dereference(Box::new(parse_expression_from_mode(
+            tokens.next().expect("expected an expression"),
+            tokens,
+            6,
+            allow_struct_literal,
+        ))),
         Token::LeftParen => {
             let expression = parse_expression(tokens, 0);
             match tokens.next() {
@@ -1028,7 +1068,7 @@ where
                 tokens.next();
             }
             lhs = Expression::Call { name, arguments };
-        } else if brace_starts_struct_literal(tokens) {
+        } else if allow_struct_literal && brace_starts_struct_literal(tokens) {
             tokens.next();
             lhs = Expression::StructLiteral {
                 type_name: Some(Box::leak(name.clone().into_boxed_str())),
@@ -1131,7 +1171,12 @@ where
             break;
         }
         tokens.next();
-        let rhs = parse_expression(tokens, precedence + 1);
+        let rhs = parse_expression_from_mode(
+            tokens.next().expect("expected an expression"),
+            tokens,
+            precedence + 1,
+            allow_struct_literal,
+        );
         lhs = match operator {
             BinaryOperator::Add => Expression::Add(Box::new(lhs), Box::new(rhs)),
             BinaryOperator::Subtract => Expression::Subtract(Box::new(lhs), Box::new(rhs)),
