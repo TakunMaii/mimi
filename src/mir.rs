@@ -507,31 +507,24 @@ impl Builder {
                     }
                 }
                 let struct_name = self.expression_struct_name(object)?;
-                let fields = self.struct_fields.get(&struct_name)?;
-                let field_index = fields.iter().position(|(name, _)| name == member)?;
+                let field_offset = self.struct_field_offset(&struct_name, member)?;
+                let field_type = self
+                    .struct_field_types
+                    .get(&struct_name)?
+                    .iter()
+                    .find(|(name, _)| name == member)?
+                    .1
+                    .clone();
                 let base = self.expression(object)?;
-                let index = self.value();
-                self.emit(MirInstruction::ConstInt {
-                    result: index,
-                    value: field_index as i128,
-                });
-                let address = self.value();
-                self.emit(MirInstruction::IndexAddress {
-                    result: address,
-                    base,
-                    index,
-                    scale: 8,
-                });
+                let address = self.inline_field_address(base, field_offset);
+                if let HirType::Named(name) = &field_type
+                    && self.struct_fields.contains_key(name)
+                {
+                    return Some(address);
+                }
                 let result = self.value();
                 self.emit(MirInstruction::LoadIndirect { result, address });
-                if let Some(data_type) = self
-                    .struct_field_types
-                    .get(&struct_name)
-                    .and_then(|fields| fields.iter().find(|(name, _)| name == member))
-                    .map(|(_, data_type)| data_type.clone())
-                {
-                    self.value_types.insert(result, data_type);
-                }
+                self.value_types.insert(result, field_type);
                 Some(result)
             }
             Expression::StaticAccess { type_name, member } => {
@@ -1226,9 +1219,8 @@ impl Builder {
                                 value,
                             } => {
                                 let struct_name = self.expression_struct_name(object)?;
-                                let fields = self.struct_fields.get(&struct_name)?;
-                                let field_index =
-                                    fields.iter().position(|(name, _)| name == member)?;
+                                let field_offset =
+                                    self.struct_field_offset(&struct_name, member)?;
                                 let field_type = self
                                     .struct_field_types
                                     .get(&struct_name)?
@@ -1237,20 +1229,16 @@ impl Builder {
                                     .1
                                     .clone();
                                 let base = self.expression(object)?;
-                                let index = self.value();
-                                self.emit(MirInstruction::ConstInt {
-                                    result: index,
-                                    value: field_index as i128,
-                                });
-                                let address = self.value();
-                                self.emit(MirInstruction::IndexAddress {
-                                    result: address,
-                                    base,
-                                    index,
-                                    scale: 8,
-                                });
-                                let value = self.expression_expected(value, &field_type)?;
-                                self.emit(MirInstruction::StoreIndirect { address, value });
+                                let address = self.inline_field_address(base, field_offset);
+                                if let HirType::Named(name) = &field_type
+                                    && self.struct_fields.contains_key(name)
+                                {
+                                    let value = self.expression_expected(value, &field_type)?;
+                                    self.copy_struct_to_address(name, value, address)?;
+                                } else {
+                                    let value = self.expression_expected(value, &field_type)?;
+                                    self.emit(MirInstruction::StoreIndirect { address, value });
+                                }
                             }
                             crate::parser::ASTNode::While { condition, body } => {
                                 self.lower_while(condition, body, false)?;
@@ -2561,32 +2549,156 @@ impl Builder {
         struct_name: &str,
         provided: &[(String, Expression)],
     ) -> Option<ValueId> {
-        let fields = self.struct_fields.get(struct_name)?.clone();
+        let slot_count = self.struct_slot_count(struct_name)?;
         let base = self.slot();
-        self.next_slot += fields.len().saturating_sub(1) as u32;
-        for (index, (field_name, default)) in fields.iter().enumerate() {
+        self.next_slot += slot_count.saturating_sub(1);
+        self.lower_struct_fields_into(struct_name, provided, base)?;
+        let result = self.value();
+        self.emit(MirInstruction::SlotAddress { result, slot: base });
+        Some(result)
+    }
+
+    fn struct_slot_count(&self, struct_name: &str) -> Option<u32> {
+        self.struct_slot_count_inner(struct_name, &mut std::collections::HashSet::new())
+    }
+
+    fn struct_slot_count_inner(
+        &self,
+        struct_name: &str,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> Option<u32> {
+        if !visiting.insert(struct_name.to_string()) {
+            return None;
+        }
+        let fields = self.struct_field_types.get(struct_name)?;
+        let mut slot_count = 0u32;
+        for (_, field_type) in fields {
+            let field_slots = match field_type {
+                HirType::Named(name) if self.struct_fields.contains_key(name) => {
+                    self.struct_slot_count_inner(name, visiting)?
+                }
+                _ => 1,
+            };
+            slot_count = slot_count.checked_add(field_slots)?;
+        }
+        visiting.remove(struct_name);
+        Some(slot_count)
+    }
+
+    fn struct_field_offset(&self, struct_name: &str, member: &str) -> Option<u32> {
+        let fields = self.struct_field_types.get(struct_name)?;
+        let mut visiting = std::collections::HashSet::new();
+        visiting.insert(struct_name.to_string());
+        let mut offset = 0u32;
+        for (field_name, field_type) in fields {
+            if field_name == member {
+                return Some(offset);
+            }
+            let field_slots = match field_type {
+                HirType::Named(name) if self.struct_fields.contains_key(name) => {
+                    self.struct_slot_count_inner(name, &mut visiting)?
+                }
+                _ => 1,
+            };
+            offset = offset.checked_add(field_slots)?;
+        }
+        None
+    }
+
+    fn inline_field_address(&mut self, base: ValueId, slot_offset: u32) -> ValueId {
+        let index = self.value();
+        self.emit(MirInstruction::ConstInt {
+            result: index,
+            value: i128::from(slot_offset),
+        });
+        let address = self.value();
+        self.emit(MirInstruction::IndexAddress {
+            result: address,
+            base,
+            index,
+            scale: 8,
+        });
+        address
+    }
+
+    fn slot_address_value(&mut self, slot: SlotId) -> ValueId {
+        let address = self.value();
+        self.emit(MirInstruction::SlotAddress {
+            result: address,
+            slot,
+        });
+        address
+    }
+
+    fn copy_struct_to_address(
+        &mut self,
+        struct_name: &str,
+        source: ValueId,
+        destination: ValueId,
+    ) -> Option<()> {
+        let slot_count = self.struct_slot_count(struct_name)?;
+        for offset in 0..slot_count {
+            let source_address = self.inline_field_address(source, offset);
+            let value = self.value();
+            self.emit(MirInstruction::LoadIndirect {
+                result: value,
+                address: source_address,
+            });
+            let destination_address = self.inline_field_address(destination, offset);
+            self.emit(MirInstruction::StoreIndirect {
+                address: destination_address,
+                value,
+            });
+        }
+        Some(())
+    }
+
+    fn lower_struct_fields_into(
+        &mut self,
+        struct_name: &str,
+        provided: &[(String, Expression)],
+        base: SlotId,
+    ) -> Option<()> {
+        let fields = self.struct_fields.get(struct_name)?.clone();
+        for (field_name, default) in fields {
             let expression = provided
                 .iter()
-                .find(|(name, _)| name == field_name)
+                .find(|(name, _)| name == &field_name)
                 .map(|(_, expression)| expression)
                 .or(default.as_ref())?;
             let field_type = self
                 .struct_field_types
                 .get(struct_name)?
                 .iter()
-                .find(|(name, _)| name == field_name)?
+                .find(|(name, _)| name == &field_name)?
                 .1
                 .clone();
-            let value = self.expression_expected(expression, &field_type)?;
-            self.value_types.insert(value, field_type);
-            self.emit(MirInstruction::StoreSlot {
-                slot: SlotId(base.0 + index as u32),
-                value,
-            });
+            let offset = self.struct_field_offset(struct_name, &field_name)?;
+            let target_slot = SlotId(base.0.checked_add(offset)?);
+            if let HirType::Named(nested_name) = &field_type
+                && self.struct_fields.contains_key(nested_name)
+            {
+                if let Expression::StructLiteral {
+                    fields: nested_fields,
+                    ..
+                } = expression
+                {
+                    self.lower_struct_fields_into(nested_name, nested_fields, target_slot)?;
+                } else {
+                    let value = self.expression_expected(expression, &field_type)?;
+                    let destination = self.slot_address_value(target_slot);
+                    self.copy_struct_to_address(nested_name, value, destination)?;
+                }
+            } else {
+                let value = self.expression_expected(expression, &field_type)?;
+                self.value_types.insert(value, field_type);
+                self.emit(MirInstruction::StoreSlot {
+                    slot: target_slot,
+                    value,
+                });
+            }
         }
-        let result = self.value();
-        self.emit(MirInstruction::SlotAddress { result, slot: base });
-        Some(result)
+        Some(())
     }
 }
 

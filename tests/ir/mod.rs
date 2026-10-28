@@ -469,7 +469,7 @@ fn builds_and_runs_nested_struct_field_access() {
         std::env::temp_dir().join(format!("mimi_nested_struct_codegen_{}", std::process::id()));
     std::fs::write(
         &source,
-        "inner :: struct { x : i32 } outer :: struct { nested : inner, y : i32 } main :: fn () i32 { value := outer { nested = inner { x = 3 }, y = 4 } before := value.nested.x value.nested.x = 9 before + value.nested.x + value.y }",
+        "inner :: struct { x : i32, z : i32 } middle :: struct { nested : inner, w : i32 } outer :: struct { nested : middle, y : i32 } main :: fn () i32 { original := inner { x = 3, z = 5 } middle_value := middle { nested = original, w = 7 } value := outer { nested = middle_value, y = 4 } original.x = 8 pointer := &value pointer.nested.nested.z = 6 before := value.nested.nested.x value.nested.nested.x = 9 before + value.nested.nested.x + value.nested.nested.z + value.nested.w + value.y }",
     )
     .unwrap();
     build_file(
@@ -481,7 +481,7 @@ fn builds_and_runs_nested_struct_field_access() {
     )
     .unwrap();
     let status = std::process::Command::new(&path).status().unwrap();
-    assert_eq!(status.code(), Some(16));
+    assert_eq!(status.code(), Some(29));
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();
 }
