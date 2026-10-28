@@ -408,6 +408,11 @@ fn rejects_pointer_arithmetic_on_compound_elements() {
     ));
     let errors = check(&ast).unwrap_err();
     assert_eq!(errors.len(), 1);
+
+    let indexed = parse(tokenize(
+        "pos :: struct { x : i32 } main :: fn (pointer : *pos) i32 { pointer[0].x }".chars(),
+    ));
+    assert!(check(&indexed).is_err());
 }
 
 #[test]

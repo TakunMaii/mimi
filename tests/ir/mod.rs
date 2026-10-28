@@ -727,6 +727,36 @@ fn builds_and_runs_indexing_through_pointers_to_arrays() {
 }
 
 #[test]
+fn builds_and_runs_arrays_of_pointers_through_array_pointers() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_pointer_array_source_{}.mi",
+        std::process::id()
+    ));
+    let path =
+        std::env::temp_dir().join(format!("mimi_pointer_array_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { first := 11 second := 22 values : [2]*i32 = [&first, &second] start := &values result := if *(start[0][0]) == 11 && *(start[0][1]) == 22 && start + 1 - start == 1 { 0 } else { 1 } result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_slice_return_values() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

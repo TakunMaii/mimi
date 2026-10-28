@@ -1329,7 +1329,10 @@ fn pointer_stride(data_type: DataType) -> Option<u64> {
     match data_type {
         DataType::Pointer(_) | DataType::Function(_, _) => Some(8),
         DataType::Array(length, element)
-            if length > 0 && (element.is_numeric() || *element == DataType::Bool) =>
+            if length > 0
+                && (element.is_numeric()
+                    || *element == DataType::Bool
+                    || matches!(element, DataType::Pointer(_) | DataType::Function(_, _))) =>
         {
             length.checked_mul(pointer_stride(*element)?)
         }

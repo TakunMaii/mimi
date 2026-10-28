@@ -2858,7 +2858,12 @@ fn pointer_stride_from_hir_type(data_type: &HirType) -> Option<u64> {
     match data_type {
         HirType::Pointer(_) | HirType::Function { .. } => Some(8),
         HirType::Array { length, element }
-            if *length > 0 && scalar_storage_size(element).is_some() =>
+            if *length > 0
+                && (scalar_storage_size(element).is_some()
+                    || matches!(
+                        element.as_ref(),
+                        HirType::Pointer(_) | HirType::Function { .. }
+                    )) =>
         {
             length.checked_mul(pointer_stride_from_hir_type(element)?)
         }
@@ -2899,9 +2904,27 @@ fn pointer_scale_from_data_type(data_type: &crate::parser::DataType) -> u64 {
         | crate::parser::DataType::I32
         | crate::parser::DataType::F32 => 4,
         crate::parser::DataType::Bool => 1,
-        crate::parser::DataType::Array(length, element) if *length > 0 => length
-            .checked_mul(pointer_scale_from_data_type(element))
-            .unwrap_or(8),
+        crate::parser::DataType::Array(length, element) if *length > 0 => {
+            let element_scale = match **element {
+                crate::parser::DataType::U8
+                | crate::parser::DataType::I8
+                | crate::parser::DataType::F8
+                | crate::parser::DataType::Bool => 1,
+                crate::parser::DataType::U16
+                | crate::parser::DataType::I16
+                | crate::parser::DataType::F16 => 2,
+                crate::parser::DataType::U32
+                | crate::parser::DataType::I32
+                | crate::parser::DataType::F32 => 4,
+                crate::parser::DataType::U64
+                | crate::parser::DataType::I64
+                | crate::parser::DataType::F64
+                | crate::parser::DataType::Pointer(_)
+                | crate::parser::DataType::Function(_, _) => 8,
+                _ => return 8,
+            };
+            length.checked_mul(element_scale).unwrap_or(8)
+        }
         _ => 8,
     }
 }
