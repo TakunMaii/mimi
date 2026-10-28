@@ -2157,7 +2157,13 @@ impl Builder {
 
     fn lower_global_constant(&mut self, name: &str) -> Option<ValueId> {
         let constant = self.global_constants.get(name)?.clone();
-        let value = self.expression_expected(&constant.value, &constant.data_type)?;
+        let previous_namespace = self.function_namespace.clone();
+        self.function_namespace = name
+            .rsplit_once('.')
+            .map(|(namespace, _)| namespace.to_string());
+        let value = self.expression_expected(&constant.value, &constant.data_type);
+        self.function_namespace = previous_namespace;
+        let value = value?;
         self.value_types.insert(value, constant.data_type.clone());
         Some(value)
     }

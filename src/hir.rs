@@ -115,6 +115,7 @@ pub(crate) struct HirModule {
 
 pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
     let mut module = HirModule::default();
+    let mut constant_types = std::collections::HashMap::new();
     for node in nodes {
         let node = match node {
             ASTNode::Public(inner) => inner.as_ref(),
@@ -157,39 +158,19 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
             value,
         } = node
         {
-            let is_scalar_literal = matches!(
-                value,
-                Expression::LiteralBool(_) | Expression::LiteralNumber(_)
-            ) || matches!(
-                value,
-                Expression::Negate(inner)
-                    if matches!(inner.as_ref(), Expression::LiteralNumber(_))
-            );
-            let data_type = data_type.map(Into::into).or_else(|| match value {
-                Expression::LiteralBool(_) => Some(HirType::Bool),
-                Expression::LiteralNumber(text) if text.contains('.') => {
-                    Some(HirType::Float { bits: 64 })
-                }
-                Expression::LiteralNumber(_) => Some(HirType::Integer {
-                    bits: 32,
-                    signed: true,
-                }),
-                Expression::Negate(inner)
-                    if matches!(inner.as_ref(), Expression::LiteralNumber(_)) =>
-                {
-                    Some(HirType::Integer {
-                        bits: 32,
-                        signed: true,
-                    })
-                }
-                _ => None,
-            });
-            if is_scalar_literal && let Some(data_type) = data_type {
+            let namespace = name.rsplit_once('.').map(|(namespace, _)| namespace);
+            let data_type = data_type
+                .map(Into::into)
+                .or_else(|| infer_scalar_constant_type(value, None, &constant_types, namespace));
+            if let Some(data_type) = data_type.filter(is_scalar_type)
+                && is_scalar_constant_expression(value, &constant_types, namespace)
+            {
                 module.constants.push(HirConstant {
                     name: name.clone(),
-                    data_type,
+                    data_type: data_type.clone(),
                     value: value.clone(),
                 });
+                constant_types.insert(name.clone(), data_type);
             }
         }
         if let ASTNode::EnumDefinition { name, variants } = node {
@@ -276,6 +257,214 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
         }
     }
     module
+}
+
+fn infer_scalar_constant_type(
+    expression: &Expression,
+    expected: Option<&HirType>,
+    constants: &std::collections::HashMap<String, HirType>,
+    namespace: Option<&str>,
+) -> Option<HirType> {
+    match expression {
+        Expression::LiteralBool(_) => Some(HirType::Bool),
+        Expression::LiteralNumber(text) => expected
+            .filter(|data_type| is_scalar_numeric_type(data_type))
+            .cloned()
+            .or_else(|| inferred_integer_type(text))
+            .or_else(|| text.contains('.').then_some(HirType::Float { bits: 64 })),
+        Expression::Identifier(name) => constants.get(name).cloned().or_else(|| {
+            namespace
+                .and_then(|namespace| constants.get(&format!("{namespace}.{name}")))
+                .cloned()
+        }),
+        Expression::Negate(inner) => match inner.as_ref() {
+            Expression::LiteralNumber(text) if expected.is_none() => {
+                inferred_negative_integer_type(text)
+                    .or_else(|| text.contains('.').then_some(HirType::Float { bits: 64 }))
+            }
+            _ => infer_scalar_constant_type(inner, expected, constants, namespace)
+                .filter(is_scalar_numeric_type),
+        },
+        Expression::Not(_) | Expression::And(_, _) | Expression::Or(_, _) => Some(HirType::Bool),
+        Expression::Equal(_, _)
+        | Expression::NotEqual(_, _)
+        | Expression::LessThan(_, _)
+        | Expression::LessThanOrEqual(_, _)
+        | Expression::GreaterThan(_, _)
+        | Expression::GreaterThanOrEqual(_, _) => Some(HirType::Bool),
+        Expression::Add(lhs, rhs)
+        | Expression::Subtract(lhs, rhs)
+        | Expression::Multiply(lhs, rhs)
+        | Expression::Divide(lhs, rhs)
+        | Expression::Remainder(lhs, rhs) => {
+            let lhs_type = infer_scalar_constant_type(lhs, expected, constants, namespace)?;
+            let rhs_type =
+                infer_scalar_constant_type(rhs, Some(&lhs_type), constants, namespace)
+                    .or_else(|| infer_scalar_constant_type(rhs, expected, constants, namespace))?;
+            common_numeric_type(&lhs_type, &rhs_type)
+        }
+        Expression::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let then_type =
+                infer_scalar_constant_type(then_branch, expected, constants, namespace)?;
+            let else_type =
+                infer_scalar_constant_type(else_branch, Some(&then_type), constants, namespace)
+                    .or_else(|| {
+                        infer_scalar_constant_type(else_branch, expected, constants, namespace)
+                    })?;
+            (then_type == else_type)
+                .then_some(then_type.clone())
+                .or_else(|| common_numeric_type(&then_type, &else_type))
+        }
+        _ => None,
+    }
+}
+
+fn is_scalar_constant_expression(
+    expression: &Expression,
+    constants: &std::collections::HashMap<String, HirType>,
+    namespace: Option<&str>,
+) -> bool {
+    match expression {
+        Expression::LiteralBool(_) | Expression::LiteralNumber(_) => true,
+        Expression::Identifier(name) => {
+            constants.contains_key(name)
+                || namespace
+                    .is_some_and(|namespace| constants.contains_key(&format!("{namespace}.{name}")))
+        }
+        Expression::Negate(inner) | Expression::Not(inner) => {
+            is_scalar_constant_expression(inner, constants, namespace)
+        }
+        Expression::Add(lhs, rhs)
+        | Expression::Subtract(lhs, rhs)
+        | Expression::Multiply(lhs, rhs)
+        | Expression::Divide(lhs, rhs)
+        | Expression::Remainder(lhs, rhs)
+        | Expression::Equal(lhs, rhs)
+        | Expression::NotEqual(lhs, rhs)
+        | Expression::LessThan(lhs, rhs)
+        | Expression::LessThanOrEqual(lhs, rhs)
+        | Expression::GreaterThan(lhs, rhs)
+        | Expression::GreaterThanOrEqual(lhs, rhs)
+        | Expression::And(lhs, rhs)
+        | Expression::Or(lhs, rhs) => {
+            is_scalar_constant_expression(lhs, constants, namespace)
+                && is_scalar_constant_expression(rhs, constants, namespace)
+        }
+        Expression::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            is_scalar_constant_expression(condition, constants, namespace)
+                && is_scalar_constant_expression(then_branch, constants, namespace)
+                && is_scalar_constant_expression(else_branch, constants, namespace)
+        }
+        _ => false,
+    }
+}
+
+fn is_scalar_type(data_type: &HirType) -> bool {
+    matches!(
+        data_type,
+        HirType::Integer { .. } | HirType::Float { bits: 16 | 32 | 64 } | HirType::Bool
+    )
+}
+
+fn is_scalar_numeric_type(data_type: &HirType) -> bool {
+    matches!(data_type, HirType::Integer { .. } | HirType::Float { .. })
+}
+
+fn common_numeric_type(lhs: &HirType, rhs: &HirType) -> Option<HirType> {
+    match (lhs, rhs) {
+        (HirType::Float { bits: lhs }, HirType::Float { bits: rhs }) => Some(HirType::Float {
+            bits: (*lhs).max(*rhs),
+        }),
+        (HirType::Float { bits }, HirType::Integer { .. })
+        | (HirType::Integer { .. }, HirType::Float { bits }) => {
+            Some(HirType::Float { bits: *bits })
+        }
+        (
+            HirType::Integer {
+                bits: lhs_bits,
+                signed: lhs_signed,
+            },
+            HirType::Integer {
+                bits: rhs_bits,
+                signed: rhs_signed,
+            },
+        ) if lhs_signed == rhs_signed => Some(HirType::Integer {
+            bits: (*lhs_bits).max(*rhs_bits),
+            signed: *lhs_signed,
+        }),
+        (
+            HirType::Integer {
+                bits: signed_bits,
+                signed: true,
+            },
+            HirType::Integer {
+                bits: unsigned_bits,
+                signed: false,
+            },
+        )
+        | (
+            HirType::Integer {
+                bits: unsigned_bits,
+                signed: false,
+            },
+            HirType::Integer {
+                bits: signed_bits,
+                signed: true,
+            },
+        ) if signed_bits > unsigned_bits => Some(HirType::Integer {
+            bits: *signed_bits,
+            signed: true,
+        }),
+        _ => None,
+    }
+}
+
+fn inferred_integer_type(text: &str) -> Option<HirType> {
+    let value = text.parse::<u128>().ok()?;
+    if value <= i32::MAX as u128 {
+        Some(HirType::Integer {
+            bits: 32,
+            signed: true,
+        })
+    } else if value <= i64::MAX as u128 {
+        Some(HirType::Integer {
+            bits: 64,
+            signed: true,
+        })
+    } else if value <= u64::MAX as u128 {
+        Some(HirType::Integer {
+            bits: 64,
+            signed: false,
+        })
+    } else {
+        None
+    }
+}
+
+fn inferred_negative_integer_type(text: &str) -> Option<HirType> {
+    let magnitude = text.parse::<i128>().ok()?;
+    let value = magnitude.checked_neg()?;
+    if value >= i32::MIN as i128 {
+        Some(HirType::Integer {
+            bits: 32,
+            signed: true,
+        })
+    } else if value >= i64::MIN as i128 {
+        Some(HirType::Integer {
+            bits: 64,
+            signed: true,
+        })
+    } else {
+        None
+    }
 }
 
 fn lift_lambdas_in_expression(

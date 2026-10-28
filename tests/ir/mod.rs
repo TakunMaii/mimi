@@ -159,6 +159,44 @@ fn builds_and_runs_imported_scalar_constants() {
 }
 
 #[test]
+fn builds_and_runs_imported_scalar_constant_expressions() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let package =
+        std::env::temp_dir().join(format!("mimi_expression_package_{}.mi", std::process::id()));
+    let source =
+        std::env::temp_dir().join(format!("mimi_expression_import_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_expression_codegen_{}", std::process::id()));
+    std::fs::write(
+        &package,
+        "BASE :: 40 pub answer :: BASE + 2 pub ratio :: 1.0 + 0.25 pub enabled :: answer > 40 pub large :: 2147483648",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        format!(
+            "values :: @import(\"{}\") main :: fn () i32 {{ result := if values.enabled && values.ratio == 1.25 && values.large == 2147483648 {{ values.answer }} else {{ 0 }} result }}",
+            package.display()
+        ),
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(42));
+    std::fs::remove_file(package).unwrap();
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_imported_struct_types() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

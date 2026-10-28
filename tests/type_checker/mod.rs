@@ -344,7 +344,7 @@ fn imports_public_scalar_constants_with_their_types() {
         std::env::temp_dir().join(format!("mimi_import_constants_{}.mimi", std::process::id()));
     std::fs::write(
         &path,
-        "pub answer :: 42 pub ratio :: 1.25 pub enabled :: true hidden :: 9",
+        "BASE :: 40 pub answer :: BASE + 2 pub ratio :: 1.0 + 0.25 pub enabled :: answer > 40 pub large :: 2147483648 hidden :: 9 + 3",
     )
     .unwrap();
     let source = format!(
@@ -355,6 +355,7 @@ fn imports_public_scalar_constants_with_their_types() {
     assert_eq!(types["values.answer"], DataType::I32);
     assert_eq!(types["values.ratio"], DataType::F64);
     assert_eq!(types["values.enabled"], DataType::Bool);
+    assert_eq!(types["values.large"], DataType::I64);
 
     let source = format!(
         "values :: @import(\"{}\") main :: fn () i32 {{ values.hidden }}",

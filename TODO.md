@@ -75,6 +75,8 @@ and focused regression coverage; it does not imply support on every target.
     - [x] Load imported external function addresses through target-specific GOT relocations.
     - [x] Import exported types and enforce type visibility.
     - [ ] Lower and link exported constants with full visibility checks.
+      - [x] Inline imported public scalar expressions and same-package scalar constant references.
+      - [ ] Lower imported aggregate constant values.
 
 ## Targets and Tooling
 

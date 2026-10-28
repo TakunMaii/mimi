@@ -73,6 +73,25 @@ fn imported_exports(
             _ => None,
         })
         .collect::<HashSet<_>>();
+    let mut constant_types = HashMap::new();
+    for node in &ast {
+        let declaration = match node {
+            ASTNode::Public(declaration) => declaration.as_ref(),
+            declaration => declaration,
+        };
+        if let ASTNode::CompileTimeConstant {
+            name,
+            data_type,
+            value,
+        } = declaration
+            && let Some(data_type) =
+                data_type.or_else(|| imported_scalar_constant_type(value, &constant_types))
+            && is_scalar_type(data_type)
+            && imported_scalar_constant_expression(value, &constant_types)
+        {
+            constant_types.insert(name.clone(), data_type);
+        }
+    }
     let mut exports = HashMap::new();
     let mut types = HashMap::new();
     for node in ast {
@@ -133,13 +152,13 @@ fn imported_exports(
                 );
             }
             ASTNode::CompileTimeConstant {
-                name,
-                data_type,
-                value,
+                name, data_type, ..
             } => {
-                if let Some(data_type) = data_type
-                    .or_else(|| callable_types.get(&name).copied())
-                    .or_else(|| imported_literal_type(&value))
+                let function_type = data_type
+                    .filter(|ty| matches!(ty, DataType::Function(_, _)))
+                    .or_else(|| callable_types.get(&name).copied());
+                if let Some(data_type) =
+                    function_type.or_else(|| constant_types.get(&name).copied())
                 {
                     exports.insert(
                         name,
@@ -409,9 +428,146 @@ fn imported_literal_type(expression: &Expression) -> Option<DataType> {
     match expression {
         Expression::LiteralBool(_) => Some(DataType::Bool),
         Expression::LiteralNumber(value) if value.contains('.') => Some(DataType::F64),
-        Expression::LiteralNumber(_) | Expression::Negate(_) => Some(DataType::I32),
+        Expression::LiteralNumber(value) => imported_integer_literal_type(value),
+        Expression::Negate(inner) if matches!(inner.as_ref(), Expression::LiteralNumber(_)) => {
+            let Expression::LiteralNumber(value) = inner.as_ref() else {
+                unreachable!();
+            };
+            imported_negative_integer_literal_type(value)
+        }
         _ => None,
     }
+}
+
+fn imported_integer_literal_type(value: &str) -> Option<DataType> {
+    let value = value.parse::<u128>().ok()?;
+    if value <= i32::MAX as u128 {
+        Some(DataType::I32)
+    } else if value <= i64::MAX as u128 {
+        Some(DataType::I64)
+    } else if value <= u64::MAX as u128 {
+        Some(DataType::U64)
+    } else {
+        None
+    }
+}
+
+fn imported_negative_integer_literal_type(value: &str) -> Option<DataType> {
+    let magnitude = value.parse::<i128>().ok()?;
+    let value = magnitude.checked_neg()?;
+    if value >= i32::MIN as i128 {
+        Some(DataType::I32)
+    } else if value >= i64::MIN as i128 {
+        Some(DataType::I64)
+    } else {
+        None
+    }
+}
+
+fn imported_scalar_constant_type(
+    expression: &Expression,
+    constants: &HashMap<String, DataType>,
+) -> Option<DataType> {
+    match expression {
+        Expression::Identifier(name) => constants.get(name).copied(),
+        Expression::LiteralBool(_) => Some(DataType::Bool),
+        Expression::LiteralNumber(value) if value.contains('.') => Some(DataType::F64),
+        Expression::LiteralNumber(value) => imported_integer_literal_type(value),
+        Expression::Negate(inner) if matches!(inner.as_ref(), Expression::LiteralNumber(_)) => {
+            let Expression::LiteralNumber(value) = inner.as_ref() else {
+                unreachable!();
+            };
+            imported_negative_integer_literal_type(value)
+        }
+        Expression::Negate(value) => imported_scalar_constant_type(value, constants),
+        Expression::Not(_) => Some(DataType::Bool),
+        Expression::And(_, _)
+        | Expression::Or(_, _)
+        | Expression::Equal(_, _)
+        | Expression::NotEqual(_, _)
+        | Expression::LessThan(_, _)
+        | Expression::LessThanOrEqual(_, _)
+        | Expression::GreaterThan(_, _)
+        | Expression::GreaterThanOrEqual(_, _) => Some(DataType::Bool),
+        Expression::Add(lhs, rhs)
+        | Expression::Subtract(lhs, rhs)
+        | Expression::Multiply(lhs, rhs)
+        | Expression::Divide(lhs, rhs)
+        | Expression::Remainder(lhs, rhs) => {
+            let lhs = imported_scalar_constant_type(lhs, constants)?;
+            let rhs = imported_scalar_constant_type(rhs, constants)?;
+            common_numeric_type(lhs, rhs)
+        }
+        Expression::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let then_type = imported_scalar_constant_type(then_branch, constants)?;
+            let else_type = imported_scalar_constant_type(else_branch, constants)?;
+            (then_type == else_type)
+                .then_some(then_type)
+                .or_else(|| common_numeric_type(then_type, else_type))
+        }
+        _ => None,
+    }
+}
+
+fn imported_scalar_constant_expression(
+    expression: &Expression,
+    constants: &HashMap<String, DataType>,
+) -> bool {
+    match expression {
+        Expression::LiteralNumber(_) | Expression::LiteralBool(_) => true,
+        Expression::Identifier(name) => constants.contains_key(name),
+        Expression::Negate(inner) | Expression::Not(inner) => {
+            imported_scalar_constant_expression(inner, constants)
+        }
+        Expression::Add(lhs, rhs)
+        | Expression::Subtract(lhs, rhs)
+        | Expression::Multiply(lhs, rhs)
+        | Expression::Divide(lhs, rhs)
+        | Expression::Remainder(lhs, rhs)
+        | Expression::Equal(lhs, rhs)
+        | Expression::NotEqual(lhs, rhs)
+        | Expression::LessThan(lhs, rhs)
+        | Expression::LessThanOrEqual(lhs, rhs)
+        | Expression::GreaterThan(lhs, rhs)
+        | Expression::GreaterThanOrEqual(lhs, rhs)
+        | Expression::And(lhs, rhs)
+        | Expression::Or(lhs, rhs) => {
+            imported_scalar_constant_expression(lhs, constants)
+                && imported_scalar_constant_expression(rhs, constants)
+        }
+        Expression::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            imported_scalar_constant_expression(condition, constants)
+                && imported_scalar_constant_expression(then_branch, constants)
+                && imported_scalar_constant_expression(else_branch, constants)
+        }
+        _ => false,
+    }
+}
+
+fn is_scalar_type(data_type: DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::U8
+            | DataType::U16
+            | DataType::U32
+            | DataType::U64
+            | DataType::I8
+            | DataType::I16
+            | DataType::I32
+            | DataType::I64
+            | DataType::F16
+            | DataType::F32
+            | DataType::F64
+            | DataType::Bool
+    )
 }
 
 pub(crate) fn check(nodes: &[ASTNode]) -> Result<HashMap<String, DataType>, Vec<TypeError>> {
