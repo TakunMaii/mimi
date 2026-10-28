@@ -35,6 +35,11 @@ struct FieldInfo {
     mutable: bool,
 }
 
+struct ImportedExports {
+    values: HashMap<String, DataType>,
+    types: HashMap<&'static str, StructInfo>,
+}
+
 fn resolve_self(data_type: DataType, owner: &'static str) -> DataType {
     match data_type {
         DataType::SelfType => DataType::Struct(owner),
@@ -47,14 +52,29 @@ fn resolve_self(data_type: DataType, owner: &'static str) -> DataType {
 
 fn imported_exports(
     path: &str,
+    package: &str,
     import_paths: &[std::path::PathBuf],
-) -> Result<HashMap<String, DataType>, String> {
+) -> Result<ImportedExports, String> {
     let source_path = resolve_import_path(path, import_paths)?;
     let source = std::fs::read_to_string(&source_path)
         .map_err(|err| format!("cannot read '{}': {err}", source_path.display()))?;
     let ast = crate::parser::parse(tokenize(source.chars()));
     let callable_types = imported_callable_types(&ast);
+    let local_type_names = ast
+        .iter()
+        .map(|node| match node {
+            ASTNode::Public(declaration) => declaration.as_ref(),
+            declaration => declaration,
+        })
+        .filter_map(|node| match node {
+            ASTNode::StructDefinition { name, .. } | ASTNode::EnumDefinition { name, .. } => {
+                Some(*name)
+            }
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
     let mut exports = HashMap::new();
+    let mut types = HashMap::new();
     for node in ast {
         let ASTNode::Public(declaration) = node else {
             continue;
@@ -72,11 +92,17 @@ fn imported_exports(
                         Box::leak(
                             parameters
                                 .into_iter()
-                                .map(|(_, data_type)| data_type)
+                                .map(|(_, data_type)| {
+                                    qualify_imported_type(data_type, package, &local_type_names)
+                                })
                                 .collect::<Vec<_>>()
                                 .into_boxed_slice(),
                         ),
-                        Box::leak(Box::new(return_type)),
+                        Box::leak(Box::new(qualify_imported_type(
+                            return_type,
+                            package,
+                            &local_type_names,
+                        ))),
                     ),
                 );
             }
@@ -92,11 +118,17 @@ fn imported_exports(
                         Box::leak(
                             parameters
                                 .into_iter()
-                                .map(|(_, data_type)| data_type)
+                                .map(|(_, data_type)| {
+                                    qualify_imported_type(data_type, package, &local_type_names)
+                                })
                                 .collect::<Vec<_>>()
                                 .into_boxed_slice(),
                         ),
-                        Box::leak(Box::new(return_type)),
+                        Box::leak(Box::new(qualify_imported_type(
+                            return_type,
+                            package,
+                            &local_type_names,
+                        ))),
                     ),
                 );
             }
@@ -109,7 +141,10 @@ fn imported_exports(
                     .or_else(|| callable_types.get(&name).copied())
                     .or_else(|| imported_literal_type(&value))
                 {
-                    exports.insert(name, data_type);
+                    exports.insert(
+                        name,
+                        qualify_imported_type(data_type, package, &local_type_names),
+                    );
                 }
             }
             ASTNode::VariableDefinition {
@@ -118,13 +153,155 @@ fn imported_exports(
                 value,
             } => {
                 if let Some(data_type) = data_type.or_else(|| imported_literal_type(&value)) {
-                    exports.insert(name, data_type);
+                    exports.insert(
+                        name,
+                        qualify_imported_type(data_type, package, &local_type_names),
+                    );
                 }
+            }
+            ASTNode::StructDefinition {
+                name,
+                fields,
+                methods,
+            } => {
+                let qualified_name: &'static str =
+                    Box::leak(format!("{package}.{name}").into_boxed_str());
+                exports.insert(name.to_string(), DataType::Struct(qualified_name));
+                types.insert(
+                    qualified_name,
+                    StructInfo {
+                        fields: fields
+                            .into_iter()
+                            .map(|(field_name, data_type, default, mutable)| {
+                                (
+                                    field_name,
+                                    FieldInfo {
+                                        data_type: qualify_imported_type(
+                                            data_type,
+                                            package,
+                                            &local_type_names,
+                                        ),
+                                        default,
+                                        mutable,
+                                    },
+                                )
+                            })
+                            .collect(),
+                        variants: HashMap::new(),
+                        methods: methods
+                            .into_iter()
+                            .map(|method| {
+                                let parameters = method
+                                    .parameters
+                                    .into_iter()
+                                    .map(|(_, data_type)| {
+                                        resolve_self(
+                                            qualify_imported_type(
+                                                data_type,
+                                                package,
+                                                &local_type_names,
+                                            ),
+                                            qualified_name,
+                                        )
+                                    })
+                                    .collect();
+                                let return_type = resolve_self(
+                                    qualify_imported_type(
+                                        method.return_type,
+                                        package,
+                                        &local_type_names,
+                                    ),
+                                    qualified_name,
+                                );
+                                (
+                                    method.name,
+                                    Function {
+                                        parameters,
+                                        return_type,
+                                    },
+                                )
+                            })
+                            .collect(),
+                    },
+                );
+            }
+            ASTNode::EnumDefinition { name, variants } => {
+                let qualified_name: &'static str =
+                    Box::leak(format!("{package}.{name}").into_boxed_str());
+                exports.insert(name.to_string(), DataType::Enum(qualified_name));
+                types.insert(
+                    qualified_name,
+                    StructInfo {
+                        fields: HashMap::new(),
+                        variants: variants
+                            .into_iter()
+                            .map(|(variant, payload)| {
+                                (
+                                    variant,
+                                    payload.map(|data_type| {
+                                        qualify_imported_type(data_type, package, &local_type_names)
+                                    }),
+                                )
+                            })
+                            .collect(),
+                        methods: HashMap::new(),
+                    },
+                );
             }
             _ => {}
         }
     }
-    Ok(exports)
+    Ok(ImportedExports {
+        values: exports,
+        types,
+    })
+}
+
+fn qualify_imported_type(
+    data_type: DataType,
+    package: &str,
+    local_type_names: &HashSet<&'static str>,
+) -> DataType {
+    match data_type {
+        DataType::Struct(name) if local_type_names.contains(name) => {
+            DataType::Struct(Box::leak(format!("{package}.{name}").into_boxed_str()))
+        }
+        DataType::Enum(name) if local_type_names.contains(name) => {
+            DataType::Enum(Box::leak(format!("{package}.{name}").into_boxed_str()))
+        }
+        DataType::Array(length, element) => DataType::Array(
+            length,
+            Box::leak(Box::new(qualify_imported_type(
+                *element,
+                package,
+                local_type_names,
+            ))),
+        ),
+        DataType::Slice(element) => DataType::Slice(Box::leak(Box::new(qualify_imported_type(
+            *element,
+            package,
+            local_type_names,
+        )))),
+        DataType::Pointer(element) => DataType::Pointer(Box::leak(Box::new(
+            qualify_imported_type(*element, package, local_type_names),
+        ))),
+        DataType::Function(parameters, result) => DataType::Function(
+            Box::leak(
+                parameters
+                    .iter()
+                    .copied()
+                    .map(|parameter| qualify_imported_type(parameter, package, local_type_names))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
+            Box::leak(Box::new(qualify_imported_type(
+                *result,
+                package,
+                local_type_names,
+            ))),
+        ),
+        other => other,
+    }
 }
 
 fn imported_callable_types(nodes: &[ASTNode]) -> HashMap<String, DataType> {
@@ -260,9 +437,9 @@ pub(crate) fn check_with_import_paths(
 
     for node in nodes {
         if let ASTNode::Import { alias, path } = node {
-            match imported_exports(path, import_paths) {
+            match imported_exports(path, alias, import_paths) {
                 Ok(exports) => {
-                    for (name, data_type) in exports {
+                    for (name, data_type) in exports.values {
                         scopes[0].insert(
                             format!("{alias}.{name}"),
                             Symbol {
@@ -270,6 +447,9 @@ pub(crate) fn check_with_import_paths(
                                 mutable: false,
                             },
                         );
+                    }
+                    for (name, info) in exports.types {
+                        structs.insert(name, info);
                     }
                 }
                 Err(message) => errors.push(error(format!("import '{path}': {message}"))),

@@ -365,6 +365,31 @@ fn imports_public_scalar_constants_with_their_types() {
 }
 
 #[test]
+fn imports_public_structs_and_enums_with_package_qualified_types() {
+    let path = std::env::temp_dir().join(format!("mimi_import_types_{}.mimi", std::process::id()));
+    std::fs::write(
+        &path,
+        "pub Point :: struct { x : i32, y : i32 } pub Choice :: enum { first, second(i32) } Secret :: struct { value : i32 } pub get_x :: fn(point : Point)i32 { point.x }",
+    )
+    .unwrap();
+    let source = format!(
+        "geom :: @import(\"{}\") point : geom.Point = geom.Point {{ x=19, y=23 }} choice : geom.Choice = second(7) result := geom.get_x(point)",
+        path.display()
+    );
+    let types = check(&parse(tokenize(source.chars()))).unwrap();
+    assert_eq!(types["point"], DataType::Struct("geom.Point"));
+    assert_eq!(types["choice"], DataType::Struct("geom.Choice"));
+    assert_eq!(types["result"], DataType::I32);
+
+    let source = format!(
+        "geom :: @import(\"{}\") point : geom.Secret = geom.Secret {{ value=1 }}",
+        path.display()
+    );
+    assert!(check(&parse(tokenize(source.chars()))).is_err());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn rejects_slice_return_types_for_external_functions() {
     let ast = parse(tokenize("extern get_text : fn()[]u8".chars()));
     let errors = check(&ast).unwrap_err();

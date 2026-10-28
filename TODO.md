@@ -73,7 +73,7 @@ and focused regression coverage; it does not imply support on every target.
     - [x] Inline imported public integer, float, and boolean literal constants.
     - [x] Import public external declarations for direct calls, with package-qualified visibility and original link symbols.
     - [x] Load imported external function addresses through target-specific GOT relocations.
-    - [ ] Import exported types and enforce type visibility.
+    - [x] Import exported types and enforce type visibility.
     - [ ] Lower and link exported constants with full visibility checks.
 
 ## Targets and Tooling

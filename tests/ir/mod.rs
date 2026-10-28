@@ -159,6 +159,43 @@ fn builds_and_runs_imported_scalar_constants() {
 }
 
 #[test]
+fn builds_and_runs_imported_struct_types() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let package =
+        std::env::temp_dir().join(format!("mimi_struct_package_{}.mi", std::process::id()));
+    let source = std::env::temp_dir().join(format!("mimi_struct_import_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_struct_codegen_{}", std::process::id()));
+    std::fs::write(
+        &package,
+        "pub Point :: struct { x : i32, y : i32, get_y() :: fn (self : Self) i32 { self.y } } pub Choice :: enum { first, second(i32) } pub get_x :: fn(point : Point)i32 { point.x }",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        format!(
+            "geom :: @import(\"{}\") main :: fn () i32 {{ point : geom.Point = geom.Point {{ x=19, y=23 }} choice : geom.Choice = second(7) geom.get_x(point) + point.get_y() + match choice {{ first => 0, second(value) => value }} }}",
+            package.display()
+        ),
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(49));
+    std::fs::remove_file(package).unwrap();
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn lowers_dynamic_if_else_to_mir_blocks_and_phi() {
     let ast = parse(tokenize(
         "choose :: fn (condition : bool) i32 { value := if condition { 7 } else { 3 } value }"

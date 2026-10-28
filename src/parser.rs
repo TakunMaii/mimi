@@ -566,7 +566,7 @@ where
                 (2, None)
             }
             Some(Token::Identifier(type_name)) => {
-                let data_type = parse_data_type(&type_name);
+                let data_type = parse_named_type(type_name, tokens);
                 match tokens.next() {
                     Some(Token::Equal) => (1, Some(data_type)),
                     Some(Token::Colon) => (2, Some(data_type)),
@@ -883,6 +883,24 @@ fn parse_data_type(name: &str) -> DataType {
     }
 }
 
+fn parse_named_type<I>(first: String, tokens: &mut std::iter::Peekable<I>) -> DataType
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let mut name = first;
+    while matches!(tokens.peek(), Some(Token::Dot)) {
+        tokens.next();
+        match tokens.next() {
+            Some(Token::Identifier(segment)) => {
+                name.push('.');
+                name.push_str(&segment);
+            }
+            _ => panic!("expected type name after '.'"),
+        }
+    }
+    parse_data_type(&name)
+}
+
 fn parse_type<I>(tokens: &mut std::iter::Peekable<I>) -> DataType
 where
     I: Iterator<Item = Token> + Clone,
@@ -939,7 +957,7 @@ where
     }
     match tokens.next() {
         Some(Token::F8) => DataType::F8,
-        Some(Token::Identifier(name)) => parse_data_type(&name),
+        Some(Token::Identifier(name)) => parse_named_type(name, tokens),
         _ => panic!("expected type"),
     }
 }
@@ -1081,6 +1099,10 @@ where
                 tokens.next();
             }
             lhs = Expression::Call { name, arguments };
+        } else if allow_struct_literal
+            && let Some(literal) = parse_qualified_struct_literal(&name, tokens)
+        {
+            lhs = literal;
         } else if allow_struct_literal && brace_starts_struct_literal(tokens) {
             tokens.next();
             lhs = Expression::StructLiteral {
@@ -1333,6 +1355,42 @@ where
         Some(Token::Identifier(_)) => matches!(lookahead.next(), Some(Token::Equal)),
         _ => false,
     }
+}
+
+fn parse_qualified_struct_literal<I>(
+    first: &str,
+    tokens: &mut std::iter::Peekable<I>,
+) -> Option<Expression>
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let mut lookahead = tokens.clone();
+    let mut segments = 0;
+    while matches!(lookahead.peek(), Some(Token::Dot)) {
+        lookahead.next();
+        if !matches!(lookahead.next(), Some(Token::Identifier(_))) {
+            return None;
+        }
+        segments += 1;
+    }
+    if segments == 0 || !brace_starts_struct_literal(&lookahead) {
+        return None;
+    }
+
+    let mut type_name = first.to_string();
+    while matches!(tokens.peek(), Some(Token::Dot)) {
+        tokens.next();
+        let Some(Token::Identifier(segment)) = tokens.next() else {
+            unreachable!();
+        };
+        type_name.push('.');
+        type_name.push_str(&segment);
+    }
+    tokens.next();
+    Some(Expression::StructLiteral {
+        type_name: Some(Box::leak(type_name.into_boxed_str())),
+        fields: parse_struct_fields(tokens),
+    })
 }
 
 fn parse_struct_fields<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<(String, Expression)>

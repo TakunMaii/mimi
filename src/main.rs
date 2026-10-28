@@ -129,6 +129,18 @@ fn collect_imported_functions(
         let source = std::fs::read_to_string(&source_path)
             .map_err(|error| format!("cannot read '{}': {error}", source_path.display()))?;
         let module_nodes = parser::parse(lexer::tokenize(source.chars()));
+        let local_type_names = module_nodes
+            .iter()
+            .map(|node| match node {
+                parser::ASTNode::Public(declaration) => declaration.as_ref(),
+                declaration => declaration,
+            })
+            .filter_map(|node| match node {
+                parser::ASTNode::StructDefinition { name, .. }
+                | parser::ASTNode::EnumDefinition { name, .. } => Some(name.to_string()),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
         let mut module_paths = import_paths.to_vec();
         if let Some(parent) = source_path.parent()
             && !module_paths.iter().any(|path| path == parent)
@@ -154,7 +166,8 @@ fn collect_imported_functions(
                 declaration => declaration,
             };
             if let parser::ASTNode::FunctionDefinition { name, .. } = declaration {
-                let mut function = declaration.clone();
+                let mut function =
+                    qualify_imported_node(declaration.clone(), &package, &local_type_names);
                 if let parser::ASTNode::FunctionDefinition {
                     name: function_name,
                     ..
@@ -165,7 +178,8 @@ fn collect_imported_functions(
                 output.push(function);
             }
             if let parser::ASTNode::ExternalFunction { name, .. } = declaration {
-                let mut external = declaration.clone();
+                let mut external =
+                    qualify_imported_node(declaration.clone(), &package, &local_type_names);
                 if let parser::ASTNode::ExternalFunction {
                     name: imported_name,
                     link_name,
@@ -187,7 +201,8 @@ fn collect_imported_functions(
                         if matches!(inner.as_ref(), parser::Expression::LiteralNumber(_))
                 ))
             {
-                let mut constant = declaration.clone();
+                let mut constant =
+                    qualify_imported_node(declaration.clone(), &package, &local_type_names);
                 if let parser::ASTNode::CompileTimeConstant {
                     name: imported_name,
                     ..
@@ -197,12 +212,314 @@ fn collect_imported_functions(
                 }
                 output.push(constant);
             }
+            if matches!(
+                declaration,
+                parser::ASTNode::StructDefinition { .. } | parser::ASTNode::EnumDefinition { .. }
+            ) {
+                output.push(qualify_imported_node(
+                    declaration.clone(),
+                    &package,
+                    &local_type_names,
+                ));
+            }
         }
         output.extend(imported_function_aliases(&module_nodes, &package));
         collect_imported_functions(&module_nodes, &module_paths, &package, visiting, output)?;
         visiting.remove(&visit_key);
     }
     Ok(())
+}
+
+fn qualify_imported_type(
+    data_type: parser::DataType,
+    package: &str,
+    local_type_names: &std::collections::HashSet<String>,
+) -> parser::DataType {
+    match data_type {
+        parser::DataType::Struct(name) if local_type_names.contains(name) => {
+            parser::DataType::Struct(Box::leak(format!("{package}.{name}").into_boxed_str()))
+        }
+        parser::DataType::Enum(name) if local_type_names.contains(name) => {
+            parser::DataType::Enum(Box::leak(format!("{package}.{name}").into_boxed_str()))
+        }
+        parser::DataType::Array(length, element) => parser::DataType::Array(
+            length,
+            Box::leak(Box::new(qualify_imported_type(
+                *element,
+                package,
+                local_type_names,
+            ))),
+        ),
+        parser::DataType::Slice(element) => parser::DataType::Slice(Box::leak(Box::new(
+            qualify_imported_type(*element, package, local_type_names),
+        ))),
+        parser::DataType::Pointer(element) => parser::DataType::Pointer(Box::leak(Box::new(
+            qualify_imported_type(*element, package, local_type_names),
+        ))),
+        parser::DataType::Function(parameters, result) => parser::DataType::Function(
+            Box::leak(
+                parameters
+                    .iter()
+                    .copied()
+                    .map(|parameter| qualify_imported_type(parameter, package, local_type_names))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
+            Box::leak(Box::new(qualify_imported_type(
+                *result,
+                package,
+                local_type_names,
+            ))),
+        ),
+        other => other,
+    }
+}
+
+fn qualify_imported_node(
+    mut node: parser::ASTNode,
+    package: &str,
+    local_type_names: &std::collections::HashSet<String>,
+) -> parser::ASTNode {
+    use parser::ASTNode;
+    match &mut node {
+        ASTNode::VariableDefinition {
+            data_type, value, ..
+        }
+        | ASTNode::CompileTimeConstant {
+            data_type, value, ..
+        } => {
+            *data_type = data_type.map(|ty| qualify_imported_type(ty, package, local_type_names));
+            qualify_imported_expression(value, package, local_type_names);
+        }
+        ASTNode::Assignment { value, .. } | ASTNode::Expression(value) => {
+            qualify_imported_expression(value, package, local_type_names);
+        }
+        ASTNode::IndexAssignment {
+            object,
+            index,
+            value,
+        } => {
+            qualify_imported_expression(object, package, local_type_names);
+            qualify_imported_expression(index, package, local_type_names);
+            qualify_imported_expression(value, package, local_type_names);
+        }
+        ASTNode::PointerAssignment { pointer, value } => {
+            qualify_imported_expression(pointer, package, local_type_names);
+            qualify_imported_expression(value, package, local_type_names);
+        }
+        ASTNode::MemberAssignment { object, value, .. } => {
+            qualify_imported_expression(object, package, local_type_names);
+            qualify_imported_expression(value, package, local_type_names);
+        }
+        ASTNode::FunctionDefinition {
+            parameters,
+            return_type,
+            body,
+            ..
+        } => {
+            for (_, ty) in parameters {
+                *ty = qualify_imported_type(*ty, package, local_type_names);
+            }
+            *return_type = qualify_imported_type(*return_type, package, local_type_names);
+            qualify_imported_expression(body, package, local_type_names);
+        }
+        ASTNode::ExternalFunction {
+            parameters,
+            return_type,
+            ..
+        } => {
+            for (_, ty) in parameters {
+                *ty = qualify_imported_type(*ty, package, local_type_names);
+            }
+            *return_type = qualify_imported_type(*return_type, package, local_type_names);
+        }
+        ASTNode::Return(value) => {
+            if let Some(value) = value {
+                qualify_imported_expression(value, package, local_type_names);
+            }
+        }
+        ASTNode::StructDefinition {
+            name,
+            fields,
+            methods,
+        } => {
+            *name = Box::leak(format!("{package}.{name}").into_boxed_str());
+            for (_, ty, default, _) in fields {
+                *ty = qualify_imported_type(*ty, package, local_type_names);
+                if let Some(default) = default {
+                    qualify_imported_expression(default, package, local_type_names);
+                }
+            }
+            for method in methods {
+                for (_, ty) in &mut method.parameters {
+                    *ty = qualify_imported_type(*ty, package, local_type_names);
+                }
+                method.return_type =
+                    qualify_imported_type(method.return_type, package, local_type_names);
+                qualify_imported_expression(&mut method.body, package, local_type_names);
+            }
+        }
+        ASTNode::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            qualify_imported_expression(condition, package, local_type_names);
+            qualify_imported_expression(then_branch, package, local_type_names);
+            if let Some(branch) = else_branch {
+                qualify_imported_expression(branch, package, local_type_names);
+            }
+        }
+        ASTNode::While { condition, body } | ASTNode::DoWhile { body, condition } => {
+            qualify_imported_expression(condition, package, local_type_names);
+            qualify_imported_expression(body, package, local_type_names);
+        }
+        ASTNode::For { iterable, body, .. } => {
+            qualify_imported_expression(iterable, package, local_type_names);
+            qualify_imported_expression(body, package, local_type_names);
+        }
+        ASTNode::Loop { body } | ASTNode::Defer { body } => {
+            qualify_imported_expression(body, package, local_type_names);
+        }
+        ASTNode::EnumDefinition { name, variants } => {
+            *name = Box::leak(format!("{package}.{name}").into_boxed_str());
+            for (_, payload) in variants {
+                *payload = payload.map(|ty| qualify_imported_type(ty, package, local_type_names));
+            }
+        }
+        ASTNode::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            qualify_imported_expression(value, package, local_type_names);
+            qualify_imported_expression(then_branch, package, local_type_names);
+            if let Some(branch) = else_branch {
+                qualify_imported_expression(branch, package, local_type_names);
+            }
+        }
+        ASTNode::Public(declaration) => {
+            **declaration =
+                qualify_imported_node((**declaration).clone(), package, local_type_names);
+        }
+        ASTNode::Break | ASTNode::Continue | ASTNode::Import { .. } => {}
+    }
+    node
+}
+
+fn qualify_imported_expression(
+    expression: &mut parser::Expression,
+    package: &str,
+    local_type_names: &std::collections::HashSet<String>,
+) {
+    use parser::Expression;
+    match expression {
+        Expression::Negate(inner)
+        | Expression::Not(inner)
+        | Expression::AddressOf(inner)
+        | Expression::Dereference(inner) => {
+            qualify_imported_expression(inner, package, local_type_names);
+        }
+        Expression::Add(lhs, rhs)
+        | Expression::Subtract(lhs, rhs)
+        | Expression::Multiply(lhs, rhs)
+        | Expression::Divide(lhs, rhs)
+        | Expression::Remainder(lhs, rhs)
+        | Expression::Equal(lhs, rhs)
+        | Expression::NotEqual(lhs, rhs)
+        | Expression::LessThan(lhs, rhs)
+        | Expression::LessThanOrEqual(lhs, rhs)
+        | Expression::GreaterThan(lhs, rhs)
+        | Expression::GreaterThanOrEqual(lhs, rhs)
+        | Expression::And(lhs, rhs)
+        | Expression::Or(lhs, rhs) => {
+            qualify_imported_expression(lhs, package, local_type_names);
+            qualify_imported_expression(rhs, package, local_type_names);
+        }
+        Expression::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            qualify_imported_expression(condition, package, local_type_names);
+            qualify_imported_expression(then_branch, package, local_type_names);
+            qualify_imported_expression(else_branch, package, local_type_names);
+        }
+        Expression::Block(nodes) => {
+            for node in nodes {
+                *node = qualify_imported_node(node.clone(), package, local_type_names);
+            }
+        }
+        Expression::Call { arguments, .. } => {
+            for argument in arguments {
+                qualify_imported_expression(argument, package, local_type_names);
+            }
+        }
+        Expression::CallValue { callee, arguments } => {
+            qualify_imported_expression(callee, package, local_type_names);
+            for argument in arguments {
+                qualify_imported_expression(argument, package, local_type_names);
+            }
+        }
+        Expression::StructLiteral { type_name, fields } => {
+            if let Some(name) = type_name
+                && local_type_names.contains(*name)
+            {
+                *name = Box::leak(format!("{package}.{name}").into_boxed_str());
+            }
+            for (_, value) in fields {
+                qualify_imported_expression(value, package, local_type_names);
+            }
+        }
+        Expression::MemberAccess { object, .. } => {
+            qualify_imported_expression(object, package, local_type_names);
+        }
+        Expression::ArrayLiteral(values) => {
+            for value in values {
+                qualify_imported_expression(value, package, local_type_names);
+            }
+        }
+        Expression::Index { object, index } => {
+            qualify_imported_expression(object, package, local_type_names);
+            qualify_imported_expression(index, package, local_type_names);
+        }
+        Expression::Slice { object, start, end } => {
+            qualify_imported_expression(object, package, local_type_names);
+            if let Some(start) = start {
+                qualify_imported_expression(start, package, local_type_names);
+            }
+            if let Some(end) = end {
+                qualify_imported_expression(end, package, local_type_names);
+            }
+        }
+        Expression::Match { value, arms } => {
+            qualify_imported_expression(value, package, local_type_names);
+            for (_, expression) in arms {
+                qualify_imported_expression(expression, package, local_type_names);
+            }
+        }
+        Expression::Lambda {
+            parameters,
+            return_type,
+            body,
+        } => {
+            for (_, ty) in parameters {
+                *ty = qualify_imported_type(*ty, package, local_type_names);
+            }
+            *return_type = qualify_imported_type(*return_type, package, local_type_names);
+            qualify_imported_expression(body, package, local_type_names);
+        }
+        Expression::StaticAccess { type_name, .. } => {
+            if local_type_names.contains(type_name) {
+                *type_name = format!("{package}.{type_name}");
+            }
+        }
+        Expression::Identifier(_)
+        | Expression::LiteralNumber(_)
+        | Expression::LiteralString(_)
+        | Expression::LiteralBool(_) => {}
+    }
 }
 
 fn imported_function_aliases(nodes: &[parser::ASTNode], package: &str) -> Vec<parser::ASTNode> {
