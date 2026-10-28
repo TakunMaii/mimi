@@ -119,7 +119,7 @@ fn emit_function(
                 } else if let Some(value) = value {
                     if let HirType::Float { bits } = function.result {
                         load_value(assembly, function, *value, "rax")?;
-                        load_float_bits_to_xmm(assembly, "rax", 0, bits)?;
+                        load_float_abi_bits_to_xmm(assembly, "rax", 0, bits)?;
                     } else {
                         load_value(assembly, function, *value, "rax")?;
                     }
@@ -447,7 +447,7 @@ fn emit_call(
     }
     for (index, (argument, width)) in float_args.iter().enumerate() {
         load_value(assembly, function, args[*argument], "rax")?;
-        load_float_bits_to_xmm(assembly, "rax", index, *width)?;
+        load_float_abi_bits_to_xmm(assembly, "rax", index, *width)?;
     }
     if let Some(name) = direct_name {
         assembly.push_str(&format!("    call {name}\n"));
@@ -462,7 +462,7 @@ fn emit_call(
         store_value(assembly, function, length, "rdx")?;
     } else if let Some(result) = result {
         if let Some(width) = result_float {
-            load_float_bits_from_xmm(assembly, 0, width, "rax")?;
+            load_float_abi_bits_from_xmm(assembly, 0, width, "rax")?;
         }
         store_value(assembly, function, result, "rax")?;
     }
@@ -559,6 +559,21 @@ fn load_float_bits_to_xmm(
     Ok(())
 }
 
+fn load_float_abi_bits_to_xmm(
+    assembly: &mut String,
+    gpr: &str,
+    xmm: usize,
+    width: u16,
+) -> Result<(), String> {
+    let low = dword_register(gpr)?;
+    match width {
+        16 | 32 => assembly.push_str(&format!("    movd xmm{xmm}, {low}\n")),
+        64 => assembly.push_str(&format!("    movq xmm{xmm}, {gpr}\n")),
+        _ => return Err(format!("unsupported x86_64 float ABI width {width}")),
+    }
+    Ok(())
+}
+
 fn load_float_bits_from_xmm(
     assembly: &mut String,
     xmm: usize,
@@ -571,6 +586,22 @@ fn load_float_bits_from_xmm(
         32 => assembly.push_str(&format!("    movd {low}, xmm{xmm}\n")),
         64 => assembly.push_str(&format!("    movq {gpr}, xmm{xmm}\n")),
         _ => return Err(format!("unsupported x86_64 float width {width}")),
+    }
+    Ok(())
+}
+
+fn load_float_abi_bits_from_xmm(
+    assembly: &mut String,
+    xmm: usize,
+    width: u16,
+    gpr: &str,
+) -> Result<(), String> {
+    let low = dword_register(gpr)?;
+    match width {
+        16 => assembly.push_str(&format!("    pextrw {low}, xmm{xmm}, 0\n")),
+        32 => assembly.push_str(&format!("    movd {low}, xmm{xmm}\n")),
+        64 => assembly.push_str(&format!("    movq {gpr}, xmm{xmm}\n")),
+        _ => return Err(format!("unsupported x86_64 float ABI width {width}")),
     }
     Ok(())
 }

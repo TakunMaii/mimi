@@ -1569,6 +1569,10 @@ fn builds_x86_64_arrays_slices_pointers_and_loops() {
             "result :: enum { some(i32), none } make :: fn (value : i32) result { some(value) } main :: fn () i32 { match make(7) { some(value) => value - 7, none => 1 } }",
             0,
         ),
+        (
+            "mix :: fn (a : i32, b : f16, c : i32, d : f32, e : i32, f : f64, g : i32, h : f16, i : i32, j : f32, k : i32, l : f64, m : i32) i32 { a * 1000000 + c * 100000 + e * 10000 + g * 1000 + i * 100 + k * 10 + m + if b == 1.5 && d == 2.0 && f == 3.0 && h == 2.5 && j == 3.0 && l == 4.0 { 0 } else { 1 } } apply :: fn (function : fn(i32,f16,i32,f32,i32,f64,i32,f16,i32,f32,i32,f64,i32)i32) i32 { function(1, 1.5, 2, 2.0, 3, 3.0, 4, 2.5, 5, 3.0, 6, 4.0, 7) } main :: fn () i32 { apply(mix) - 1234567 }",
+            0,
+        ),
     ] {
         std::fs::write(&source, program).unwrap();
         build_file_for_target(
