@@ -150,6 +150,10 @@ pub(crate) enum LirInstruction {
         address: ValueId,
         value: ValueId,
     },
+    StoreByteIndirect {
+        address: ValueId,
+        value: ValueId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -383,6 +387,12 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                         }
                         MirInstruction::StoreIndirect { address, value } => {
                             LirInstruction::StoreIndirect {
+                                address: *address,
+                                value: *value,
+                            }
+                        }
+                        MirInstruction::StoreByteIndirect { address, value } => {
+                            LirInstruction::StoreByteIndirect {
                                 address: *address,
                                 value: *value,
                             }

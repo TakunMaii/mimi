@@ -197,7 +197,8 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 LirInstruction::IndexAddress { .. }
                 | LirInstruction::LoadIndirect { .. }
                 | LirInstruction::LoadByteIndirect { .. }
-                | LirInstruction::StoreIndirect { .. } => 1,
+                | LirInstruction::StoreIndirect { .. }
+                | LirInstruction::StoreByteIndirect { .. } => 1,
                 LirInstruction::Not { .. } => 2,
                 LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
                 LirInstruction::FloatCompare { .. } => 4,
@@ -634,6 +635,9 @@ fn encode_function(
                 LirInstruction::StoreIndirect { address, value } => {
                     0xf900_0000 | (address.0 << 5) | value.0
                 }
+                LirInstruction::StoreByteIndirect { address, value } => {
+                    0x3900_0000 | (address.0 << 5) | value.0
+                }
                 LirInstruction::StoreSlot { slot, value } => {
                     let offset = slot.0 * 8;
                     if offset > 32760 {
@@ -908,7 +912,8 @@ fn block_encoded_size(
             LirInstruction::IndexAddress { .. }
             | LirInstruction::LoadIndirect { .. }
             | LirInstruction::LoadByteIndirect { .. }
-            | LirInstruction::StoreIndirect { .. } => 1,
+            | LirInstruction::StoreIndirect { .. }
+            | LirInstruction::StoreByteIndirect { .. } => 1,
             LirInstruction::Not { .. } => 2,
             LirInstruction::Rem { .. } | LirInstruction::Compare { .. } => 2,
             LirInstruction::FloatCompare { .. } => 4,
@@ -1067,7 +1072,8 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
             destination,
             address,
         } => vec![*destination, *address],
-        LirInstruction::StoreIndirect { address, value } => vec![*address, *value],
+        LirInstruction::StoreIndirect { address, value }
+        | LirInstruction::StoreByteIndirect { address, value } => vec![*address, *value],
         LirInstruction::Call {
             result,
             result_slice_length,
@@ -1764,6 +1770,9 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                 } => assembly.push_str(&format!("    ldrb w{}, [x{}]\n", destination.0, address.0)),
                 LirInstruction::StoreIndirect { address, value } => {
                     assembly.push_str(&format!("    str x{}, [x{}]\n", value.0, address.0))
+                }
+                LirInstruction::StoreByteIndirect { address, value } => {
+                    assembly.push_str(&format!("    strb w{}, [x{}]\n", value.0, address.0))
                 }
             }
         }

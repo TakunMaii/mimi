@@ -30,7 +30,9 @@ and focused regression coverage; it does not imply support on every target.
 - [ ] Add target-aware enum layouts for payloads larger than one machine word and value returns.
 - [x] Implement fixed-size scalar array literals, stack layout, indexing, and reads.
 - [x] Store indexed elements in fixed-size scalar arrays.
-- [ ] Support array element layouts beyond the current 64-bit scalar slots, including byte arrays across slice boundaries.
+- [ ] Support array element layouts beyond the current 64-bit scalar slots.
+  - [x] Pack `u8` arrays and support byte reads and writes across slot and slice boundaries.
+  - [ ] Pack and align other element widths according to their target layouts.
 - [x] Represent local slices with pointer/length slots; support indexing, slicing, and parameter passing.
 - [x] Lower local slice reassignment with updated pointer, length, and element scale.
 - [x] Return slices from Mimi functions as pointer in x0 and length in x1; reject C extern slice returns.

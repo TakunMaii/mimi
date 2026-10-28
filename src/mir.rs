@@ -159,6 +159,10 @@ pub(crate) enum MirInstruction {
         address: ValueId,
         value: ValueId,
     },
+    StoreByteIndirect {
+        address: ValueId,
+        value: ValueId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -327,20 +331,63 @@ impl Builder {
                     }
                     _ => None,
                 };
+                let packed_bytes = matches!(
+                    expected_element.as_ref(),
+                    Some(HirType::Integer {
+                        bits: 8,
+                        signed: false
+                    })
+                );
                 let base = self.slot();
-                self.next_slot += values.len().saturating_sub(1) as u32;
+                let slot_count = if packed_bytes {
+                    values.len().div_ceil(8)
+                } else {
+                    values.len()
+                };
+                self.next_slot += slot_count.saturating_sub(1) as u32;
+                let packed_base = if packed_bytes {
+                    let address = self.value();
+                    self.emit(MirInstruction::SlotAddress {
+                        result: address,
+                        slot: base,
+                    });
+                    Some(address)
+                } else {
+                    None
+                };
                 for (index, expression) in values.iter().enumerate() {
                     let value = match expected_element.as_ref() {
                         Some(data_type) => self.expression_expected(expression, data_type)?,
                         None => self.expression(expression)?,
                     };
-                    self.emit(MirInstruction::StoreSlot {
-                        slot: SlotId(base.0 + index as u32),
-                        value,
-                    });
+                    if let Some(base) = packed_base {
+                        let index_value = self.value();
+                        self.emit(MirInstruction::ConstInt {
+                            result: index_value,
+                            value: index as i128,
+                        });
+                        let address = self.value();
+                        self.emit(MirInstruction::IndexAddress {
+                            result: address,
+                            base,
+                            index: index_value,
+                            scale: 1,
+                        });
+                        self.emit(MirInstruction::StoreByteIndirect { address, value });
+                    } else {
+                        self.emit(MirInstruction::StoreSlot {
+                            slot: SlotId(base.0 + index as u32),
+                            value,
+                        });
+                    }
                 }
-                let result = self.value();
-                self.emit(MirInstruction::SlotAddress { result, slot: base });
+                let result = if let Some(base) = packed_base {
+                    base
+                } else {
+                    let result = self.value();
+                    self.emit(MirInstruction::SlotAddress { result, slot: base });
+                    result
+                };
                 if matches!(self.expected_type_hint.as_ref(), Some(HirType::Slice(_))) {
                     let length = self.value();
                     self.emit(MirInstruction::ConstInt {
@@ -407,7 +454,12 @@ impl Builder {
             Expression::Dereference(pointer) => {
                 let address = self.expression(pointer)?;
                 let result = self.value();
-                self.emit(MirInstruction::LoadIndirect { result, address });
+                if matches!(self.expression_type(pointer), Some(HirType::Pointer(inner)) if matches!(*inner, HirType::Integer { bits: 8, signed: false }))
+                {
+                    self.emit(MirInstruction::LoadByteIndirect { result, address });
+                } else {
+                    self.emit(MirInstruction::LoadIndirect { result, address });
+                }
                 Some(result)
             }
             Expression::StructLiteral { type_name, fields } => {
@@ -1081,7 +1133,11 @@ impl Builder {
                                     index,
                                     scale,
                                 });
-                                self.emit(MirInstruction::StoreIndirect { address, value });
+                                if scale == 1 {
+                                    self.emit(MirInstruction::StoreByteIndirect { address, value });
+                                } else {
+                                    self.emit(MirInstruction::StoreIndirect { address, value });
+                                }
                             }
                             crate::parser::ASTNode::PointerAssignment { pointer, value } => {
                                 let address = self.expression(pointer)?;
@@ -1095,7 +1151,17 @@ impl Builder {
                                     }
                                     None => self.expression(value)?,
                                 };
-                                self.emit(MirInstruction::StoreIndirect { address, value });
+                                if matches!(
+                                    expected_type,
+                                    Some(HirType::Integer {
+                                        bits: 8,
+                                        signed: false
+                                    })
+                                ) {
+                                    self.emit(MirInstruction::StoreByteIndirect { address, value });
+                                } else {
+                                    self.emit(MirInstruction::StoreIndirect { address, value });
+                                }
                             }
                             crate::parser::ASTNode::MemberAssignment {
                                 object,
@@ -1816,8 +1882,14 @@ impl Builder {
             Expression::Identifier(name) => self
                 .slice_scales
                 .get(name)
-                .or_else(|| self.pointer_scales.get(name))
                 .copied()
+                .or_else(|| self.pointer_scales.get(name).copied())
+                .or_else(|| match self.variable_types.get(name) {
+                    Some(HirType::Array { element, .. }) => {
+                        Some(pointer_scale_from_hir_type(element))
+                    }
+                    _ => None,
+                })
                 .unwrap_or(8),
             Expression::LiteralString(_) => 1,
             _ => 8,
@@ -1859,7 +1931,13 @@ impl Builder {
                     });
                     length
                 };
-                Some((base, length, 8))
+                let scale = match self.expected_type_hint.as_ref() {
+                    Some(HirType::Array { element, .. }) | Some(HirType::Slice(element)) => {
+                        pointer_scale_from_hir_type(element)
+                    }
+                    _ => 8,
+                };
+                Some((base, length, scale))
             }
             Expression::LiteralString(_) => {
                 let base = self.expression(expression)?;
@@ -1887,7 +1965,13 @@ impl Builder {
                         result: length_value,
                         value: length as i128,
                     });
-                    Some((base, length_value, 8))
+                    let scale = match self.variable_types.get(name) {
+                        Some(HirType::Array { element, .. }) => {
+                            pointer_scale_from_hir_type(element)
+                        }
+                        _ => 8,
+                    };
+                    Some((base, length_value, scale))
                 }
             }
             Expression::Slice { object, start, end } => {

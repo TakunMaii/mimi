@@ -555,6 +555,40 @@ fn passes_slice_pointer_and_length_to_functions() {
 }
 
 #[test]
+fn builds_and_runs_u8_arrays_across_slice_boundaries() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_u8_array_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_u8_array_codegen_{}", std::process::id()));
+    for (program, expected) in [
+        (
+            "sum_bytes :: fn (values : []u8) i32 { total := 0 for byte in values { total = total + byte } total } main :: fn () i32 { values : [10]u8 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] values[8] = 20 sum_bytes(values[:]) }",
+            66,
+        ),
+        (
+            "sum_bytes :: fn (values : []u8) i32 { total := 0 for byte in values { total = total + byte } total } main :: fn () i32 { sum_bytes([65, 66, 67]) }",
+            198,
+        ),
+    ] {
+        std::fs::write(&source, program).unwrap();
+        build_file(
+            source.to_str().unwrap(),
+            path.to_str().unwrap(),
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let status = std::process::Command::new(&path).status().unwrap();
+        assert_eq!(status.code(), Some(expected));
+    }
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_slice_return_values() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
