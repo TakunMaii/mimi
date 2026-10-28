@@ -4,6 +4,7 @@ pub(crate) enum Token {
     LiteralString(String),
     LiteralNumber(String),
     LiteralBool(bool),
+    F8,
     Fn,
     Struct,
     Enum,
@@ -70,6 +71,7 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
             result.push(match identifier.as_str() {
                 "true" => Token::LiteralBool(true),
                 "false" => Token::LiteralBool(false),
+                "f8" => Token::F8,
                 "fn" => Token::Fn,
                 "struct" => Token::Struct,
                 "enum" => Token::Enum,

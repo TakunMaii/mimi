@@ -22,6 +22,7 @@ and focused regression coverage; it does not imply support on every target.
 - [ ] Implement floating-point literals, arithmetic, comparisons, and ABI handling.
   - [x] Support f32/f64 scalar literals, arithmetic, comparisons, function arguments, and returns.
   - [x] Support f16 literals, arithmetic, comparisons, function arguments, and returns.
+  - [x] Reserve `f8` as a keyword and retain it as a type placeholder.
   - [ ] Define an f8 encoding and support its lowering and ABI representation.
 - [ ] Define target data layout and ABI rules for all supported value types.
 - [x] Implement 64-bit stack slots, loads/stores, and mutable locals across loops and branches.
@@ -68,6 +69,10 @@ and focused regression coverage; it does not imply support on every target.
 - [ ] Complete package symbol visibility and cross-package linking behavior.
   - [x] Compile imported functions with package-qualified symbols and resolve package-local calls.
   - [ ] Import and link exported types, constants, and external declarations with full visibility checks.
+    - [x] Import public external declarations for direct calls, with package-qualified visibility and original link symbols.
+    - [ ] Load imported external function addresses through target-specific GOT or stub relocations.
+    - [ ] Import exported types and enforce type visibility.
+    - [ ] Lower and link exported constants with full visibility checks.
 
 ## Targets and Tooling
 

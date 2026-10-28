@@ -230,6 +230,7 @@ struct Builder {
     function_slice_params: std::collections::HashMap<String, Vec<bool>>,
     method_targets: std::collections::HashMap<(String, String), MethodTarget>,
     function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
+    external_symbols: std::collections::HashMap<String, String>,
     function_namespace: Option<String>,
     variable_function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
     variable_types: std::collections::HashMap<String, HirType>,
@@ -510,9 +511,10 @@ impl Builder {
                         self.function_signatures.get(&name).cloned()
                     {
                         let result = self.value();
+                        let symbol = self.link_function_name(&name);
                         self.emit(MirInstruction::LoadFunctionAddress {
                             result,
-                            symbol: format!("_{name}"),
+                            symbol: format!("_{symbol}"),
                         });
                         self.value_types.insert(
                             result,
@@ -760,10 +762,11 @@ impl Builder {
                 if let (Some(result), Some(length)) = (result, result_slice_length) {
                     self.slice_value_lengths.insert(result, length);
                 }
+                let symbol = self.link_function_name(&function_name);
                 self.emit(MirInstruction::Call {
                     result,
                     result_slice_length,
-                    name: function_name,
+                    name: symbol,
                     args,
                     float_args,
                     result_float: return_type.as_ref().and_then(float_width),
@@ -786,10 +789,11 @@ impl Builder {
                         if let (Some(result), Some(length)) = (result, result_slice_length) {
                             self.slice_value_lengths.insert(result, length);
                         }
+                        let symbol = self.link_function_name(&name);
                         self.emit(MirInstruction::Call {
                             result,
                             result_slice_length,
-                            name,
+                            name: symbol,
                             args,
                             float_args,
                             result_float: float_width(&return_type),
@@ -2107,6 +2111,13 @@ impl Builder {
         name.to_string()
     }
 
+    fn link_function_name(&self, name: &str) -> String {
+        self.external_symbols
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    }
+
     fn index_scale(&self, object: &Expression) -> u64 {
         match self.expression_type(object) {
             Some(HirType::Pointer(element)) => return self.element_stride(&element),
@@ -2884,6 +2895,7 @@ fn lower_function(
     function_slice_params: &std::collections::HashMap<String, Vec<bool>>,
     method_targets: &std::collections::HashMap<(String, String), MethodTarget>,
     function_signatures: &std::collections::HashMap<String, (Vec<HirType>, HirType)>,
+    external_symbols: &std::collections::HashMap<String, String>,
 ) -> MirFunction {
     let mut builder = Builder {
         next_value: 0,
@@ -2905,6 +2917,7 @@ fn lower_function(
         function_slice_params: function_slice_params.clone(),
         method_targets: method_targets.clone(),
         function_signatures: function_signatures.clone(),
+        external_symbols: external_symbols.clone(),
         function_namespace: function
             .name
             .rsplit_once('.')
@@ -3192,6 +3205,11 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
             )
         }))
         .collect::<std::collections::HashMap<_, _>>();
+    let external_symbols = module
+        .extern_functions
+        .iter()
+        .map(|function| (function.name.clone(), function.link_name.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
     MirModule {
         functions: module
             .functions
@@ -3205,6 +3223,7 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
                     &function_slice_params,
                     &method_targets,
                     &function_signatures,
+                    &external_symbols,
                 )
             })
             .collect(),

@@ -151,6 +151,7 @@ pub(crate) enum ASTNode {
     },
     ExternalFunction {
         name: String,
+        link_name: Option<String>,
         parameters: Vec<(String, DataType)>,
         return_type: DataType,
     },
@@ -306,6 +307,7 @@ where
     let return_type = parse_type(tokens);
     ASTNode::ExternalFunction {
         name,
+        link_name: None,
         parameters,
         return_type,
     }
@@ -571,6 +573,11 @@ where
                     _ => panic!("expected '=' or ':' after type"),
                 }
             }
+            Some(Token::F8) => match tokens.next() {
+                Some(Token::Equal) => (1, Some(DataType::F8)),
+                Some(Token::Colon) => (2, Some(DataType::F8)),
+                _ => panic!("expected '=' or ':' after type"),
+            },
             Some(Token::LeftBracket) => {
                 let mut type_tokens = vec![Token::LeftBracket];
                 while let Some(token) = tokens.next() {
@@ -931,6 +938,7 @@ where
         };
     }
     match tokens.next() {
+        Some(Token::F8) => DataType::F8,
         Some(Token::Identifier(name)) => parse_data_type(&name),
         _ => panic!("expected type"),
     }

@@ -87,6 +87,44 @@ fn builds_and_runs_capture_free_lambdas() {
 }
 
 #[test]
+fn builds_and_runs_imported_external_functions() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let package =
+        std::env::temp_dir().join(format!("mimi_external_package_{}.mi", std::process::id()));
+    let source =
+        std::env::temp_dir().join(format!("mimi_external_import_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_external_codegen_{}", std::process::id()));
+    std::fs::write(
+        &package,
+        "pub extern abs : fn(value : i32)i32 pub call_abs :: fn(value : i32)i32 { abs(value) }",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        format!(
+            "system :: @import(\"{}\") main :: fn () i32 {{ system.abs(-17) + system.call_abs(-2) }}",
+            package.display()
+        ),
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(19));
+    std::fs::remove_file(package).unwrap();
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn lowers_dynamic_if_else_to_mir_blocks_and_phi() {
     let ast = parse(tokenize(
         "choose :: fn (condition : bool) i32 { value := if condition { 7 } else { 3 } value }"

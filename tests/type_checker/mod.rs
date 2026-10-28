@@ -295,6 +295,28 @@ fn treats_string_literals_as_byte_slices_for_extern_calls() {
 }
 
 #[test]
+fn imports_public_external_functions_but_hides_private_ones() {
+    let path = std::env::temp_dir().join(format!("mimi_import_extern_{}.mimi", std::process::id()));
+    std::fs::write(
+        &path,
+        "pub extern abs : fn(value : i32)i32 extern hidden : fn(value : i32)i32",
+    )
+    .unwrap();
+    let source = format!(
+        "system :: @import(\"{}\") result := system.abs(-3)",
+        path.display()
+    );
+    check(&parse(tokenize(source.chars()))).unwrap();
+
+    let source = format!(
+        "system :: @import(\"{}\") result := system.hidden(-3)",
+        path.display()
+    );
+    assert!(check(&parse(tokenize(source.chars()))).is_err());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn rejects_slice_return_types_for_external_functions() {
     let ast = parse(tokenize("extern get_text : fn()[]u8".chars()));
     let errors = check(&ast).unwrap_err();

@@ -164,6 +164,19 @@ fn collect_imported_functions(
                 }
                 output.push(function);
             }
+            if let parser::ASTNode::ExternalFunction { name, .. } = declaration {
+                let mut external = declaration.clone();
+                if let parser::ASTNode::ExternalFunction {
+                    name: imported_name,
+                    link_name,
+                    ..
+                } = &mut external
+                {
+                    *imported_name = format!("{package}.{name}");
+                    *link_name = Some(name.clone());
+                }
+                output.push(external);
+            }
         }
         collect_imported_functions(&module_nodes, &module_paths, &package, visiting, output)?;
         visiting.remove(&visit_key);

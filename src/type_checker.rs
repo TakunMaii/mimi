@@ -79,6 +79,26 @@ fn imported_exports(
                     ),
                 );
             }
+            ASTNode::ExternalFunction {
+                name,
+                parameters,
+                return_type,
+                ..
+            } => {
+                exports.insert(
+                    name,
+                    DataType::Function(
+                        Box::leak(
+                            parameters
+                                .into_iter()
+                                .map(|(_, data_type)| data_type)
+                                .collect::<Vec<_>>()
+                                .into_boxed_slice(),
+                        ),
+                        Box::leak(Box::new(return_type)),
+                    ),
+                );
+            }
             ASTNode::CompileTimeConstant {
                 name,
                 data_type,
@@ -276,6 +296,7 @@ pub(crate) fn check_with_import_paths(
             name,
             parameters,
             return_type,
+            ..
         } = node
         {
             if matches!(return_type, DataType::Slice(_)) {

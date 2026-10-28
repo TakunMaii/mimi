@@ -190,11 +190,25 @@ fn parses_external_function_declarations_with_named_parameters() {
         parse(tokenize("extern print : fn(str : []u8)void".chars())),
         vec![ASTNode::ExternalFunction {
             name: "print".into(),
+            link_name: None,
             parameters: vec![(
                 "str".into(),
                 DataType::Slice(Box::leak(Box::new(DataType::U8))),
             )],
             return_type: DataType::Void,
+        }]
+    );
+}
+
+#[test]
+fn tokenizes_f8_as_a_reserved_keyword() {
+    assert_eq!(tokenize("f8".chars()), vec![Token::F8]);
+    assert_eq!(
+        parse(tokenize("value : f8 = 1".chars())),
+        vec![ASTNode::VariableDefinition {
+            name: "value".into(),
+            data_type: Some(DataType::F8),
+            value: Expression::LiteralNumber("1".into()),
         }]
     );
 }

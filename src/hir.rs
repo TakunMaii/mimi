@@ -79,6 +79,7 @@ pub(crate) struct HirFunction {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct HirExternalFunction {
     pub(crate) name: String,
+    pub(crate) link_name: String,
     pub(crate) params: Vec<HirType>,
     pub(crate) result: HirType,
 }
@@ -130,12 +131,14 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
         }
         if let ASTNode::ExternalFunction {
             name,
+            link_name,
             parameters,
             return_type,
         } = node
         {
             module.extern_functions.push(HirExternalFunction {
                 name: name.clone(),
+                link_name: link_name.clone().unwrap_or_else(|| name.clone()),
                 params: parameters.iter().map(|(_, ty)| (*ty).into()).collect(),
                 result: (*return_type).into(),
             });
