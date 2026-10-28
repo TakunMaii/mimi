@@ -95,3 +95,4 @@ and focused regression coverage; it does not imply support on every target.
   - [x] Run x86_64 fixed arrays, pointer writes, slices, loops, aggregate values, and payload enums on x86_64 hosts.
   - [x] Exercise mixed integer/float indirect-call arguments, stack-passed integer arguments, and f16 ABI values on x86_64.
   - [x] Link an x86_64 Mimi executable with the C print library and verify its output.
+  - [x] Run do-while, loop defer/break/continue, function constant aliases, and static method values on x86_64.

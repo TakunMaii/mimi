@@ -1639,6 +1639,22 @@ fn builds_x86_64_arrays_slices_pointers_and_loops() {
             "mix :: fn (a : i32, b : f16, c : i32, d : f32, e : i32, f : f64, g : i32, h : f16, i : i32, j : f32, k : i32, l : f64, m : i32) i32 { a * 1000000 + c * 100000 + e * 10000 + g * 1000 + i * 100 + k * 10 + m + if b == 1.5 && d == 2.0 && f == 3.0 && h == 2.5 && j == 3.0 && l == 4.0 { 0 } else { 1 } } apply :: fn (function : fn(i32,f16,i32,f32,i32,f64,i32,f16,i32,f32,i32,f64,i32)i32) i32 { function(1, 1.5, 2, 2.0, 3, 3.0, 4, 2.5, 5, 3.0, 6, 4.0, 7) } main :: fn () i32 { apply(mix) - 1234567 }",
             0,
         ),
+        (
+            "main :: fn () i32 { i := 0 do { i = i + 1 } while i < 4 i - 4 }",
+            0,
+        ),
+        (
+            "main :: fn () i32 { i := 0 sum := 0 while i < 5 { i = i + 1 defer { sum = sum + 1 } if i == 2 { continue } if i == 4 { break } sum = sum + 10 } sum - 24 }",
+            0,
+        ),
+        (
+            "square :: fn (value : i32) i32 { value * value } apply :: fn (function : fn(i32)i32, value : i32) i32 { function(value) } main :: fn () i32 { before := 9 constant :: square function := constant result := apply(function, 5) + function(6) + before + constant(4) result - 86 }",
+            0,
+        ),
+        (
+            "pos :: struct { offset() :: fn (value : i32) i32 { value + 1 } } apply :: fn (function : fn(i32)i32, value : i32) i32 { function(value) } main :: fn () i32 { method := pos::offset apply(pos::offset, 5) + method(5) - 12 }",
+            0,
+        ),
     ] {
         std::fs::write(&source, program).unwrap();
         build_file_for_target(
