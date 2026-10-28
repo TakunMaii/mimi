@@ -98,13 +98,13 @@ fn builds_and_runs_imported_external_functions() {
     let path = std::env::temp_dir().join(format!("mimi_external_codegen_{}", std::process::id()));
     std::fs::write(
         &package,
-        "pub extern abs : fn(value : i32)i32 pub call_abs :: fn(value : i32)i32 { abs(value) }",
+        "pub extern abs : fn(value : i32)i32 pub abs_value :: abs pub call_abs :: fn(value : i32)i32 { abs(value) }",
     )
     .unwrap();
     std::fs::write(
         &source,
         format!(
-            "system :: @import(\"{}\") apply :: fn (function : fn(i32)i32, value : i32) i32 {{ function(value) }} main :: fn () i32 {{ system.abs(-17) + system.call_abs(-2) + apply(system.abs, -1) }}",
+            "system :: @import(\"{}\") apply :: fn (function : fn(i32)i32, value : i32) i32 {{ function(value) }} main :: fn () i32 {{ system.abs(-17) + system.abs_value(-2) + system.call_abs(-3) + apply(system.abs_value, -1) }}",
             package.display()
         ),
     )
@@ -118,7 +118,7 @@ fn builds_and_runs_imported_external_functions() {
     )
     .unwrap();
     let status = std::process::Command::new(&path).status().unwrap();
-    assert_eq!(status.code(), Some(20));
+    assert_eq!(status.code(), Some(23));
     std::fs::remove_file(package).unwrap();
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();

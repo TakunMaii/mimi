@@ -53,6 +53,7 @@ fn imported_exports(
     let source = std::fs::read_to_string(&source_path)
         .map_err(|err| format!("cannot read '{}': {err}", source_path.display()))?;
     let ast = crate::parser::parse(tokenize(source.chars()));
+    let callable_types = imported_callable_types(&ast);
     let mut exports = HashMap::new();
     for node in ast {
         let ASTNode::Public(declaration) = node else {
@@ -103,8 +104,15 @@ fn imported_exports(
                 name,
                 data_type,
                 value,
+            } => {
+                if let Some(data_type) = data_type
+                    .or_else(|| callable_types.get(&name).copied())
+                    .or_else(|| imported_literal_type(&value))
+                {
+                    exports.insert(name, data_type);
+                }
             }
-            | ASTNode::VariableDefinition {
+            ASTNode::VariableDefinition {
                 name,
                 data_type,
                 value,
@@ -117,6 +125,74 @@ fn imported_exports(
         }
     }
     Ok(exports)
+}
+
+fn imported_callable_types(nodes: &[ASTNode]) -> HashMap<String, DataType> {
+    let mut types = HashMap::new();
+    let mut aliases = Vec::new();
+    for node in nodes {
+        let node = match node {
+            ASTNode::Public(declaration) => declaration.as_ref(),
+            declaration => declaration,
+        };
+        match node {
+            ASTNode::FunctionDefinition {
+                name,
+                parameters,
+                return_type,
+                ..
+            }
+            | ASTNode::ExternalFunction {
+                name,
+                parameters,
+                return_type,
+                ..
+            } => {
+                types.insert(
+                    name.clone(),
+                    DataType::Function(
+                        Box::leak(
+                            parameters
+                                .iter()
+                                .map(|(_, data_type)| *data_type)
+                                .collect::<Vec<_>>()
+                                .into_boxed_slice(),
+                        ),
+                        Box::leak(Box::new(*return_type)),
+                    ),
+                );
+            }
+            ASTNode::CompileTimeConstant {
+                name,
+                data_type,
+                value,
+            } => aliases.push((name.clone(), *data_type, value.clone())),
+            _ => {}
+        }
+    }
+
+    loop {
+        let mut resolved_alias = false;
+        for (name, declared_type, value) in &aliases {
+            if types.contains_key(name) {
+                continue;
+            }
+            let data_type = declared_type
+                .filter(|data_type| matches!(data_type, DataType::Function(_, _)))
+                .or_else(|| match value {
+                    Expression::Identifier(target) => types.get(target).copied(),
+                    _ => None,
+                });
+            if let Some(data_type) = data_type {
+                types.insert(name.clone(), data_type);
+                resolved_alias = true;
+            }
+        }
+        if !resolved_alias {
+            break;
+        }
+    }
+    types
 }
 
 pub(crate) fn resolve_import_path(path: &str, import_paths: &[PathBuf]) -> Result<PathBuf, String> {

@@ -317,6 +317,28 @@ fn imports_public_external_functions_but_hides_private_ones() {
 }
 
 #[test]
+fn imports_public_function_value_constants_but_hides_their_targets() {
+    let path = std::env::temp_dir().join(format!("mimi_import_alias_{}.mimi", std::process::id()));
+    std::fs::write(
+        &path,
+        "extern print : fn(value : []u8)void pub printl :: print",
+    )
+    .unwrap();
+    let source = format!(
+        "lib :: @import(\"{}\") main :: fn () void {{ lib.printl(\"hello\") }}",
+        path.display()
+    );
+    check(&parse(tokenize(source.chars()))).unwrap();
+
+    let source = format!(
+        "lib :: @import(\"{}\") main :: fn () void {{ lib.print(\"hello\") }}",
+        path.display()
+    );
+    assert!(check(&parse(tokenize(source.chars()))).is_err());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn rejects_slice_return_types_for_external_functions() {
     let ast = parse(tokenize("extern get_text : fn()[]u8".chars()));
     let errors = check(&ast).unwrap_err();

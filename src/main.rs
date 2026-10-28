@@ -178,10 +178,78 @@ fn collect_imported_functions(
                 output.push(external);
             }
         }
+        output.extend(imported_function_aliases(&module_nodes, &package));
         collect_imported_functions(&module_nodes, &module_paths, &package, visiting, output)?;
         visiting.remove(&visit_key);
     }
     Ok(())
+}
+
+fn imported_function_aliases(nodes: &[parser::ASTNode], package: &str) -> Vec<parser::ASTNode> {
+    type Signature = (Vec<(String, parser::DataType)>, parser::DataType);
+
+    let mut signatures = std::collections::HashMap::<String, Signature>::new();
+    let mut aliases = Vec::new();
+    for node in nodes {
+        let declaration = match node {
+            parser::ASTNode::Public(declaration) => declaration.as_ref(),
+            declaration => declaration,
+        };
+        match declaration {
+            parser::ASTNode::FunctionDefinition {
+                name,
+                parameters,
+                return_type,
+                ..
+            }
+            | parser::ASTNode::ExternalFunction {
+                name,
+                parameters,
+                return_type,
+                ..
+            } => {
+                signatures.insert(name.clone(), (parameters.clone(), *return_type));
+            }
+            parser::ASTNode::CompileTimeConstant {
+                name,
+                value: parser::Expression::Identifier(target),
+                ..
+            } => aliases.push((name.clone(), target.clone())),
+            _ => {}
+        }
+    }
+
+    let mut functions = Vec::new();
+    loop {
+        let mut resolved_alias = false;
+        for (name, target) in &aliases {
+            if signatures.contains_key(name) {
+                continue;
+            }
+            let Some((parameters, return_type)) = signatures.get(target).cloned() else {
+                continue;
+            };
+            let arguments = parameters
+                .iter()
+                .map(|(parameter, _)| parser::Expression::Identifier(parameter.clone()))
+                .collect();
+            functions.push(parser::ASTNode::FunctionDefinition {
+                name: format!("{package}.{name}"),
+                parameters: parameters.clone(),
+                return_type,
+                body: parser::Expression::Call {
+                    name: target.clone(),
+                    arguments,
+                },
+            });
+            signatures.insert(name.clone(), (parameters, return_type));
+            resolved_alias = true;
+        }
+        if !resolved_alias {
+            break;
+        }
+    }
+    functions
 }
 
 #[cfg(test)]
