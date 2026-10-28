@@ -32,7 +32,8 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Represent local slices with pointer/length slots; support indexing, slicing, and parameter passing.
 - [ ] Complete slice return values and reassignment.
 - [x] Implement local addresses, pointer loads/stores, and pointer type checks.
-- [ ] Implement array/struct pointers, general pointer arithmetic, and pointer member access in MIR.
+- [x] Lower pointer member access and typed pointer indexing in MIR.
+- [ ] Implement pointer-to-array layouts and general pointer arithmetic.
 
 ## Functions and Modules
 

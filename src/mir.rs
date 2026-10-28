@@ -157,6 +157,7 @@ struct Builder {
     array_lengths: std::collections::HashMap<String, u64>,
     slice_lengths: std::collections::HashMap<String, SlotId>,
     slice_scales: std::collections::HashMap<String, u8>,
+    pointer_scales: std::collections::HashMap<String, u8>,
     enum_variants: std::collections::HashMap<String, EnumVariant>,
     struct_fields: std::collections::HashMap<String, Vec<(String, Option<Expression>)>>,
     function_struct_params: std::collections::HashMap<String, Vec<Option<String>>>,
@@ -248,7 +249,7 @@ impl Builder {
                 Some(result)
             }
             Expression::Index { object, index } => {
-                let (base, _, scale) = self.lower_array_view(object)?;
+                let (base, scale) = self.lower_index_base(object)?;
                 let index = self.expression(index)?;
                 let address = self.value();
                 self.emit(MirInstruction::IndexAddress {
@@ -279,7 +280,7 @@ impl Builder {
                         address
                     }
                     Expression::Index { object, index } => {
-                        let (base, _, scale) = self.lower_array_view(object)?;
+                        let (base, scale) = self.lower_index_base(object)?;
                         let index = self.expression(index)?;
                         let address = self.value();
                         self.emit(MirInstruction::IndexAddress {
@@ -499,6 +500,7 @@ impl Builder {
                 let outer_array_lengths = self.array_lengths.clone();
                 let outer_slice_lengths = self.slice_lengths.clone();
                 let outer_slice_scales = self.slice_scales.clone();
+                let outer_pointer_scales = self.pointer_scales.clone();
                 let outer_variable_structs = self.variable_structs.clone();
                 self.defer_scopes.push(Vec::new());
                 let result = (|| {
@@ -533,6 +535,12 @@ impl Builder {
                                     },
                                 };
                                 let is_slice = declared_slice || self.is_slice_value(value);
+                                let inferred_pointer_scale = match value {
+                                    Expression::AddressOf(inner) => {
+                                        Some(self.address_target_scale(inner))
+                                    }
+                                    _ => None,
+                                };
                                 let (value, slice_view) = if is_slice {
                                     let (base, length, scale) = self.lower_array_view(value)?;
                                     (base, Some((length, scale)))
@@ -563,6 +571,17 @@ impl Builder {
                                 } else {
                                     self.slice_lengths.remove(name);
                                     self.slice_scales.remove(name);
+                                }
+                                let pointer_scale = match data_type {
+                                    Some(crate::parser::DataType::Pointer(element)) => {
+                                        Some(pointer_scale_from_data_type(element))
+                                    }
+                                    _ => inferred_pointer_scale,
+                                };
+                                if let Some(scale) = pointer_scale {
+                                    self.pointer_scales.insert(name.clone(), scale);
+                                } else {
+                                    self.pointer_scales.remove(name);
                                 }
                                 if let Some(length) = array_length {
                                     self.array_lengths.insert(name.clone(), length);
@@ -607,12 +626,7 @@ impl Builder {
                                 let index = self.expression(index)?;
                                 let value = self.expression(value)?;
                                 let address = self.value();
-                                let scale = match object {
-                                    Expression::Identifier(name) => {
-                                        self.slice_scales.get(name).copied().unwrap_or(8)
-                                    }
-                                    _ => 8,
-                                };
+                                let scale = self.index_scale(object);
                                 self.emit(MirInstruction::IndexAddress {
                                     result: address,
                                     base,
@@ -740,6 +754,7 @@ impl Builder {
                 self.array_lengths = outer_array_lengths;
                 self.slice_lengths = outer_slice_lengths;
                 self.slice_scales = outer_slice_scales;
+                self.pointer_scales = outer_pointer_scales;
                 self.variable_structs = outer_variable_structs;
                 result
             }
@@ -1024,6 +1039,40 @@ impl Builder {
             Expression::LiteralString(_) | Expression::Slice { .. } => true,
             Expression::Identifier(name) => self.slice_lengths.contains_key(name),
             _ => false,
+        }
+    }
+
+    fn index_scale(&self, object: &Expression) -> u8 {
+        match object {
+            Expression::Identifier(name) => self
+                .slice_scales
+                .get(name)
+                .or_else(|| self.pointer_scales.get(name))
+                .copied()
+                .unwrap_or(8),
+            Expression::LiteralString(_) => 1,
+            _ => 8,
+        }
+    }
+
+    fn lower_index_base(&mut self, object: &Expression) -> Option<(ValueId, u8)> {
+        if let Expression::Identifier(name) = object
+            && self.pointer_scales.contains_key(name)
+        {
+            return Some((self.expression(object)?, self.index_scale(object)));
+        }
+        let (base, _, scale) = self.lower_array_view(object)?;
+        Some((base, scale))
+    }
+
+    fn address_target_scale(&self, target: &Expression) -> u8 {
+        match target {
+            Expression::Index { object, .. } => self.index_scale(object),
+            Expression::Dereference(pointer) => match pointer.as_ref() {
+                Expression::Identifier(name) => self.pointer_scales.get(name).copied().unwrap_or(8),
+                _ => 8,
+            },
+            _ => 8,
         }
     }
 
@@ -1454,6 +1503,7 @@ fn lower_function(
         array_lengths: std::collections::HashMap::new(),
         slice_lengths: std::collections::HashMap::new(),
         slice_scales: std::collections::HashMap::new(),
+        pointer_scales: std::collections::HashMap::new(),
         enum_variants: enum_variants.clone(),
         struct_fields: struct_fields.clone(),
         function_struct_params: function_struct_params.clone(),
@@ -1495,6 +1545,11 @@ fn lower_function(
                 slot: length_slot,
                 value: length,
             });
+        }
+        if let HirType::Pointer(element) = ty {
+            builder
+                .pointer_scales
+                .insert(name.clone(), pointer_scale_from_hir_type(element));
         }
         if let Some(struct_name) = struct_name_from_hir_type(ty, &builder.struct_fields) {
             builder.variable_structs.insert(name.clone(), struct_name);
@@ -1686,5 +1741,22 @@ fn struct_name_from_hir_type(
         HirType::Named(name) if structs.contains_key(name) => Some(name.clone()),
         HirType::Pointer(inner) => struct_name_from_hir_type(inner, structs),
         _ => None,
+    }
+}
+
+fn pointer_scale_from_hir_type(data_type: &HirType) -> u8 {
+    match data_type {
+        HirType::Integer {
+            bits: 8,
+            signed: false,
+        } => 1,
+        _ => 8,
+    }
+}
+
+fn pointer_scale_from_data_type(data_type: &crate::parser::DataType) -> u8 {
+    match data_type {
+        crate::parser::DataType::U8 => 1,
+        _ => 8,
     }
 }

@@ -372,6 +372,14 @@ fn checks_address_of_dereference_and_pointer_assignment() {
 }
 
 #[test]
+fn checks_pointer_indexing_and_assignment() {
+    let ast = parse(tokenize(
+        "read :: fn (pointer : *i32) i32 { pointer[1] } write :: fn (pointer : *i32) void { pointer[2] = 9 } main :: fn () i32 { values := [1, 2, 3] write(&values[0]) read(&values[0]) }".chars(),
+    ));
+    check(&ast).unwrap();
+}
+
+#[test]
 fn checks_struct_field_assignment_and_fixed_fields() {
     let valid = parse(tokenize(
         "pos :: struct { x : i32 } main :: fn () i32 { point := pos { x = 1 } pointer := &point pointer.x = 8 point.x }".chars(),

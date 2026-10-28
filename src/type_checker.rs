@@ -457,8 +457,8 @@ fn check_statement(
                 return Err(error(format!("cannot assign through constant '{name}'")));
             }
             let element_type = match symbol.data_type {
-                DataType::Array(_, element) => *element,
-                _ => return Err(error("indexed assignment requires a fixed-size array")),
+                DataType::Array(_, element) | DataType::Pointer(element) => *element,
+                _ => return Err(error("indexed assignment requires an array or pointer")),
             };
             let index_type = infer_expression(index, scopes, functions, structs, None)?;
             if !index_type.is_integer() {
@@ -1160,8 +1160,10 @@ fn infer_expression(
                 return Err(error("array index must be an integer"));
             }
             match object_type {
-                DataType::Array(_, element) | DataType::Slice(element) => Ok(*element),
-                _ => Err(error("indexing requires an array or slice")),
+                DataType::Array(_, element)
+                | DataType::Slice(element)
+                | DataType::Pointer(element) => Ok(*element),
+                _ => Err(error("indexing requires an array, slice, or pointer")),
             }
         }
         Expression::Slice { object, start, end } => {

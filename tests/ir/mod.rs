@@ -369,6 +369,36 @@ fn builds_and_runs_payload_enum_construction_match_and_if_let() {
 }
 
 #[test]
+fn builds_and_runs_pointer_indexing_and_assignment() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_pointer_index_source_{}.mi",
+        std::process::id()
+    ));
+    let path =
+        std::env::temp_dir().join(format!("mimi_pointer_index_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "sum :: fn (pointer : *i32) i32 { pointer[0] + pointer[1] + pointer[2] } set :: fn (pointer : *i32) void { pointer[1] = 7 } main :: fn () i32 { values := [2, 3, 5] set(&values[0]) sum(&values[0]) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(14));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_scalar_struct_fields_and_defaults() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
