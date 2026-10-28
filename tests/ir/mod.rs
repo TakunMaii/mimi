@@ -1656,6 +1656,62 @@ fn builds_and_runs_public_functions_from_imported_packages() {
 }
 
 #[test]
+fn builds_and_runs_nested_imported_packages_with_private_helpers() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let directory =
+        std::env::temp_dir().join(format!("mimi_nested_import_codegen_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let leaf = directory.join("leaf.mimi");
+    let bridge = directory.join("bridge.mimi");
+    let source = directory.join("main.mimi");
+    let output = directory.join("program");
+    std::fs::write(
+        &leaf,
+        "pub Point :: struct { x : i32 } hidden :: fn (value : i32) i32 { value + 7 } pub transform :: fn (point : Point) i32 { hidden(point.x) }",
+    )
+    .unwrap();
+    std::fs::write(
+        &bridge,
+        "leaf :: @import(\"leaf\") pub forward :: fn (point : leaf.Point) i32 { leaf.transform(point) }",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "bridge :: @import(\"bridge\") main :: fn () i32 { point : bridge.leaf.Point = bridge.leaf.Point { x = 35 } bridge.forward(point) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        output.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&output).status().unwrap();
+    assert_eq!(status.code(), Some(42));
+
+    std::fs::write(
+        &source,
+        "bridge :: @import(\"bridge\") main :: fn () i32 { bridge.leaf.hidden(35) }",
+    )
+    .unwrap();
+    assert!(
+        build_file(
+            source.to_str().unwrap(),
+            output.to_str().unwrap(),
+            &[],
+            &[],
+            &[],
+        )
+        .is_err()
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn lowers_function_values_and_indirect_calls() {
     let ast = parse(tokenize(
         "square :: fn (value : i32) i32 { value * value } apply :: fn (function : fn(i32)i32, value : i32) i32 { function(value) } main :: fn () i32 { apply(square, 6) }"

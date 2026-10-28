@@ -69,8 +69,10 @@ and focused regression coverage; it does not imply support on every target.
 - [x] Allocate virtual registers with liveness and preserve values live across calls.
 - [x] Pass ARM64 integer arguments beyond x0-x7 on the stack (up to 16 total).
 - [x] Allocate and preserve ARM64 callee-saved registers.
-- [ ] Complete package symbol visibility and cross-package linking behavior.
+- [x] Complete package symbol visibility and cross-package linking behavior.
   - [x] Compile imported functions with package-qualified symbols and resolve package-local calls.
+  - [x] Re-export nested package symbols and types under qualified package paths.
+  - [x] Report cyclic package imports instead of recursing indefinitely.
   - [x] Import and link exported types, constants, and external declarations with full visibility checks.
     - [x] Import public function-valued constant aliases as callable functions.
     - [x] Inline imported public integer, float, and boolean literal constants.

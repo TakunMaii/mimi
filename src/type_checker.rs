@@ -55,10 +55,36 @@ fn imported_exports(
     package: &str,
     import_paths: &[std::path::PathBuf],
 ) -> Result<ImportedExports, String> {
+    imported_exports_inner(path, package, import_paths, &mut HashSet::new())
+}
+
+fn imported_exports_inner(
+    path: &str,
+    package: &str,
+    import_paths: &[std::path::PathBuf],
+    visiting: &mut HashSet<PathBuf>,
+) -> Result<ImportedExports, String> {
     let source_path = resolve_import_path(path, import_paths)?;
+    let visit_key = source_path
+        .canonicalize()
+        .unwrap_or_else(|_| source_path.clone());
+    if !visiting.insert(visit_key.clone()) {
+        return Err(format!(
+            "cyclic import involving '{}'",
+            source_path.display()
+        ));
+    }
     let source = std::fs::read_to_string(&source_path)
         .map_err(|err| format!("cannot read '{}': {err}", source_path.display()))?;
     let ast = crate::parser::parse(tokenize(source.chars()));
+    let mut nested_import_paths = import_paths.to_vec();
+    if let Some(parent) = source_path.parent()
+        && !nested_import_paths
+            .iter()
+            .any(|directory| directory == parent)
+    {
+        nested_import_paths.push(parent.to_path_buf());
+    }
     let callable_types = imported_callable_types(&ast);
     let all_type_names = ast
         .iter()
@@ -128,7 +154,7 @@ fn imported_exports(
     }
     let mut exports = HashMap::new();
     let mut types = HashMap::new();
-    for node in ast {
+    for node in ast.clone() {
         let ASTNode::Public(declaration) = node else {
             continue;
         };
@@ -306,6 +332,21 @@ fn imported_exports(
             _ => {}
         }
     }
+    for node in &ast {
+        if let ASTNode::Import { alias, path } = node {
+            let nested = imported_exports_inner(
+                path,
+                &format!("{package}.{alias}"),
+                &nested_import_paths,
+                visiting,
+            )?;
+            for (name, data_type) in nested.values {
+                exports.insert(format!("{alias}.{name}"), data_type);
+            }
+            types.extend(nested.types);
+        }
+    }
+    visiting.remove(&visit_key);
     Ok(ImportedExports {
         values: exports,
         types,
@@ -318,10 +359,10 @@ fn qualify_imported_type(
     local_type_names: &HashSet<&'static str>,
 ) -> DataType {
     match data_type {
-        DataType::Struct(name) if local_type_names.contains(name) => {
+        DataType::Struct(name) if local_type_names.contains(name) || name.contains('.') => {
             DataType::Struct(Box::leak(format!("{package}.{name}").into_boxed_str()))
         }
-        DataType::Enum(name) if local_type_names.contains(name) => {
+        DataType::Enum(name) if local_type_names.contains(name) || name.contains('.') => {
             DataType::Enum(Box::leak(format!("{package}.{name}").into_boxed_str()))
         }
         DataType::Array(length, element) => DataType::Array(

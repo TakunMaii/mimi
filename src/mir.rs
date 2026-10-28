@@ -604,7 +604,7 @@ impl Builder {
             }
             Expression::MemberAccess { object, member } => {
                 if let Expression::Identifier(package) = object.as_ref() {
-                    let name = format!("{package}.{member}");
+                    let name = self.resolve_package_member_name(package, member);
                     if self.global_constants.contains_key(&name) {
                         return self.lower_global_constant(&name);
                     }
@@ -908,7 +908,7 @@ impl Builder {
                 if let Expression::MemberAccess { object, member } = callee.as_ref()
                     && let Expression::Identifier(package) = object.as_ref()
                 {
-                    let name = format!("{package}.{member}");
+                    let name = self.resolve_package_member_name(package, member);
                     if let Some((_, return_type)) = self.function_signatures.get(&name).cloned() {
                         let (mut args, mut float_args) =
                             self.lower_call_arguments(&name, arguments)?;
@@ -1916,7 +1916,7 @@ impl Builder {
             } => Some(HirType::Named((*name).to_string())),
             Expression::MemberAccess { object, member } => {
                 if let Expression::Identifier(package) = object.as_ref() {
-                    let name = format!("{package}.{member}");
+                    let name = self.resolve_package_member_name(package, member);
                     if let Some(constant) = self.global_constants.get(&name) {
                         return Some(constant.data_type.clone());
                     }
@@ -2336,7 +2336,7 @@ impl Builder {
                     return None;
                 };
                 self.function_signatures
-                    .get(&format!("{package}.{member}"))
+                    .get(&self.resolve_package_member_name(package, member))
                     .cloned()
             }
             Expression::StaticAccess { type_name, member } => {
@@ -2357,6 +2357,19 @@ impl Builder {
             }
         }
         name.to_string()
+    }
+
+    fn resolve_package_member_name(&self, package: &str, member: &str) -> String {
+        let direct = format!("{package}.{member}");
+        if let Some(namespace) = &self.function_namespace {
+            let nested = format!("{namespace}.{direct}");
+            if self.function_signatures.contains_key(&nested)
+                || self.global_constants.contains_key(&nested)
+            {
+                return nested;
+            }
+        }
+        direct
     }
 
     fn link_function_name(&self, name: &str) -> String {

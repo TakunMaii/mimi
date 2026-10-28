@@ -230,10 +230,10 @@ fn qualify_imported_type(
     local_type_names: &std::collections::HashSet<String>,
 ) -> parser::DataType {
     match data_type {
-        parser::DataType::Struct(name) if local_type_names.contains(name) => {
+        parser::DataType::Struct(name) if local_type_names.contains(name) || name.contains('.') => {
             parser::DataType::Struct(Box::leak(format!("{package}.{name}").into_boxed_str()))
         }
-        parser::DataType::Enum(name) if local_type_names.contains(name) => {
+        parser::DataType::Enum(name) if local_type_names.contains(name) || name.contains('.') => {
             parser::DataType::Enum(Box::leak(format!("{package}.{name}").into_boxed_str()))
         }
         parser::DataType::Array(length, element) => parser::DataType::Array(
@@ -458,7 +458,7 @@ fn qualify_imported_expression(
         }
         Expression::StructLiteral { type_name, fields } => {
             if let Some(name) = type_name
-                && local_type_names.contains(*name)
+                && (local_type_names.contains(*name) || name.contains('.'))
             {
                 *name = Box::leak(format!("{package}.{name}").into_boxed_str());
             }
@@ -505,7 +505,7 @@ fn qualify_imported_expression(
             qualify_imported_expression(body, package, local_type_names);
         }
         Expression::StaticAccess { type_name, .. } => {
-            if local_type_names.contains(type_name) {
+            if local_type_names.contains(type_name) || type_name.contains('.') {
                 *type_name = format!("{package}.{type_name}");
             }
         }

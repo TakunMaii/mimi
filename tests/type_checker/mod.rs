@@ -287,6 +287,33 @@ fn imports_public_functions_through_package_namespaces() {
 }
 
 #[test]
+fn reports_cyclic_package_imports() {
+    let directory = std::env::temp_dir().join(format!("mimi_import_cycle_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let first = directory.join("first.mimi");
+    let second = directory.join("second.mimi");
+    std::fs::write(
+        &first,
+        format!("second :: @import(\"{}\")", second.display()),
+    )
+    .unwrap();
+    std::fs::write(
+        &second,
+        format!("first :: @import(\"{}\")", first.display()),
+    )
+    .unwrap();
+    let source = format!("first :: @import(\"{}\")", first.display());
+    let errors = check(&parse(tokenize(source.chars()))).unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("cyclic import"))
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn treats_string_literals_as_byte_slices_for_extern_calls() {
     let ast = parse(tokenize(
         "extern print : fn(str : []u8)void main :: fn () void { print(\"hello\") }".chars(),
