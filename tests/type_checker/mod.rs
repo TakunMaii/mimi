@@ -388,6 +388,16 @@ fn checks_pointer_indexing_and_assignment() {
 }
 
 #[test]
+fn rejects_pointer_arithmetic_on_compound_elements() {
+    let ast = parse(tokenize(
+        "pos :: struct { x : i32 } main :: fn () void { point := pos { x = 1 } pointer := &point pointer + 1 }"
+            .chars(),
+    ));
+    let errors = check(&ast).unwrap_err();
+    assert_eq!(errors.len(), 1);
+}
+
+#[test]
 fn checks_struct_field_assignment_and_fixed_fields() {
     let valid = parse(tokenize(
         "pos :: struct { x : i32 } main :: fn () i32 { point := pos { x = 1 } pointer := &point pointer.x = 8 point.x }".chars(),

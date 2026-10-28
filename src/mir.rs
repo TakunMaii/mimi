@@ -1392,6 +1392,38 @@ impl Builder {
     }
 
     fn binary(&mut self, lhs: &Expression, rhs: &Expression, kind: u8) -> Option<ValueId> {
+        if matches!(kind, 0 | 1) {
+            let lhs_type = self.expression_type(lhs);
+            let rhs_type = self.expression_type(rhs);
+            let pointer_offset = match (kind, lhs_type, rhs_type) {
+                (0, Some(HirType::Pointer(element)), _) => Some((lhs, rhs, *element, false)),
+                (0, _, Some(HirType::Pointer(element))) => Some((rhs, lhs, *element, false)),
+                (1, Some(HirType::Pointer(element)), _) => Some((lhs, rhs, *element, true)),
+                _ => None,
+            };
+            if let Some((pointer, offset, element_type, subtract)) = pointer_offset {
+                let pointer = self.expression(pointer)?;
+                let mut offset = self.expression(offset)?;
+                if subtract {
+                    let negated = self.value();
+                    self.emit(MirInstruction::Neg {
+                        result: negated,
+                        value: offset,
+                    });
+                    offset = negated;
+                }
+                let result = self.value();
+                self.emit(MirInstruction::IndexAddress {
+                    result,
+                    base: pointer,
+                    index: offset,
+                    scale: pointer_scale_from_hir_type(&element_type),
+                });
+                self.value_types
+                    .insert(result, HirType::Pointer(Box::new(element_type)));
+                return Some(result);
+            }
+        }
         let operation_type = self.float_operation_type(lhs, rhs);
         let lhs = if let Some(data_type) = operation_type.as_ref() {
             self.expression_expected(lhs, data_type)

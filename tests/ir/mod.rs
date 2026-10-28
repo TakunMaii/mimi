@@ -601,6 +601,38 @@ fn builds_and_runs_packed_arrays_across_slice_boundaries() {
 }
 
 #[test]
+fn builds_and_runs_scaled_pointer_arithmetic() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_pointer_arithmetic_source_{}.mi",
+        std::process::id()
+    ));
+    let path = std::env::temp_dir().join(format!(
+        "mimi_pointer_arithmetic_codegen_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { values := [10, 20, 30, 40] pointer := &values[0] third := pointer + 2 second := third - 1 first := 1 + pointer bytes : [5]u8 = [1, 2, 3, 4, 5] byte_pointer := &bytes[0] total := *third + *second + *first + *(byte_pointer + 3) total }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(74));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_slice_return_values() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

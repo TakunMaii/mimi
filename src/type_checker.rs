@@ -747,9 +747,47 @@ fn infer_expression(
             require_compatible(result_type, expected)?;
             Ok(result_type)
         }
-        Expression::Add(lhs, rhs)
-        | Expression::Subtract(lhs, rhs)
-        | Expression::Multiply(lhs, rhs)
+        Expression::Add(lhs, rhs) => {
+            let lhs_type = infer_expression(lhs, scopes, functions, structs, None)?;
+            let rhs_type = infer_expression(rhs, scopes, functions, structs, None)?;
+            if let (DataType::Pointer(inner), offset_type) = (lhs_type, rhs_type)
+                && offset_type.is_integer()
+                && is_scalar_pointer_element(*inner)
+            {
+                return Ok(lhs_type);
+            }
+            if let (offset_type, DataType::Pointer(inner)) = (lhs_type, rhs_type)
+                && offset_type.is_integer()
+                && is_scalar_pointer_element(*inner)
+            {
+                return Ok(rhs_type);
+            }
+            let (lhs_type, rhs_type) =
+                infer_numeric_pair(lhs, rhs, scopes, functions, structs, expected)?;
+            common_numeric_type(lhs_type, rhs_type).ok_or_else(|| {
+                error(format!(
+                    "incompatible numeric types {lhs_type} and {rhs_type}"
+                ))
+            })
+        }
+        Expression::Subtract(lhs, rhs) => {
+            let lhs_type = infer_expression(lhs, scopes, functions, structs, None)?;
+            let rhs_type = infer_expression(rhs, scopes, functions, structs, None)?;
+            if let (DataType::Pointer(inner), offset_type) = (lhs_type, rhs_type)
+                && offset_type.is_integer()
+                && is_scalar_pointer_element(*inner)
+            {
+                return Ok(lhs_type);
+            }
+            let (lhs_type, rhs_type) =
+                infer_numeric_pair(lhs, rhs, scopes, functions, structs, expected)?;
+            common_numeric_type(lhs_type, rhs_type).ok_or_else(|| {
+                error(format!(
+                    "incompatible numeric types {lhs_type} and {rhs_type}"
+                ))
+            })
+        }
+        Expression::Multiply(lhs, rhs)
         | Expression::Divide(lhs, rhs)
         | Expression::Remainder(lhs, rhs) => {
             let (lhs_type, rhs_type) =
@@ -1275,6 +1313,10 @@ fn check_receiver_compatibility(
         }
         _ => require_compatible(actual, Some(expected)),
     }
+}
+
+fn is_scalar_pointer_element(data_type: DataType) -> bool {
+    data_type.is_integer() || data_type.is_float() || data_type == DataType::Bool
 }
 
 fn is_constant_expression(expression: &Expression) -> bool {
