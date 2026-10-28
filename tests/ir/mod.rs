@@ -84,6 +84,25 @@ fn lowers_capture_free_lambdas_to_indirectly_callable_functions() {
 }
 
 #[test]
+fn lowers_f8_literals_to_e4m3fn_mir_constants() {
+    let ast = parse(tokenize("value :: fn () f8 { 1.5 }".chars()));
+    let hir = hir::lower_ast(&ast);
+    let mir = mir::lower_hir(&hir);
+    assert!(mir.functions[0].blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                mir::MirInstruction::ConstFloat {
+                    bits: 0x3c,
+                    width: 8,
+                    ..
+                }
+            )
+        })
+    }));
+}
+
+#[test]
 fn builds_and_runs_capture_free_lambdas() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
