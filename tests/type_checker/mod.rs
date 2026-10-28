@@ -339,6 +339,32 @@ fn imports_public_function_value_constants_but_hides_their_targets() {
 }
 
 #[test]
+fn imports_public_scalar_constants_with_their_types() {
+    let path =
+        std::env::temp_dir().join(format!("mimi_import_constants_{}.mimi", std::process::id()));
+    std::fs::write(
+        &path,
+        "pub answer :: 42 pub ratio :: 1.25 pub enabled :: true hidden :: 9",
+    )
+    .unwrap();
+    let source = format!(
+        "values :: @import(\"{}\") get_ratio :: fn () f64 {{ values.ratio }} get_answer :: fn () i32 {{ values.answer }} is_enabled :: fn () bool {{ values.enabled }}",
+        path.display()
+    );
+    let types = check(&parse(tokenize(source.chars()))).unwrap();
+    assert_eq!(types["values.answer"], DataType::I32);
+    assert_eq!(types["values.ratio"], DataType::F64);
+    assert_eq!(types["values.enabled"], DataType::Bool);
+
+    let source = format!(
+        "values :: @import(\"{}\") main :: fn () i32 {{ values.hidden }}",
+        path.display()
+    );
+    assert!(check(&parse(tokenize(source.chars()))).is_err());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn rejects_slice_return_types_for_external_functions() {
     let ast = parse(tokenize("extern get_text : fn()[]u8".chars()));
     let errors = check(&ast).unwrap_err();

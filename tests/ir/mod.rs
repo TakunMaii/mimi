@@ -125,6 +125,40 @@ fn builds_and_runs_imported_external_functions() {
 }
 
 #[test]
+fn builds_and_runs_imported_scalar_constants() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let package =
+        std::env::temp_dir().join(format!("mimi_constant_package_{}.mi", std::process::id()));
+    let source =
+        std::env::temp_dir().join(format!("mimi_constant_import_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_constant_codegen_{}", std::process::id()));
+    std::fs::write(&package, "pub answer : i32 : 37").unwrap();
+    std::fs::write(
+        &source,
+        format!(
+            "values :: @import(\"{}\") main :: fn () i32 {{ values.answer }}",
+            package.display()
+        ),
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(37));
+    std::fs::remove_file(package).unwrap();
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn lowers_dynamic_if_else_to_mir_blocks_and_phi() {
     let ast = parse(tokenize(
         "choose :: fn (condition : bool) i32 { value := if condition { 7 } else { 3 } value }"

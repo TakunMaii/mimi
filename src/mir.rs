@@ -232,6 +232,7 @@ struct Builder {
     method_targets: std::collections::HashMap<(String, String), MethodTarget>,
     function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
     external_symbols: std::collections::HashMap<String, String>,
+    global_constants: std::collections::HashMap<String, crate::hir::HirConstant>,
     function_namespace: Option<String>,
     variable_function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
     variable_types: std::collections::HashMap<String, HirType>,
@@ -326,6 +327,9 @@ impl Builder {
                     Some(result)
                 }
                 None => {
+                    if let Some(constant) = self.resolve_global_constant_name(name) {
+                        return self.lower_global_constant(&constant);
+                    }
                     if let Some(variant) = self.enum_variants.get(name).cloned() {
                         self.lower_enum_value(&variant, None)
                     } else {
@@ -511,6 +515,9 @@ impl Builder {
             Expression::MemberAccess { object, member } => {
                 if let Expression::Identifier(package) = object.as_ref() {
                     let name = format!("{package}.{member}");
+                    if self.global_constants.contains_key(&name) {
+                        return self.lower_global_constant(&name);
+                    }
                     if let Some((parameters, result_type)) =
                         self.function_signatures.get(&name).cloned()
                     {
@@ -1655,13 +1662,22 @@ impl Builder {
 
     fn expression_type(&self, expression: &Expression) -> Option<HirType> {
         match expression {
-            Expression::Identifier(name) => self.variable_types.get(name).cloned().or_else(|| {
-                self.function_signature_for_expression(expression)
-                    .map(|(params, result)| HirType::Function {
-                        params,
-                        result: Box::new(result),
-                    })
-            }),
+            Expression::Identifier(name) => self
+                .variable_types
+                .get(name)
+                .cloned()
+                .or_else(|| {
+                    self.resolve_global_constant_name(name)
+                        .and_then(|name| self.global_constants.get(&name))
+                        .map(|constant| constant.data_type.clone())
+                })
+                .or_else(|| {
+                    self.function_signature_for_expression(expression)
+                        .map(|(params, result)| HirType::Function {
+                            params,
+                            result: Box::new(result),
+                        })
+                }),
             Expression::StaticAccess { .. } => self
                 .function_signature_for_expression(expression)
                 .map(|(params, result)| HirType::Function {
@@ -1700,6 +1716,9 @@ impl Builder {
             Expression::MemberAccess { object, member } => {
                 if let Expression::Identifier(package) = object.as_ref() {
                     let name = format!("{package}.{member}");
+                    if let Some(constant) = self.global_constants.get(&name) {
+                        return Some(constant.data_type.clone());
+                    }
                     if let Some((params, result)) = self.function_signatures.get(&name) {
                         return Some(HirType::Function {
                             params: params.clone(),
@@ -2123,6 +2142,24 @@ impl Builder {
             .get(name)
             .cloned()
             .unwrap_or_else(|| name.to_string())
+    }
+
+    fn resolve_global_constant_name(&self, name: &str) -> Option<String> {
+        if self.global_constants.contains_key(name) {
+            return Some(name.to_string());
+        }
+        let namespace = self.function_namespace.as_ref()?;
+        let qualified = format!("{namespace}.{name}");
+        self.global_constants
+            .contains_key(&qualified)
+            .then_some(qualified)
+    }
+
+    fn lower_global_constant(&mut self, name: &str) -> Option<ValueId> {
+        let constant = self.global_constants.get(name)?.clone();
+        let value = self.expression_expected(&constant.value, &constant.data_type)?;
+        self.value_types.insert(value, constant.data_type.clone());
+        Some(value)
     }
 
     fn index_scale(&self, object: &Expression) -> u64 {
@@ -2903,6 +2940,7 @@ fn lower_function(
     method_targets: &std::collections::HashMap<(String, String), MethodTarget>,
     function_signatures: &std::collections::HashMap<String, (Vec<HirType>, HirType)>,
     external_symbols: &std::collections::HashMap<String, String>,
+    global_constants: &std::collections::HashMap<String, crate::hir::HirConstant>,
 ) -> MirFunction {
     let mut builder = Builder {
         next_value: 0,
@@ -2925,6 +2963,7 @@ fn lower_function(
         method_targets: method_targets.clone(),
         function_signatures: function_signatures.clone(),
         external_symbols: external_symbols.clone(),
+        global_constants: global_constants.clone(),
         function_namespace: function
             .name
             .rsplit_once('.')
@@ -3217,6 +3256,11 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
         .iter()
         .map(|function| (function.name.clone(), function.link_name.clone()))
         .collect::<std::collections::HashMap<_, _>>();
+    let global_constants = module
+        .constants
+        .iter()
+        .map(|constant| (constant.name.clone(), constant.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
     MirModule {
         functions: module
             .functions
@@ -3231,6 +3275,7 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
                     &method_targets,
                     &function_signatures,
                     &external_symbols,
+                    &global_constants,
                 )
             })
             .collect(),

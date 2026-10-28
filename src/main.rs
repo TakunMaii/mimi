@@ -177,6 +177,26 @@ fn collect_imported_functions(
                 }
                 output.push(external);
             }
+            if let parser::ASTNode::CompileTimeConstant { name, value, .. } = declaration
+                && (matches!(
+                    value,
+                    parser::Expression::LiteralBool(_) | parser::Expression::LiteralNumber(_)
+                ) || matches!(
+                    value,
+                    parser::Expression::Negate(inner)
+                        if matches!(inner.as_ref(), parser::Expression::LiteralNumber(_))
+                ))
+            {
+                let mut constant = declaration.clone();
+                if let parser::ASTNode::CompileTimeConstant {
+                    name: imported_name,
+                    ..
+                } = &mut constant
+                {
+                    *imported_name = format!("{package}.{name}");
+                }
+                output.push(constant);
+            }
         }
         output.extend(imported_function_aliases(&module_nodes, &package));
         collect_imported_functions(&module_nodes, &module_paths, &package, visiting, output)?;

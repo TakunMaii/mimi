@@ -85,6 +85,13 @@ pub(crate) struct HirExternalFunction {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HirConstant {
+    pub(crate) name: String,
+    pub(crate) data_type: HirType,
+    pub(crate) value: Expression,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct HirEnum {
     pub(crate) name: String,
     pub(crate) variants: Vec<(String, Option<HirType>)>,
@@ -101,6 +108,7 @@ pub(crate) struct HirStruct {
 pub(crate) struct HirModule {
     pub(crate) functions: Vec<HirFunction>,
     pub(crate) extern_functions: Vec<HirExternalFunction>,
+    pub(crate) constants: Vec<HirConstant>,
     pub(crate) enums: Vec<HirEnum>,
     pub(crate) structs: Vec<HirStruct>,
 }
@@ -142,6 +150,47 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                 params: parameters.iter().map(|(_, ty)| (*ty).into()).collect(),
                 result: (*return_type).into(),
             });
+        }
+        if let ASTNode::CompileTimeConstant {
+            name,
+            data_type,
+            value,
+        } = node
+        {
+            let is_scalar_literal = matches!(
+                value,
+                Expression::LiteralBool(_) | Expression::LiteralNumber(_)
+            ) || matches!(
+                value,
+                Expression::Negate(inner)
+                    if matches!(inner.as_ref(), Expression::LiteralNumber(_))
+            );
+            let data_type = data_type.map(Into::into).or_else(|| match value {
+                Expression::LiteralBool(_) => Some(HirType::Bool),
+                Expression::LiteralNumber(text) if text.contains('.') => {
+                    Some(HirType::Float { bits: 64 })
+                }
+                Expression::LiteralNumber(_) => Some(HirType::Integer {
+                    bits: 32,
+                    signed: true,
+                }),
+                Expression::Negate(inner)
+                    if matches!(inner.as_ref(), Expression::LiteralNumber(_)) =>
+                {
+                    Some(HirType::Integer {
+                        bits: 32,
+                        signed: true,
+                    })
+                }
+                _ => None,
+            });
+            if is_scalar_literal && let Some(data_type) = data_type {
+                module.constants.push(HirConstant {
+                    name: name.clone(),
+                    data_type,
+                    value: value.clone(),
+                });
+            }
         }
         if let ASTNode::EnumDefinition { name, variants } = node {
             module.enums.push(HirEnum {
