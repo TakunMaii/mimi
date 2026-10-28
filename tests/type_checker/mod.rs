@@ -676,14 +676,28 @@ fn checks_function_values_and_static_methods() {
 }
 
 #[test]
-fn rejects_lambdas_that_capture_local_variables() {
+fn type_checks_lambdas_that_capture_local_variables() {
     let ast = parse(tokenize(
-        "main :: fn () i32 { outer := 5 add_outer := fn (value : i32) i32 { outer + value } add_outer(2) }"
+        "main :: fn () i32 { outer := 5 add_outer := fn (value : i32) i32 { outer + value } assigned := fn (value : i32) i32 { outer = value outer } shadowed := fn (outer : i32) i32 { outer + 1 } add_outer(2) + assigned(8) + shadowed(3) }"
             .chars(),
     ));
-    let errors = check(&ast).unwrap_err();
+    check(&ast).unwrap();
+}
+
+#[test]
+fn lambda_capture_lookup_respects_lexical_scope_and_undefined_names() {
+    let ast = parse(tokenize(
+        "main :: fn () i32 { value := 7 result := { inner := fn () i32 { value } inner() } result }"
+            .chars(),
+    ));
+    check(&ast).unwrap();
+
+    let invalid = parse(tokenize(
+        "main :: fn () i32 { missing := fn () i32 { absent } missing() }".chars(),
+    ));
+    let errors = check(&invalid).unwrap_err();
     assert_eq!(errors.len(), 1);
-    assert!(errors[0].message.contains("undefined identifier 'outer'"));
+    assert!(errors[0].message.contains("undefined identifier 'absent'"));
 }
 
 #[test]
