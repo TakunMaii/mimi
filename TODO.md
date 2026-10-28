@@ -39,7 +39,8 @@ and focused regression coverage; it does not imply support on every target.
 ## Functions and Modules
 
 - [ ] Implement function values, indirect calls, and lambda bodies.
-- [ ] Implement instance and static methods in HIR/MIR, including automatic receivers.
+- [x] Lower direct instance and static method calls with automatic or explicit receivers.
+- [ ] Support methods as function values and indirect method calls.
 - [x] Allocate virtual registers with liveness and preserve values live across calls.
 - [x] Pass ARM64 integer arguments beyond x0-x7 on the stack (up to 16 total).
 - [x] Allocate and preserve ARM64 callee-saved registers.

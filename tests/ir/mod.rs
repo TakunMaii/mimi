@@ -419,7 +419,7 @@ fn builds_and_runs_scalar_struct_fields_and_defaults() {
     )
     .unwrap();
     let status = std::process::Command::new(&path).status().unwrap();
-    assert_eq!(status.code(), Some(20));
+    assert_eq!(status.code(), Some(23));
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();
 }
@@ -790,6 +790,33 @@ fn builds_and_runs_a_minimal_host_executable() {
     .unwrap();
     let status = std::process::Command::new(&path).status().unwrap();
     assert_eq!(status.code(), Some(7));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn builds_and_runs_instance_and_static_methods() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_methods_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_methods_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "pos :: struct { x : i32, get() :: fn (self : Self) i32 { self.x } add() :: fn (self : Self, value : i32) i32 { self.x + value } through_ptr() :: fn (self : *Self) i32 { self.x } offset() :: fn (value : i32) i32 { value + 1 } } main :: fn () i32 { point := pos { x = 4 } pointer := &point point.get() + point.add(3) + pointer.through_ptr() + pos::offset(4) + point.add(point, 1) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(25));
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();
 }

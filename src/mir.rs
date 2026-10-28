@@ -162,6 +162,7 @@ struct Builder {
     struct_fields: std::collections::HashMap<String, Vec<(String, Option<Expression>)>>,
     function_struct_params: std::collections::HashMap<String, Vec<Option<String>>>,
     function_slice_params: std::collections::HashMap<String, Vec<bool>>,
+    method_targets: std::collections::HashMap<(String, String), MethodTarget>,
     variable_structs: std::collections::HashMap<String, String>,
     defer_scopes: Vec<Vec<Expression>>,
     loop_targets: Vec<LoopTargets>,
@@ -178,6 +179,13 @@ struct EnumVariant {
     tag: u64,
     payload: Option<HirType>,
     uses_storage: bool,
+}
+
+#[derive(Clone)]
+struct MethodTarget {
+    symbol: String,
+    parameter_count: usize,
+    has_receiver: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -269,6 +277,9 @@ impl Builder {
             Expression::AddressOf(inner) => {
                 let address = match inner.as_ref() {
                     Expression::Identifier(name) => {
+                        if self.variable_structs.contains_key(name) {
+                            return self.expression(inner);
+                        }
                         let Variable::Slot(slot) = self.variables.get(name).copied()? else {
                             return None;
                         };
@@ -412,41 +423,53 @@ impl Builder {
                     }
                     return self.lower_enum_value(&variant, arguments.first());
                 }
-                let mut args = Vec::new();
-                let parameter_structs = self.function_struct_params.get(name).cloned();
-                let parameter_slices = self.function_slice_params.get(name).cloned();
-                for (index, argument) in arguments.iter().enumerate() {
-                    if parameter_slices
-                        .as_ref()
-                        .and_then(|parameters| parameters.get(index))
-                        .copied()
-                        .unwrap_or(false)
-                    {
-                        let (base, length, _) = self.lower_array_view(argument)?;
-                        args.push(base);
-                        args.push(length);
-                        continue;
-                    }
-                    let expected_struct = parameter_structs
-                        .as_ref()
-                        .and_then(|parameters| parameters.get(index))
-                        .and_then(Option::as_deref);
-                    let value = match (argument, expected_struct) {
-                        (
-                            Expression::StructLiteral {
-                                type_name: None,
-                                fields,
-                            },
-                            Some(struct_name),
-                        ) => self.lower_struct_literal(struct_name, fields)?,
-                        _ => self.expression(argument)?,
-                    };
-                    args.push(value);
-                }
+                let args = self.lower_call_arguments(name, arguments)?;
                 let result = self.value();
                 self.emit(MirInstruction::Call {
                     result: Some(result),
                     name: name.clone(),
+                    args,
+                });
+                Some(result)
+            }
+            Expression::CallValue { callee, arguments } => {
+                let (target, receiver) = match callee.as_ref() {
+                    Expression::StaticAccess { type_name, member } => (
+                        self.method_targets
+                            .get(&(type_name.clone(), member.clone()))?
+                            .clone(),
+                        None,
+                    ),
+                    Expression::MemberAccess { object, member } => {
+                        let struct_name = self.expression_struct_name(object)?;
+                        let target = self
+                            .method_targets
+                            .get(&(struct_name, member.clone()))?
+                            .clone();
+                        let receiver = if target.has_receiver
+                            && arguments.len() + 1 == target.parameter_count
+                        {
+                            Some(object.as_ref())
+                        } else {
+                            None
+                        };
+                        (target, receiver)
+                    }
+                    _ => return None,
+                };
+                let mut call_arguments = Vec::with_capacity(arguments.len() + 1);
+                if let Some(receiver) = receiver {
+                    call_arguments.push(receiver.clone());
+                }
+                call_arguments.extend(arguments.iter().cloned());
+                if call_arguments.len() != target.parameter_count {
+                    return None;
+                }
+                let args = self.lower_call_arguments(&target.symbol, &call_arguments)?;
+                let result = self.value();
+                self.emit(MirInstruction::Call {
+                    result: Some(result),
+                    name: target.symbol,
                     args,
                 });
                 Some(result)
@@ -782,6 +805,45 @@ impl Builder {
             }
             _ => None,
         }
+    }
+
+    fn lower_call_arguments(
+        &mut self,
+        name: &str,
+        arguments: &[Expression],
+    ) -> Option<Vec<ValueId>> {
+        let parameter_structs = self.function_struct_params.get(name).cloned();
+        let parameter_slices = self.function_slice_params.get(name).cloned();
+        let mut values = Vec::new();
+        for (index, argument) in arguments.iter().enumerate() {
+            if parameter_slices
+                .as_ref()
+                .and_then(|parameters| parameters.get(index))
+                .copied()
+                .unwrap_or(false)
+            {
+                let (base, length, _) = self.lower_array_view(argument)?;
+                values.push(base);
+                values.push(length);
+                continue;
+            }
+            let expected_struct = parameter_structs
+                .as_ref()
+                .and_then(|parameters| parameters.get(index))
+                .and_then(Option::as_deref);
+            let value = match (argument, expected_struct) {
+                (
+                    Expression::StructLiteral {
+                        type_name: None,
+                        fields,
+                    },
+                    Some(struct_name),
+                ) => self.lower_struct_literal(struct_name, fields)?,
+                _ => self.expression(argument)?,
+            };
+            values.push(value);
+        }
+        Some(values)
     }
 
     fn binary(&mut self, lhs: &Expression, rhs: &Expression, kind: u8) -> Option<ValueId> {
@@ -1511,6 +1573,7 @@ fn lower_function(
     struct_fields: &std::collections::HashMap<String, Vec<(String, Option<Expression>)>>,
     function_struct_params: &std::collections::HashMap<String, Vec<Option<String>>>,
     function_slice_params: &std::collections::HashMap<String, Vec<bool>>,
+    method_targets: &std::collections::HashMap<(String, String), MethodTarget>,
 ) -> MirFunction {
     let mut builder = Builder {
         next_value: 0,
@@ -1530,6 +1593,7 @@ fn lower_function(
         struct_fields: struct_fields.clone(),
         function_struct_params: function_struct_params.clone(),
         function_slice_params: function_slice_params.clone(),
+        method_targets: method_targets.clone(),
         variable_structs: std::collections::HashMap::new(),
         defer_scopes: Vec::new(),
         loop_targets: Vec::new(),
@@ -1738,6 +1802,30 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
             )
         }))
         .collect::<std::collections::HashMap<_, _>>();
+    let method_targets = module
+        .structs
+        .iter()
+        .flat_map(|structure| {
+            structure
+                .methods
+                .iter()
+                .map(|(method, symbol, has_receiver)| {
+                    let parameter_count = module
+                        .functions
+                        .iter()
+                        .find(|function| function.name == *symbol)
+                        .map_or(0, |function| function.params.len());
+                    (
+                        (structure.name.clone(), method.clone()),
+                        MethodTarget {
+                            symbol: symbol.clone(),
+                            parameter_count,
+                            has_receiver: *has_receiver,
+                        },
+                    )
+                })
+        })
+        .collect::<std::collections::HashMap<_, _>>();
     MirModule {
         functions: module
             .functions
@@ -1749,6 +1837,7 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
                     &struct_fields,
                     &function_struct_params,
                     &function_slice_params,
+                    &method_targets,
                 )
             })
             .collect(),
