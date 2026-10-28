@@ -27,12 +27,12 @@ and focused regression coverage; it does not imply support on every target.
 - [ ] Define target data layout and ABI rules for all supported value types.
 - [x] Implement 64-bit stack slots, loads/stores, and mutable locals across loops and branches.
 - [x] Lower scalar struct literals, 64-bit field slots, defaults, reads, writes, parameters, and inferred arguments.
-- [ ] Implement nested fields, compound layouts, and value return ABI.
+- [ ] Implement nested fields and compound target layouts.
   - [x] Resolve reads and writes through nested struct fields.
   - [x] Store nested struct fields inline in local values and copy them by value.
-  - [ ] Store nested aggregates inline and define aggregate parameter and return ABI.
+  - [x] Store nested aggregates inline and define aggregate parameter and return ABI.
 - [x] Implement tag-plus-one-slot enum construction and payload access.
-- [ ] Add target-aware enum layouts for payloads larger than one machine word and value returns.
+- [x] Add target-aware enum layouts for payloads larger than one machine word and value returns.
 - [x] Implement fixed-size scalar array literals, stack layout, indexing, and reads.
 - [x] Store indexed elements in fixed-size scalar arrays.
 - [ ] Support array element layouts beyond the current 64-bit scalar slots.
@@ -41,7 +41,7 @@ and focused regression coverage; it does not imply support on every target.
   - [x] Lay out fixed arrays of structs inline, including indexing, field reads and writes, and value copies.
   - [x] Lay out nested arrays inline, including arrays of structs and array fields.
   - [x] Lay out tag-plus-one-slot payload enums inline in arrays and struct fields.
-  - [ ] Lay out enums whose payload exceeds one machine word inline.
+  - [x] Lay out enums whose payload exceeds one machine word inline.
 - [x] Represent local slices with pointer/length slots; support indexing, slicing, and parameter passing.
 - [x] Lower local slice reassignment with updated pointer, length, and element scale.
 - [x] Return slices from Mimi functions as pointer in x0 and length in x1; reject C extern slice returns.

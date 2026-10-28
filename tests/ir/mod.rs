@@ -727,6 +727,33 @@ fn builds_and_runs_aggregate_parameters_and_returns_by_value() {
 }
 
 #[test]
+fn builds_and_runs_multiword_enum_payloads() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_large_enum_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_large_enum_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "point :: struct { x : i32, y : i32 } wrapper :: struct { point : point } choice :: enum { batch([2]wrapper), none } make :: fn (x : i32) choice { batch([wrapper { point = point { x = x, y = 2 } }, wrapper { point = point { x = x + 1, y = 3 } }]) } identity :: fn (value : choice) choice { value } inspect :: fn (value : choice) i32 { match value { batch(items) => items[1].point.x, none => 0 } } inspect_if :: fn (value : choice) i32 { result := 0 if batch(items) := value { result = items[0].point.x } result } main :: fn () i32 { original := make(4) copied := identity(original) result := inspect(copied) if_result := inspect_if(copied) check := if result == 5 && if_result == 4 { 0 } else { 1 } check }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_fixed_arrays_of_structs() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

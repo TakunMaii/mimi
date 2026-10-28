@@ -260,6 +260,17 @@ struct EnumVariant {
     uses_storage: bool,
 }
 
+struct SavedBinding {
+    variable: Option<Variable>,
+    data_type: Option<HirType>,
+    struct_name: Option<String>,
+    array_length: Option<u64>,
+    slice_length: Option<SlotId>,
+    slice_scale: Option<u64>,
+    pointer_scale: Option<u64>,
+    function_signature: Option<(Vec<HirType>, HirType)>,
+}
+
 #[derive(Clone)]
 struct MethodTarget {
     symbol: String,
@@ -275,6 +286,58 @@ struct LoopTargets {
 }
 
 impl Builder {
+    fn bind_slot_value(&mut self, name: &str, data_type: &HirType, value: ValueId) -> SavedBinding {
+        let previous = SavedBinding {
+            variable: self.variables.remove(name),
+            data_type: self.variable_types.remove(name),
+            struct_name: self.variable_structs.remove(name),
+            array_length: self.array_lengths.remove(name),
+            slice_length: self.slice_lengths.remove(name),
+            slice_scale: self.slice_scales.remove(name),
+            pointer_scale: self.pointer_scales.remove(name),
+            function_signature: self.variable_function_signatures.remove(name),
+        };
+        let slot = self.slot();
+        self.variables
+            .insert(name.to_string(), Variable::Slot(slot));
+        self.variable_types
+            .insert(name.to_string(), data_type.clone());
+        if let HirType::Array { length, .. } = data_type {
+            self.array_lengths.insert(name.to_string(), *length);
+        }
+        if let HirType::Named(struct_name) = data_type
+            && self.struct_fields.contains_key(struct_name)
+        {
+            self.variable_structs
+                .insert(name.to_string(), struct_name.clone());
+        }
+        if let HirType::Pointer(element) = data_type {
+            self.pointer_scales
+                .insert(name.to_string(), pointer_scale_from_hir_type(element));
+        }
+        if let HirType::Function { params, result } = data_type {
+            self.variable_function_signatures
+                .insert(name.to_string(), (params.clone(), result.as_ref().clone()));
+        }
+        self.emit(MirInstruction::StoreSlot { slot, value });
+        previous
+    }
+
+    fn restore_slot_binding(&mut self, name: &str, saved: SavedBinding) {
+        restore_binding(&mut self.variables, name, saved.variable);
+        restore_binding(&mut self.variable_types, name, saved.data_type);
+        restore_binding(&mut self.variable_structs, name, saved.struct_name);
+        restore_binding(&mut self.array_lengths, name, saved.array_length);
+        restore_binding(&mut self.slice_lengths, name, saved.slice_length);
+        restore_binding(&mut self.slice_scales, name, saved.slice_scale);
+        restore_binding(&mut self.pointer_scales, name, saved.pointer_scale);
+        restore_binding(
+            &mut self.variable_function_signatures,
+            name,
+            saved.function_signature,
+        );
+    }
+
     fn value(&mut self) -> ValueId {
         let value = ValueId(self.next_value);
         self.next_value += 1;
@@ -2440,22 +2503,23 @@ impl Builder {
 
             self.current = arm_block;
             let previous_binding = if let Some(binding) = binding {
-                let payload = self.enum_payload(value)?;
-                let slot = self.slot();
-                self.emit(MirInstruction::StoreSlot {
-                    slot,
-                    value: payload,
-                });
-                self.variables.insert(binding.clone(), Variable::Slot(slot))
+                let payload_type = variant.payload.as_ref()?;
+                let payload = self.enum_payload(value, &variant)?;
+                let payload = if self.is_inline_aggregate(payload_type) {
+                    let copy = self.allocate_inline_temporary(payload_type)?;
+                    self.copy_inline_value_to_address(payload_type, payload, copy)?;
+                    copy
+                } else {
+                    payload
+                };
+                Some(self.bind_slot_value(binding, payload_type, payload))
             } else {
                 None
             };
             let result = self.expression(body);
             if let Some(binding) = binding {
                 if let Some(previous) = previous_binding {
-                    self.variables.insert(binding.clone(), previous);
-                } else {
-                    self.variables.remove(binding);
+                    self.restore_slot_binding(binding, previous);
                 }
             }
             let end_block = self.current;
@@ -2518,23 +2582,23 @@ impl Builder {
 
         self.current = then_block;
         let previous_binding = if let Some(binding) = binding {
-            let payload = self.enum_payload(value)?;
-            let slot = self.slot();
-            self.emit(MirInstruction::StoreSlot {
-                slot,
-                value: payload,
-            });
-            self.variables
-                .insert(binding.to_string(), Variable::Slot(slot))
+            let payload_type = variant.payload.as_ref()?;
+            let payload = self.enum_payload(value, &variant)?;
+            let payload = if self.is_inline_aggregate(payload_type) {
+                let copy = self.allocate_inline_temporary(payload_type)?;
+                self.copy_inline_value_to_address(payload_type, payload, copy)?;
+                copy
+            } else {
+                payload
+            };
+            Some(self.bind_slot_value(binding, payload_type, payload))
         } else {
             None
         };
         self.expression(then_branch);
         if let Some(binding) = binding {
             if let Some(previous) = previous_binding {
-                self.variables.insert(binding.to_string(), previous);
-            } else {
-                self.variables.remove(binding);
+                self.restore_slot_binding(binding, previous);
             }
         }
         let then_end = self.current;
@@ -2574,8 +2638,9 @@ impl Builder {
             return Some(result);
         }
 
+        let slot_count = self.enum_storage_slot_count(&variant.owner)?;
         let base = self.slot();
-        self.next_slot += 1;
+        self.next_slot = self.next_slot.checked_add(slot_count.saturating_sub(1))?;
         let tag = self.value();
         self.emit(MirInstruction::ConstInt {
             result: tag,
@@ -2585,20 +2650,30 @@ impl Builder {
             slot: base,
             value: tag,
         });
-        let payload_value = if let Some(payload) = payload {
-            self.expression(payload)?
+        let address = self.slot_address_value(base);
+        let payload_address = self.byte_offset_address(address, 8);
+        if let (Some(payload_expression), Some(payload_type)) = (payload, variant.payload.as_ref())
+        {
+            if self.is_inline_aggregate(payload_type) {
+                self.lower_inline_value_into(payload_type, payload_expression, payload_address)?;
+            } else {
+                let payload_value = self.expression_expected(payload_expression, payload_type)?;
+                self.emit_store_indirect(payload_address, payload_value, Some(payload_type));
+            }
         } else {
-            let zero = self.value();
-            self.emit(MirInstruction::ConstInt {
-                result: zero,
-                value: 0,
-            });
-            zero
-        };
-        self.emit(MirInstruction::StoreSlot {
-            slot: SlotId(base.0 + 1),
-            value: payload_value,
-        });
+            for offset in 0..slot_count.saturating_sub(1) {
+                let zero = self.value();
+                self.emit(MirInstruction::ConstInt {
+                    result: zero,
+                    value: 0,
+                });
+                let address = self.byte_offset_address(payload_address, u64::from(offset) * 8);
+                self.emit(MirInstruction::StoreIndirect {
+                    address,
+                    value: zero,
+                });
+            }
+        }
         let result = self.value();
         self.emit(MirInstruction::SlotAddress { result, slot: base });
         Some(result)
@@ -2628,25 +2703,17 @@ impl Builder {
         Some(discriminant)
     }
 
-    fn enum_payload(&mut self, value: ValueId) -> Option<ValueId> {
-        let one = self.value();
-        self.emit(MirInstruction::ConstInt {
-            result: one,
-            value: 1,
-        });
-        let address = self.value();
-        self.emit(MirInstruction::IndexAddress {
-            result: address,
-            base: value,
-            index: one,
-            scale: 8,
-        });
-        let payload = self.value();
-        self.emit(MirInstruction::LoadIndirect {
-            result: payload,
-            address,
-        });
-        Some(payload)
+    fn enum_payload(&mut self, value: ValueId, variant: &EnumVariant) -> Option<ValueId> {
+        let payload_type = variant.payload.as_ref()?;
+        let address = self.byte_offset_address(value, 8);
+        if self.is_inline_aggregate(payload_type) {
+            Some(address)
+        } else {
+            let payload = self.value();
+            self.emit_load_indirect(payload, address, Some(payload_type));
+            self.value_types.insert(payload, payload_type.clone());
+            Some(payload)
+        }
     }
 
     fn expression_struct_name(&self, expression: &Expression) -> Option<String> {
@@ -2691,7 +2758,7 @@ impl Builder {
         struct_name: &str,
         visiting: &mut std::collections::HashSet<String>,
     ) -> Option<u32> {
-        if !visiting.insert(struct_name.to_string()) {
+        if !visiting.insert(format!("struct:{struct_name}")) {
             return None;
         }
         let fields = self.struct_field_types.get(struct_name)?;
@@ -2700,14 +2767,14 @@ impl Builder {
             let field_slots = self.inline_field_slot_count(field_type, visiting)?;
             slot_count = slot_count.checked_add(field_slots)?;
         }
-        visiting.remove(struct_name);
+        visiting.remove(&format!("struct:{struct_name}"));
         Some(slot_count)
     }
 
     fn struct_field_offset(&self, struct_name: &str, member: &str) -> Option<u32> {
         let fields = self.struct_field_types.get(struct_name)?;
         let mut visiting = std::collections::HashSet::new();
-        visiting.insert(struct_name.to_string());
+        visiting.insert(format!("struct:{struct_name}"));
         let mut offset = 0u32;
         for (field_name, field_type) in fields {
             if field_name == member {
@@ -2728,7 +2795,9 @@ impl Builder {
             HirType::Named(name) if self.struct_fields.contains_key(name) => {
                 self.struct_slot_count_inner(name, visiting)
             }
-            HirType::Named(name) if self.enum_uses_storage(name) => Some(2),
+            HirType::Named(name) if self.enum_uses_storage(name) => {
+                self.enum_storage_slot_count_inner(name, visiting)
+            }
             HirType::Array { length, element } => {
                 let bytes = length.checked_mul(self.type_storage_stride(element, visiting)?)?;
                 u32::try_from(bytes.div_ceil(8)).ok()
@@ -2753,7 +2822,9 @@ impl Builder {
             HirType::Named(name) if self.struct_fields.contains_key(name) => self
                 .struct_slot_count_inner(name, visiting)
                 .map(|slots| u64::from(slots) * 8),
-            HirType::Named(name) if self.enum_uses_storage(name) => Some(16),
+            HirType::Named(name) if self.enum_uses_storage(name) => self
+                .enum_storage_slot_count_inner(name, visiting)
+                .map(|slots| u64::from(slots) * 8),
             _ => Some(8),
         }
     }
@@ -2773,7 +2844,9 @@ impl Builder {
             HirType::Named(name) if self.struct_fields.contains_key(name) => {
                 self.struct_slot_count(name)?
             }
-            HirType::Named(name) if self.enum_uses_storage(name) => 2,
+            HirType::Named(name) if self.enum_uses_storage(name) => {
+                self.enum_storage_slot_count(name)?
+            }
             HirType::Array { length, element } => {
                 let bytes = length.checked_mul(self.element_stride(element))?;
                 u32::try_from(bytes.div_ceil(8)).ok()?
@@ -2840,6 +2913,53 @@ impl Builder {
         self.enum_variants
             .values()
             .any(|variant| variant.owner == enum_name && variant.uses_storage)
+    }
+
+    fn enum_storage_slot_count(&self, enum_name: &str) -> Option<u32> {
+        self.enum_storage_slot_count_inner(enum_name, &mut std::collections::HashSet::new())
+    }
+
+    fn enum_storage_slot_count_inner(
+        &self,
+        enum_name: &str,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> Option<u32> {
+        let key = format!("enum:{enum_name}");
+        if !visiting.insert(key.clone()) {
+            return None;
+        }
+        let mut payload_slots = 1;
+        for variant in self
+            .enum_variants
+            .values()
+            .filter(|variant| variant.owner == enum_name)
+        {
+            if let Some(payload) = &variant.payload {
+                payload_slots = payload_slots.max(self.inline_value_slot_count(payload, visiting)?);
+            }
+        }
+        visiting.remove(&key);
+        payload_slots.checked_add(1)
+    }
+
+    fn inline_value_slot_count(
+        &self,
+        data_type: &HirType,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> Option<u32> {
+        match data_type {
+            HirType::Named(name) if self.struct_fields.contains_key(name) => {
+                self.struct_slot_count_inner(name, visiting)
+            }
+            HirType::Named(name) if self.enum_uses_storage(name) => {
+                self.enum_storage_slot_count_inner(name, visiting)
+            }
+            HirType::Array { length, element } => {
+                let bytes = length.checked_mul(self.type_storage_stride(element, visiting)?)?;
+                u32::try_from(bytes.div_ceil(8)).ok()
+            }
+            _ => Some(1),
+        }
     }
 
     fn element_stride(&self, data_type: &HirType) -> u64 {
@@ -2925,7 +3045,8 @@ impl Builder {
             }
             HirType::Named(name) if self.enum_uses_storage(name) => {
                 let value = self.expression_expected(expression, data_type)?;
-                self.copy_words_to_address(value, destination, 2)
+                let slots = self.enum_storage_slot_count(name)?;
+                self.copy_words_to_address(value, destination, slots)
             }
             HirType::Array { length, element } => {
                 if let Expression::ArrayLiteral(values) = expression {
@@ -2962,7 +3083,8 @@ impl Builder {
                 self.copy_struct_to_address(name, source, destination)
             }
             HirType::Named(name) if self.enum_uses_storage(name) => {
-                self.copy_words_to_address(source, destination, 2)
+                let slots = self.enum_storage_slot_count(name)?;
+                self.copy_words_to_address(source, destination, slots)
             }
             HirType::Array { length, element } => {
                 let stride = self.element_stride(element);
@@ -3037,6 +3159,18 @@ impl Builder {
             }
         }
         Some(())
+    }
+}
+
+fn restore_binding<T>(
+    bindings: &mut std::collections::HashMap<String, T>,
+    name: &str,
+    previous: Option<T>,
+) {
+    if let Some(previous) = previous {
+        bindings.insert(name.to_string(), previous);
+    } else {
+        bindings.remove(name);
     }
 }
 
