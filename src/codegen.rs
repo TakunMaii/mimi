@@ -64,6 +64,13 @@ pub(crate) fn compile_executable_with_options(
     let object_path = output.with_extension("o");
     std::fs::write(&object_path, object)
         .map_err(|error| format!("cannot write object file: {error}"))?;
+    let float8_object = match compile_float8_runtime(module, output) {
+        Ok(object) => object,
+        Err(error) => {
+            let _ = std::fs::remove_file(&object_path);
+            return Err(error);
+        }
+    };
     let sdk = Command::new("xcrun")
         .arg("--show-sdk-path")
         .output()
@@ -93,13 +100,16 @@ pub(crate) fn compile_executable_with_options(
     for library in &options.libraries {
         command.arg(format!("-l{library}"));
     }
-    let result = command
-        .arg(&object_path)
-        .arg("-o")
-        .arg(output)
-        .output()
-        .map_err(|error| format!("cannot invoke ld: {error}"))?;
+    command.arg(&object_path);
+    if let Some(runtime) = &float8_object {
+        command.arg(runtime);
+    }
+    let result = command.arg("-o").arg(output).output();
     let _ = std::fs::remove_file(&object_path);
+    if let Some(runtime) = float8_object {
+        let _ = std::fs::remove_file(runtime);
+    }
+    let result = result.map_err(|error| format!("cannot invoke ld: {error}"))?;
     if result.status.success() {
         Ok(())
     } else {
@@ -131,6 +141,15 @@ fn compile_x86_64(module: &LirModule, output: &Path, options: &LinkOptions) -> R
         return Err(String::from_utf8_lossy(&assembled.stderr).into_owned());
     }
 
+    let float8_object = match compile_float8_runtime(module, output) {
+        Ok(object) => object,
+        Err(error) => {
+            let _ = std::fs::remove_file(&assembly_path);
+            let _ = std::fs::remove_file(&object_path);
+            return Err(error);
+        }
+    };
+
     let mut linker = Command::new("cc");
     if cfg!(target_os = "macos") {
         linker.args(["-arch", "x86_64"]);
@@ -139,18 +158,67 @@ fn compile_x86_64(module: &LirModule, output: &Path, options: &LinkOptions) -> R
         linker.arg("-L").arg(path);
     }
     linker.arg(&object_path);
+    if let Some(runtime) = &float8_object {
+        linker.arg(runtime);
+    }
     for library in &options.libraries {
         linker.arg(format!("-l{library}"));
     }
     let linked = linker.arg("-o").arg(output).output();
     let _ = std::fs::remove_file(&assembly_path);
     let _ = std::fs::remove_file(&object_path);
+    if let Some(runtime) = float8_object {
+        let _ = std::fs::remove_file(runtime);
+    }
     let linked = linked.map_err(|error| format!("cannot invoke x86_64 linker: {error}"))?;
     if linked.status.success() {
         Ok(())
     } else {
         Err(String::from_utf8_lossy(&linked.stderr).into_owned())
     }
+}
+
+fn compile_float8_runtime(
+    module: &LirModule,
+    output: &Path,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let needed = module.functions.iter().any(|function| {
+        function.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instruction| {
+                matches!(instruction, LirInstruction::Call { name, .. } if name.starts_with("mimi_f8_"))
+            })
+        })
+    });
+    if !needed {
+        return Ok(None);
+    }
+    let source_path = output.with_extension("f8.c");
+    let object_path = output.with_extension("f8.o");
+    std::fs::write(&source_path, include_str!("../runtime/f8.c"))
+        .map_err(|error| format!("cannot write f8 runtime source: {error}"))?;
+    let mut compiler = Command::new("cc");
+    if cfg!(target_os = "macos") {
+        compiler.args([
+            "-arch",
+            match module.target {
+                TargetArch::Aarch64 => "arm64",
+                TargetArch::X86_64 => "x86_64",
+            },
+        ]);
+    }
+    let result = compiler
+        .args(["-std=c11", "-O2", "-c"])
+        .arg(&source_path)
+        .arg("-o")
+        .arg(&object_path)
+        .output();
+    let _ = std::fs::remove_file(&source_path);
+    let result = result.map_err(|error| format!("cannot compile f8 runtime: {error}"))?;
+    if !result.status.success() {
+        let _ = std::fs::remove_file(&object_path);
+        return Err(String::from_utf8_lossy(&result.stderr).into_owned());
+    }
+    Ok(Some(object_path))
 }
 
 fn validate_data_layout(module: &LirModule) -> Result<(), String> {
@@ -1342,7 +1410,7 @@ fn push_word(bytes: &mut Vec<u8>, word: u32) {
 
 fn float_width(data_type: &HirType) -> Option<u16> {
     match data_type {
-        HirType::Float { bits } => Some(*bits),
+        HirType::Float { bits } if *bits != 8 => Some(*bits),
         _ => None,
     }
 }

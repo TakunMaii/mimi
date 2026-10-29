@@ -117,7 +117,10 @@ fn emit_function(
                     load_value(assembly, function, *pointer, "rax")?;
                     load_value(assembly, function, *length, "rdx")?;
                 } else if let Some(value) = value {
-                    if let HirType::Float { bits } = function.result {
+                    if let HirType::Float {
+                        bits: bits @ (16 | 32 | 64),
+                    } = function.result
+                    {
                         load_value(assembly, function, *value, "rax")?;
                         load_float_abi_bits_to_xmm(assembly, "rax", 0, bits)?;
                     } else {

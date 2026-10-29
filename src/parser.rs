@@ -565,46 +565,15 @@ where
                 }
                 (2, None)
             }
-            Some(Token::Identifier(type_name)) => {
-                let data_type = parse_named_type(type_name, tokens);
+            Some(first) => {
+                let data_type = parse_type_from(first, tokens);
                 match tokens.next() {
                     Some(Token::Equal) => (1, Some(data_type)),
                     Some(Token::Colon) => (2, Some(data_type)),
                     _ => panic!("expected '=' or ':' after type"),
                 }
             }
-            Some(Token::F8) => match tokens.next() {
-                Some(Token::Equal) => (1, Some(DataType::F8)),
-                Some(Token::Colon) => (2, Some(DataType::F8)),
-                _ => panic!("expected '=' or ':' after type"),
-            },
-            Some(Token::LeftBracket) => {
-                let mut type_tokens = vec![Token::LeftBracket];
-                while let Some(token) = tokens.next() {
-                    let done = matches!(token, Token::Identifier(_) | Token::RightBracket)
-                        && matches!(tokens.peek(), Some(Token::Equal | Token::Colon));
-                    type_tokens.push(token);
-                    if done {
-                        break;
-                    }
-                }
-                let mut type_iter = type_tokens.into_iter().peekable();
-                let data_type = parse_type(&mut type_iter);
-                match tokens.next() {
-                    Some(Token::Equal) => (1, Some(data_type)),
-                    Some(Token::Colon) => (2, Some(data_type)),
-                    _ => panic!("expected '=' or ':' after type"),
-                }
-            }
-            Some(Token::Star) => {
-                let data_type = DataType::Pointer(Box::leak(Box::new(parse_type(tokens))));
-                match tokens.next() {
-                    Some(Token::Equal) => (1, Some(data_type)),
-                    Some(Token::Colon) => (2, Some(data_type)),
-                    _ => panic!("expected '=' or ':' after pointer type"),
-                }
-            }
-            _ => panic!("expected ':', '=', or a type after ':'"),
+            None => panic!("expected ':', '=', or a type after ':'"),
         },
         _ => panic!("expected an operator after identifier"),
     };
@@ -905,8 +874,15 @@ fn parse_type<I>(tokens: &mut std::iter::Peekable<I>) -> DataType
 where
     I: Iterator<Item = Token> + Clone,
 {
-    if matches!(tokens.peek(), Some(Token::Fn)) {
-        tokens.next();
+    let first = tokens.next().expect("expected type");
+    parse_type_from(first, tokens)
+}
+
+fn parse_type_from<I>(first: Token, tokens: &mut std::iter::Peekable<I>) -> DataType
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    if matches!(first, Token::Fn) {
         assert!(
             matches!(tokens.next(), Some(Token::LeftParen)),
             "expected '(' in function type"
@@ -930,12 +906,10 @@ where
             Box::leak(Box::new(return_type)),
         );
     }
-    if matches!(tokens.peek(), Some(Token::Star)) {
-        tokens.next();
+    if matches!(first, Token::Star) {
         return DataType::Pointer(Box::leak(Box::new(parse_type(tokens))));
     }
-    if matches!(tokens.peek(), Some(Token::LeftBracket)) {
-        tokens.next();
+    if matches!(first, Token::LeftBracket) {
         let length = match tokens.next() {
             Some(Token::RightBracket) => None,
             Some(Token::LiteralNumber(value)) => {
@@ -955,9 +929,9 @@ where
             None => DataType::Slice(element),
         };
     }
-    match tokens.next() {
-        Some(Token::F8) => DataType::F8,
-        Some(Token::Identifier(name)) => parse_named_type(name, tokens),
+    match first {
+        Token::F8 => DataType::F8,
+        Token::Identifier(name) => parse_named_type(name, tokens),
         _ => panic!("expected type"),
     }
 }

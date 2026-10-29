@@ -245,6 +245,8 @@ struct Builder {
     slice_value_lengths: std::collections::HashMap<ValueId, ValueId>,
     function_value_environments: std::collections::HashMap<ValueId, ValueId>,
     function_environment_slots: std::collections::HashMap<String, SlotId>,
+    lambda_captures: std::collections::HashMap<String, Vec<String>>,
+    closure_capture_types: Vec<(String, Vec<(String, HirType)>)>,
     expected_type_hint: Option<HirType>,
     return_type: HirType,
     return_pointer: Option<ValueId>,
@@ -424,6 +426,11 @@ impl Builder {
                     Some(result)
                 }
                 None => {
+                    if let Some(capture_names) = self.lambda_captures.get(name).cloned() {
+                        if !capture_names.is_empty() {
+                            return self.lower_closure_value(name, &capture_names);
+                        }
+                    }
                     if let Some(constant) = self.resolve_global_constant_name(name) {
                         return self.lower_global_constant(&constant);
                     }
@@ -548,7 +555,7 @@ impl Builder {
             }
             Expression::Index { object, index } => {
                 let (base, scale) = self.lower_index_base(object)?;
-                let index = self.expression(index)?;
+                let index = self.expression_unhinted(index)?;
                 let address = self.value();
                 self.emit(MirInstruction::IndexAddress {
                     result: address,
@@ -596,7 +603,7 @@ impl Builder {
                     }
                     Expression::Index { object, index } => {
                         let (base, scale) = self.lower_index_base(object)?;
-                        let index = self.expression(index)?;
+                        let index = self.expression_unhinted(index)?;
                         let address = self.value();
                         self.emit(MirInstruction::IndexAddress {
                             result: address,
@@ -734,7 +741,7 @@ impl Builder {
                 let expected_float = self
                     .expected_type_hint
                     .as_ref()
-                    .and_then(|ty| self.float_abi_width(ty));
+                    .and_then(|ty| self.float_math_width(ty));
                 if let Some(width) = expected_float.or_else(|| text.contains('.').then_some(64)) {
                     let value = text.parse::<f64>().ok()?;
                     let bits = match width {
@@ -1166,7 +1173,7 @@ impl Builder {
                 let expected = self
                     .expected_type_hint
                     .clone()
-                    .filter(|ty| self.float_abi_width(ty).is_some())
+                    .filter(|ty| self.float_math_width(ty).is_some())
                     .or_else(|| self.expression_type(value));
                 let value = if let Some(data_type) = expected.as_ref() {
                     self.expression_expected(value, data_type)
@@ -1176,7 +1183,7 @@ impl Builder {
                 let result = self.value();
                 if let Some(width) = self
                     .value_type(value)
-                    .and_then(|ty| self.float_abi_width(&ty))
+                    .and_then(|ty| self.float_math_width(&ty))
                 {
                     self.emit(MirInstruction::FloatNeg {
                         result,
@@ -1229,7 +1236,7 @@ impl Builder {
                 let result = self.value();
                 if let Some(width) = operand_type
                     .as_ref()
-                    .and_then(|ty| self.float_abi_width(ty))
+                    .and_then(|ty| self.float_math_width(ty))
                 {
                     self.emit(MirInstruction::FloatCompare {
                         result,
@@ -1522,7 +1529,7 @@ impl Builder {
                                     index: Box::new(index.clone()),
                                 });
                                 let base = self.expression(object)?;
-                                let index = self.expression(index)?;
+                                let index = self.expression_unhinted(index)?;
                                 let address = self.value();
                                 let scale = self.index_scale(object);
                                 self.emit(MirInstruction::IndexAddress {
@@ -1921,7 +1928,7 @@ impl Builder {
         let result = self.value();
         if let Some(width) = operation_type
             .as_ref()
-            .and_then(|ty| self.float_abi_width(ty))
+            .and_then(|ty| self.float_math_width(ty))
         {
             let kind = match kind {
                 0 => FloatBinaryKind::Add,
@@ -1961,6 +1968,13 @@ impl Builder {
         expected: &HirType,
     ) -> Option<ValueId> {
         let previous = self.expected_type_hint.replace(expected.clone());
+        let result = self.expression(expression);
+        self.expected_type_hint = previous;
+        result
+    }
+
+    fn expression_unhinted(&mut self, expression: &Expression) -> Option<ValueId> {
+        let previous = self.expected_type_hint.take();
         let result = self.expression(expression);
         self.expected_type_hint = previous;
         result
@@ -2272,20 +2286,20 @@ impl Builder {
             .then(|| self.expression_type(rhs))
             .flatten();
         lhs_type
-            .filter(|ty| self.float_abi_width(ty).is_some())
-            .or_else(|| rhs_type.filter(|ty| self.float_abi_width(ty).is_some()))
+            .filter(|ty| self.float_math_width(ty).is_some())
+            .or_else(|| rhs_type.filter(|ty| self.float_math_width(ty).is_some()))
             .or_else(|| {
                 self.expected_type_hint
                     .clone()
-                    .filter(|ty| self.float_abi_width(ty).is_some())
+                    .filter(|ty| self.float_math_width(ty).is_some())
             })
             .or_else(|| {
                 self.expression_type(lhs)
-                    .filter(|ty| self.float_abi_width(ty).is_some())
+                    .filter(|ty| self.float_math_width(ty).is_some())
             })
             .or_else(|| {
                 self.expression_type(rhs)
-                    .filter(|ty| self.float_abi_width(ty).is_some())
+                    .filter(|ty| self.float_math_width(ty).is_some())
             })
     }
 
@@ -2791,7 +2805,7 @@ impl Builder {
             Expression::Slice { object, start, end } => {
                 let (base, object_length, scale) = self.lower_array_view(object)?;
                 let start = if let Some(start) = start {
-                    self.expression(start)?
+                    self.expression_unhinted(start)?
                 } else {
                     let start = self.value();
                     self.emit(MirInstruction::ConstInt {
@@ -2801,7 +2815,7 @@ impl Builder {
                     start
                 };
                 let end = if let Some(end) = end {
-                    self.expression(end)?
+                    self.expression_unhinted(end)?
                 } else {
                     object_length
                 };
@@ -3192,7 +3206,14 @@ impl Builder {
 
     fn float_abi_width(&self, data_type: &HirType) -> Option<u16> {
         match self.type_layouts.abi_class(data_type)? {
-            AbiClass::Float(width) => Some(width),
+            AbiClass::Float(width) if width != 8 => Some(width),
+            _ => None,
+        }
+    }
+
+    fn float_math_width(&self, data_type: &HirType) -> Option<u16> {
+        match data_type {
+            HirType::Float { bits } => Some(*bits),
             _ => None,
         }
     }
@@ -3318,6 +3339,93 @@ impl Builder {
                 params: params[..params.len() - 1].to_vec(),
                 result: Box::new(return_type.clone()),
             },
+        );
+        self.function_value_environments.insert(result, environment);
+        self.slice_value_lengths.insert(result, environment);
+        Some(result)
+    }
+
+    fn lower_closure_value(&mut self, name: &str, capture_names: &[String]) -> Option<ValueId> {
+        let captures = capture_names
+            .iter()
+            .filter_map(|capture| {
+                self.variable_types
+                    .get(capture)
+                    .cloned()
+                    .map(|data_type| (capture.clone(), data_type))
+            })
+            .collect::<Vec<_>>();
+        if captures.is_empty() {
+            return None;
+        }
+        let offsets = captures
+            .iter()
+            .scan(0u64, |offset, (_, data_type)| {
+                let size = self.type_layouts.layout(data_type)?.size_bytes.max(1);
+                let aligned = (*offset + 7) & !7;
+                *offset = aligned.checked_add((size + 7) & !7)?;
+                Some((aligned, data_type.clone()))
+            })
+            .collect::<Vec<_>>();
+        if offsets.len() != captures.len() {
+            return None;
+        }
+        let size = offsets
+            .iter()
+            .zip(&captures)
+            .filter_map(|((offset, _), (_, data_type))| {
+                self.type_layouts
+                    .layout(data_type)
+                    .map(|layout| offset + ((layout.size_bytes + 7) & !7))
+            })
+            .max()?;
+        let size_value = self.value();
+        self.emit(MirInstruction::ConstInt {
+            result: size_value,
+            value: size as i128,
+        });
+        let environment = self.value();
+        self.emit(MirInstruction::Call {
+            result: Some(environment),
+            result_slice_length: None,
+            name: "malloc".to_string(),
+            args: vec![size_value],
+            float_args: Vec::new(),
+            result_float: None,
+        });
+        for (((capture, data_type), (offset, _)), _) in captures.iter().zip(&offsets).zip(0..) {
+            let source = self.expression(&Expression::Identifier(capture.clone()))?;
+            let destination = self.byte_offset_address(environment, *offset);
+            if self.is_inline_aggregate(data_type) {
+                self.copy_inline_value_to_address(data_type, source, destination)?;
+            } else if matches!(data_type, HirType::Slice(_)) {
+                self.store_slice_descriptor(destination, source)?;
+            } else if matches!(data_type, HirType::Function { .. }) {
+                self.store_function_descriptor(destination, source)?;
+            } else {
+                self.emit_store_indirect(destination, source, Some(data_type));
+            }
+        }
+        self.closure_capture_types
+            .push((name.to_string(), captures));
+        let result = self.value();
+        self.emit(MirInstruction::LoadFunctionAddress {
+            result,
+            symbol: format!("_{}", self.link_function_name(name)),
+            external: false,
+        });
+        self.value_types.insert(
+            result,
+            self.function_signatures.get(name).map_or_else(
+                || HirType::Function {
+                    params: Vec::new(),
+                    result: Box::new(HirType::Void),
+                },
+                |(params, result)| HirType::Function {
+                    params: params.clone(),
+                    result: Box::new(result.clone()),
+                },
+            ),
         );
         self.function_value_environments.insert(result, environment);
         self.slice_value_lengths.insert(result, environment);
@@ -3574,6 +3682,8 @@ fn restore_binding<T>(
 
 fn lower_function(
     function: &HirFunction,
+    captures: &[(String, HirType)],
+    lambda_captures: &std::collections::HashMap<String, Vec<String>>,
     enum_variants: &std::collections::HashMap<String, EnumVariant>,
     struct_fields: &std::collections::HashMap<String, Vec<(String, Option<Expression>)>>,
     struct_field_types: &std::collections::HashMap<String, Vec<(String, HirType)>>,
@@ -3584,7 +3694,7 @@ fn lower_function(
     global_constants: &std::collections::HashMap<String, crate::hir::HirConstant>,
     type_layouts: &TypeLayouts,
     layout: TargetDataLayout,
-) -> MirFunction {
+) -> Option<(MirFunction, Vec<(String, Vec<(String, HirType)>)>)> {
     let mut builder = Builder {
         layout,
         type_layouts: type_layouts.clone(),
@@ -3619,6 +3729,8 @@ fn lower_function(
         slice_value_lengths: std::collections::HashMap::new(),
         function_value_environments: std::collections::HashMap::new(),
         function_environment_slots: std::collections::HashMap::new(),
+        lambda_captures: lambda_captures.clone(),
+        closure_capture_types: Vec::new(),
         expected_type_hint: None,
         return_type: function.result.clone(),
         return_pointer: None,
@@ -3693,6 +3805,63 @@ fn lower_function(
         });
         params.push((name.clone(), ty.clone(), incoming));
     }
+    if !captures.is_empty() {
+        let environment = builder.value();
+        abi_params.push(environment);
+        let mut offset = 0u64;
+        for (name, ty) in captures {
+            offset = (offset + 7) & !7;
+            let address = builder.byte_offset_address(environment, offset);
+            let layout_size = builder.type_layouts.layout(ty)?.size_bytes.max(1);
+            let slot = builder.slot();
+            builder.variables.insert(name.clone(), Variable::Slot(slot));
+            builder.variable_types.insert(name.clone(), ty.clone());
+            if builder.is_inline_aggregate(ty) {
+                builder.emit(MirInstruction::StoreSlot {
+                    slot,
+                    value: address,
+                });
+            } else if matches!(ty, HirType::Slice(_)) {
+                let value = builder.load_slice_descriptor(address, ty)?;
+                builder.emit(MirInstruction::StoreSlot { slot, value });
+                let length = builder.slice_value_lengths.get(&value).copied()?;
+                let length_slot = builder.slot();
+                builder.slice_lengths.insert(name.clone(), length_slot);
+                builder.emit(MirInstruction::StoreSlot {
+                    slot: length_slot,
+                    value: length,
+                });
+                if let HirType::Slice(element) = ty {
+                    builder
+                        .slice_scales
+                        .insert(name.clone(), builder.element_stride(element));
+                }
+            } else if matches!(ty, HirType::Function { .. }) {
+                let value = builder.load_function_descriptor(address, ty)?;
+                builder.emit(MirInstruction::StoreSlot { slot, value });
+                let environment = builder.function_value_environments.get(&value).copied()?;
+                let environment_slot = builder.slot();
+                builder
+                    .function_environment_slots
+                    .insert(name.clone(), environment_slot);
+                builder.emit(MirInstruction::StoreSlot {
+                    slot: environment_slot,
+                    value: environment,
+                });
+            } else {
+                let value = builder.value();
+                builder.emit_load_indirect(value, address, Some(ty));
+                builder.emit(MirInstruction::StoreSlot { slot, value });
+            }
+            if let HirType::Array { length, .. } = ty {
+                builder.array_lengths.insert(name.clone(), *length);
+            }
+            if let Some(struct_name) = struct_name_from_hir_type(ty, &builder.struct_fields) {
+                builder.variable_structs.insert(name.clone(), struct_name);
+            }
+            offset = offset.checked_add((layout_size + 7) & !7)?;
+        }
+    }
     let result = builder.expression_expected(&function.body, &function.result);
     let result = if function.result == HirType::Void {
         None
@@ -3716,7 +3885,7 @@ fn lower_function(
     }
     let mut blocks = builder.blocks;
     prune_unreachable_blocks(&mut blocks);
-    MirFunction {
+    let mir_function = MirFunction {
         name: function.name.clone(),
         params,
         abi_params,
@@ -3724,7 +3893,8 @@ fn lower_function(
         result: function.result.clone(),
         slot_count: builder.next_slot,
         blocks,
-    }
+    };
+    Some((mir_function, builder.closure_capture_types))
 }
 
 fn prune_unreachable_blocks(blocks: &mut Vec<MirBlock>) {
@@ -3955,27 +4125,41 @@ pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout
         .iter()
         .map(|constant| (constant.name.clone(), constant.clone()))
         .collect::<std::collections::HashMap<_, _>>();
+    let lambda_captures = module
+        .functions
+        .iter()
+        .filter(|function| !function.captures.is_empty())
+        .map(|function| (function.name.clone(), function.captures.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut capture_types = std::collections::HashMap::<String, Vec<(String, HirType)>>::new();
+    let mut functions = Vec::with_capacity(module.functions.len());
+    for function in &module.functions {
+        let captures = capture_types
+            .get(&function.name)
+            .cloned()
+            .unwrap_or_default();
+        let (lowered, discovered) = lower_function(
+            function,
+            &captures,
+            &lambda_captures,
+            &enum_variants,
+            &struct_fields,
+            &struct_field_types,
+            &function_slice_params,
+            &method_targets,
+            &function_signatures,
+            &external_symbols,
+            &global_constants,
+            &type_layouts,
+            layout,
+        )
+        .expect("MIR lowering failed for a type-checked function");
+        functions.push(lowered);
+        capture_types.extend(discovered);
+    }
     MirModule {
         data_layout: layout,
-        functions: module
-            .functions
-            .iter()
-            .map(|function| {
-                lower_function(
-                    function,
-                    &enum_variants,
-                    &struct_fields,
-                    &struct_field_types,
-                    &function_slice_params,
-                    &method_targets,
-                    &function_signatures,
-                    &external_symbols,
-                    &global_constants,
-                    &type_layouts,
-                    layout,
-                )
-            })
-            .collect(),
+        functions,
     }
 }
 

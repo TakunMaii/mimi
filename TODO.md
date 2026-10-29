@@ -19,11 +19,11 @@ and focused regression coverage; it does not imply support on every target.
 
 ## Values and Memory
 
-- [ ] Implement floating-point literals, arithmetic, comparisons, and ABI handling.
+- [x] Implement floating-point literals, arithmetic, comparisons, and ABI handling.
   - [x] Support f32/f64 scalar literals, arithmetic, comparisons, function arguments, and returns.
   - [x] Support f16 literals, arithmetic, comparisons, function arguments, and returns.
   - [x] Reserve `f8` as a keyword and retain it as a type placeholder.
-  - [ ] Define an f8 encoding and support its lowering and ABI representation.
+  - [x] Define f8 as E4M3FN and support its lowering, arithmetic, comparisons, storage, and ABI representation.
 - [x] Define target data layout and ABI rules for all supported value types.
   - [x] Carry pointer and stack-slot widths from target selection through MIR and LIR.
   - [x] Centralize recursive aggregate layouts and per-type ABI classification.
@@ -62,7 +62,7 @@ and focused regression coverage; it does not imply support on every target.
 
 - [x] Implement named function values, function-value parameters, and indirect calls.
 - [x] Lift capture-free lambda bodies into callable functions.
-- [ ] Capture outer values in lambda closure environments.
+- [x] Capture outer values in lambda closure environments, including nested closures and inline aggregates.
 - [x] Lower direct instance and static method calls with automatic or explicit receivers.
 - [x] Support static methods as function values and indirect calls.
 - [x] Support bound instance methods as function values and indirect calls.

@@ -129,6 +129,89 @@ fn builds_and_runs_capture_free_lambdas() {
 }
 
 #[test]
+fn builds_and_runs_lambdas_that_capture_outer_values() {
+    let source =
+        std::env::temp_dir().join(format!("mimi_capture_source_{}.mi", std::process::id()));
+    let executable =
+        std::env::temp_dir().join(format!("mimi_capture_executable_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "apply :: fn (function : fn(i32)i32, value : i32) i32 { function(value) } main :: fn () i32 { offset := 40 addOffset := fn (value : i32) i32 { value + offset } apply(addOffset, 2) - 42 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
+fn builds_and_runs_nested_lambdas_with_transitive_captures() {
+    let source = std::env::temp_dir().join(format!(
+        "mimi_nested_capture_source_{}.mi",
+        std::process::id()
+    ));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_nested_capture_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { offset := 40 make := fn () fn(i32)i32 { fn (value : i32) i32 { value + offset } } addOffset := make() addOffset(2) - 42 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
+fn builds_and_runs_lambdas_that_capture_aggregate_values() {
+    let source = std::env::temp_dir().join(format!(
+        "mimi_aggregate_capture_source_{}.mi",
+        std::process::id()
+    ));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_aggregate_capture_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "point :: struct { x : i32 } main :: fn () i32 { origin := point { x = 40 } addX := fn (value : i32) i32 { origin.x + value } addX(2) - 42 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
 fn builds_and_runs_imported_external_functions() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
@@ -1686,6 +1769,10 @@ fn builds_x86_64_arrays_slices_pointers_and_loops() {
             "counter :: struct { x : i32, increment() :: fn (self : *Self) i32 { self.x = self.x + 1 self.x } } main :: fn () i32 { value := counter { x = 4 } pointer := &value method := pointer.increment method() + value.x - 10 }",
             0,
         ),
+        (
+            "add :: fn (left : f8, right : f8) f8 { left + right } main :: fn () i32 { max : f8 = 448.0 saturated := add(max, max) result := if add(1.5, 2.25) == 3.75 && saturated == max && -1.5 < 0.0 { 0 } else { 1 } result }",
+            0,
+        ),
     ] {
         std::fs::write(&source, program).unwrap();
         build_file_for_target(
@@ -2312,6 +2399,65 @@ fn builds_and_runs_f16_arithmetic_and_abi() {
     assert_eq!(status.code(), Some(0));
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn builds_and_runs_f8_arithmetic_comparisons_and_abi() {
+    if !cfg!(target_arch = "x86_64")
+        && !(cfg!(target_os = "macos") && cfg!(target_arch = "aarch64"))
+    {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_f8_source_{}.mi", std::process::id()));
+    let executable =
+        std::env::temp_dir().join(format!("mimi_f8_executable_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "add :: fn (left : f8, right : f8) f8 { left + right } apply :: fn (function : fn(f8,f8)f8, left : f8, right : f8) f8 { function(left, right) } main :: fn () i32 { a : f8 = 1.5 b : f8 = 2.25 sum := apply(add, a, b) difference : f8 = 5.5 - 2.25 product : f8 = 1.5 * 2.5 quotient : f8 = 6.0 / 2.0 negative : f8 = -1.5 tie : f8 = 1.0625 tiny : f8 = 0.001953125 max : f8 = 448.0 saturated := add(max, max) result := if sum == 3.75 && difference == 3.25 && product == 3.75 && quotient == 3.0 && negative == -1.5 && tie == 1.0 && tiny != 0.0 && saturated == max { 0 } else { 1 } result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
+fn builds_and_runs_f8_edge_values_in_compound_storage() {
+    if !cfg!(target_arch = "x86_64")
+        && !(cfg!(target_os = "macos") && cfg!(target_arch = "aarch64"))
+    {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_f8_storage_source_{}.mi", std::process::id()));
+    let executable =
+        std::env::temp_dir().join(format!("mimi_f8_storage_executable_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "holder :: struct { value : f8 } main :: fn () i32 { values : [2]f8 = [1.5, 2.25] stored := holder { value = values[1] } result := if values[1] == 2.25 { 0 } else { 1 } result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
 }
 
 #[test]

@@ -298,13 +298,32 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                             rhs,
                             kind,
                             width,
-                        } => LirInstruction::FloatBinary {
-                            destination: *result,
-                            lhs: *lhs,
-                            rhs: *rhs,
-                            kind: *kind,
-                            width: *width,
-                        },
+                        } => {
+                            if *width == 8 {
+                                let operation = match kind {
+                                    FloatBinaryKind::Add => "add",
+                                    FloatBinaryKind::Subtract => "sub",
+                                    FloatBinaryKind::Multiply => "mul",
+                                    FloatBinaryKind::Divide => "div",
+                                };
+                                LirInstruction::Call {
+                                    result: Some(*result),
+                                    result_slice_length: None,
+                                    name: format!("mimi_f8_{operation}"),
+                                    args: vec![*lhs, *rhs],
+                                    float_args: Vec::new(),
+                                    result_float: None,
+                                }
+                            } else {
+                                LirInstruction::FloatBinary {
+                                    destination: *result,
+                                    lhs: *lhs,
+                                    rhs: *rhs,
+                                    kind: *kind,
+                                    width: *width,
+                                }
+                            }
+                        }
                         MirInstruction::Sub { result, lhs, rhs } => LirInstruction::Sub {
                             destination: *result,
                             lhs: *lhs,
@@ -333,11 +352,24 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                             result,
                             value,
                             width,
-                        } => LirInstruction::FloatNeg {
-                            destination: *result,
-                            value: *value,
-                            width: *width,
-                        },
+                        } => {
+                            if *width == 8 {
+                                LirInstruction::Call {
+                                    result: Some(*result),
+                                    result_slice_length: None,
+                                    name: "mimi_f8_neg".to_string(),
+                                    args: vec![*value],
+                                    float_args: Vec::new(),
+                                    result_float: None,
+                                }
+                            } else {
+                                LirInstruction::FloatNeg {
+                                    destination: *result,
+                                    value: *value,
+                                    width: *width,
+                                }
+                            }
+                        }
                         MirInstruction::Not { result, value } => LirInstruction::Not {
                             destination: *result,
                             value: *value,
@@ -359,13 +391,34 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                             rhs,
                             kind,
                             width,
-                        } => LirInstruction::FloatCompare {
-                            destination: *result,
-                            lhs: *lhs,
-                            rhs: *rhs,
-                            kind: *kind,
-                            width: *width,
-                        },
+                        } => {
+                            if *width == 8 {
+                                let operation = match kind {
+                                    CompareKind::Equal => "eq",
+                                    CompareKind::NotEqual => "ne",
+                                    CompareKind::Less => "lt",
+                                    CompareKind::LessEqual => "le",
+                                    CompareKind::Greater => "gt",
+                                    CompareKind::GreaterEqual => "ge",
+                                };
+                                LirInstruction::Call {
+                                    result: Some(*result),
+                                    result_slice_length: None,
+                                    name: format!("mimi_f8_{operation}"),
+                                    args: vec![*lhs, *rhs],
+                                    float_args: Vec::new(),
+                                    result_float: None,
+                                }
+                            } else {
+                                LirInstruction::FloatCompare {
+                                    destination: *result,
+                                    lhs: *lhs,
+                                    rhs: *rhs,
+                                    kind: *kind,
+                                    width: *width,
+                                }
+                            }
+                        }
                         MirInstruction::Phi { result, incoming } => LirInstruction::Phi {
                             destination: *result,
                             incoming: incoming.clone(),

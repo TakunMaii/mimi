@@ -74,6 +74,7 @@ pub(crate) struct HirFunction {
     pub(crate) params: Vec<(String, HirType)>,
     pub(crate) result: HirType,
     pub(crate) body: Expression,
+    pub(crate) captures: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -158,6 +159,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                     .collect(),
                 result: (*return_type).into(),
                 body: body.clone(),
+                captures: Vec::new(),
             });
         }
         if let ASTNode::ExternalFunction {
@@ -233,6 +235,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                         .collect(),
                     result: method_type(method.return_type, *name),
                     body: method.body.clone(),
+                    captures: Vec::new(),
                 });
                 if has_receiver {
                     let bound_symbol = format!("mimi_bound_{}__{}", name, method.name);
@@ -269,6 +272,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                             name: symbol.clone(),
                             arguments,
                         },
+                        captures: Vec::new(),
                     });
                     bound_methods.push((method.name.clone(), bound_symbol));
                 }
@@ -300,18 +304,6 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
         )
         .collect::<std::collections::HashSet<_>>();
     let mut next_lambda = 0;
-    let mut index = 0;
-    while index < module.functions.len() {
-        let mut body = module.functions[index].body.clone();
-        lift_lambdas_in_expression(
-            &mut body,
-            &mut module.functions,
-            &mut used_names,
-            &mut next_lambda,
-        );
-        module.functions[index].body = body;
-        index += 1;
-    }
     for structure in &mut module.structs {
         for (_, _, default) in &mut structure.fields {
             if let Some(default) = default {
@@ -323,6 +315,18 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                 );
             }
         }
+    }
+    let mut index = 0;
+    while index < module.functions.len() {
+        let mut body = module.functions[index].body.clone();
+        lift_lambdas_in_expression(
+            &mut body,
+            &mut module.functions,
+            &mut used_names,
+            &mut next_lambda,
+        );
+        module.functions[index].body = body;
+        index += 1;
     }
     module
 }
@@ -628,6 +632,207 @@ fn inferred_negative_integer_type(text: &str) -> Option<HirType> {
     }
 }
 
+fn collect_free_names(
+    expression: &Expression,
+    bound: &mut std::collections::HashSet<String>,
+    captures: &mut Vec<String>,
+) {
+    fn add(name: &str, bound: &std::collections::HashSet<String>, captures: &mut Vec<String>) {
+        if !bound.contains(name) && !captures.iter().any(|capture| capture == name) {
+            captures.push(name.to_string());
+        }
+    }
+    fn node(
+        item: &ASTNode,
+        bound: &mut std::collections::HashSet<String>,
+        captures: &mut Vec<String>,
+    ) {
+        match item {
+            ASTNode::VariableDefinition { name, value, .. }
+            | ASTNode::CompileTimeConstant { name, value, .. } => {
+                collect_free_names(value, bound, captures);
+                bound.insert(name.clone());
+            }
+            ASTNode::Assignment { name, value } => {
+                add(name, bound, captures);
+                collect_free_names(value, bound, captures);
+            }
+            ASTNode::IndexAssignment {
+                object,
+                index,
+                value,
+            } => {
+                collect_free_names(object, bound, captures);
+                collect_free_names(index, bound, captures);
+                collect_free_names(value, bound, captures);
+            }
+            ASTNode::PointerAssignment { pointer, value } => {
+                collect_free_names(pointer, bound, captures);
+                collect_free_names(value, bound, captures);
+            }
+            ASTNode::MemberAssignment { object, value, .. } => {
+                collect_free_names(object, bound, captures);
+                collect_free_names(value, bound, captures);
+            }
+            ASTNode::Expression(value) => collect_free_names(value, bound, captures),
+            ASTNode::Return(value) => {
+                if let Some(value) = value {
+                    collect_free_names(value, bound, captures);
+                }
+            }
+            ASTNode::FunctionDefinition { .. }
+            | ASTNode::ExternalFunction { .. }
+            | ASTNode::Break
+            | ASTNode::Continue
+            | ASTNode::StructDefinition { .. }
+            | ASTNode::EnumDefinition { .. }
+            | ASTNode::Import { .. } => {}
+            ASTNode::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                collect_free_names(condition, bound, captures);
+                collect_free_names(then_branch, &mut bound.clone(), captures);
+                if let Some(branch) = else_branch {
+                    collect_free_names(branch, &mut bound.clone(), captures);
+                }
+            }
+            ASTNode::While { condition, body } | ASTNode::DoWhile { body, condition } => {
+                collect_free_names(condition, bound, captures);
+                collect_free_names(body, &mut bound.clone(), captures);
+            }
+            ASTNode::For {
+                binding,
+                iterable,
+                body,
+            } => {
+                collect_free_names(iterable, bound, captures);
+                let mut nested = bound.clone();
+                nested.insert(binding.clone());
+                collect_free_names(body, &mut nested, captures);
+            }
+            ASTNode::Loop { body } | ASTNode::Defer { body } => {
+                collect_free_names(body, &mut bound.clone(), captures);
+            }
+            ASTNode::IfLet {
+                binding,
+                value,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_free_names(value, bound, captures);
+                let mut nested = bound.clone();
+                if let Some(binding) = binding {
+                    nested.insert(binding.clone());
+                }
+                collect_free_names(then_branch, &mut nested, captures);
+                if let Some(branch) = else_branch {
+                    collect_free_names(branch, &mut bound.clone(), captures);
+                }
+            }
+            ASTNode::Public(inner) => node(inner, bound, captures),
+        }
+    }
+    match expression {
+        Expression::Identifier(name) => add(name, bound, captures),
+        Expression::Negate(value)
+        | Expression::Not(value)
+        | Expression::AddressOf(value)
+        | Expression::Dereference(value) => collect_free_names(value, bound, captures),
+        Expression::Add(left, right)
+        | Expression::Subtract(left, right)
+        | Expression::Multiply(left, right)
+        | Expression::Divide(left, right)
+        | Expression::Remainder(left, right)
+        | Expression::Equal(left, right)
+        | Expression::NotEqual(left, right)
+        | Expression::LessThan(left, right)
+        | Expression::LessThanOrEqual(left, right)
+        | Expression::GreaterThan(left, right)
+        | Expression::GreaterThanOrEqual(left, right)
+        | Expression::And(left, right)
+        | Expression::Or(left, right) => {
+            collect_free_names(left, bound, captures);
+            collect_free_names(right, bound, captures);
+        }
+        Expression::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_free_names(condition, bound, captures);
+            collect_free_names(then_branch, &mut bound.clone(), captures);
+            collect_free_names(else_branch, &mut bound.clone(), captures);
+        }
+        Expression::Block(items) => {
+            let mut nested = bound.clone();
+            for item in items {
+                node(item, &mut nested, captures);
+            }
+        }
+        Expression::Call { name, arguments } => {
+            add(name, bound, captures);
+            for argument in arguments {
+                collect_free_names(argument, bound, captures);
+            }
+        }
+        Expression::CallValue { callee, arguments } => {
+            collect_free_names(callee, bound, captures);
+            for argument in arguments {
+                collect_free_names(argument, bound, captures);
+            }
+        }
+        Expression::StructLiteral { fields, .. } => {
+            for (_, value) in fields {
+                collect_free_names(value, bound, captures);
+            }
+        }
+        Expression::MemberAccess { object, .. } => collect_free_names(object, bound, captures),
+        Expression::ArrayLiteral(values) => {
+            for value in values {
+                collect_free_names(value, bound, captures);
+            }
+        }
+        Expression::Index { object, index } => {
+            collect_free_names(object, bound, captures);
+            collect_free_names(index, bound, captures);
+        }
+        Expression::Slice { object, start, end } => {
+            collect_free_names(object, bound, captures);
+            for value in start.iter().chain(end.iter()) {
+                collect_free_names(value, bound, captures);
+            }
+        }
+        Expression::Match { value, arms } => {
+            collect_free_names(value, bound, captures);
+            for (pattern, body) in arms {
+                let mut nested = bound.clone();
+                if let crate::parser::Pattern::Variant {
+                    binding: Some(binding),
+                    ..
+                } = pattern
+                {
+                    nested.insert(binding.clone());
+                }
+                collect_free_names(body, &mut nested, captures);
+            }
+        }
+        Expression::Lambda {
+            parameters, body, ..
+        } => {
+            let mut nested = bound.clone();
+            nested.extend(parameters.iter().filter_map(|(name, _)| name.clone()));
+            collect_free_names(body, &mut nested, captures);
+        }
+        Expression::LiteralNumber(_)
+        | Expression::LiteralString(_)
+        | Expression::LiteralBool(_)
+        | Expression::StaticAccess { .. } => {}
+    }
+}
+
 fn lift_lambdas_in_expression(
     expression: &mut Expression,
     functions: &mut Vec<HirFunction>,
@@ -705,7 +910,6 @@ fn lift_lambdas_in_expression(
             return_type,
             body,
         } => {
-            lift_lambdas_in_expression(body, functions, used_names, next_lambda);
             let name = loop {
                 let candidate = format!("__mimi_lambda_{}", *next_lambda);
                 *next_lambda += 1;
@@ -713,7 +917,7 @@ fn lift_lambdas_in_expression(
                     break candidate;
                 }
             };
-            let parameters = parameters
+            let parameters: Vec<(String, HirType)> = parameters
                 .iter()
                 .enumerate()
                 .map(|(index, (name, data_type))| {
@@ -724,11 +928,15 @@ fn lift_lambdas_in_expression(
                     )
                 })
                 .collect();
+            let mut bound = parameters.iter().map(|(name, _)| name.clone()).collect();
+            let mut captures = Vec::new();
+            collect_free_names(body, &mut bound, &mut captures);
             functions.push(HirFunction {
                 name: name.clone(),
                 params: parameters,
                 result: (*return_type).into(),
                 body: (**body).clone(),
+                captures,
             });
             *expression = Expression::Identifier(name);
         }
