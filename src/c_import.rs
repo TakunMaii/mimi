@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 use crate::lir::TargetArch;
 use crate::parser::{ASTNode, DataType, Expression};
@@ -325,7 +326,16 @@ fn import_header(
     defines: &[String],
     sysroot: Option<&std::path::Path>,
 ) -> Result<Vec<ASTNode>, String> {
-    let mut command = Command::new(std::env::var_os("MIMI_CLANG").unwrap_or("clang".into()));
+    let clang = std::env::var_os("MIMI_CLANG").unwrap_or("clang".into());
+    let cache_key = header_cache_key(&clang, path, target, include_paths, defines, sysroot);
+    static CACHE: OnceLock<Mutex<HashMap<u64, Vec<ASTNode>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(cache) = cache.lock()
+        && let Some(declarations) = cache.get(&cache_key)
+    {
+        return Ok(declarations.clone());
+    }
+    let mut command = Command::new(&clang);
     command.args(["-Xclang", "-ast-dump=json", "-fsyntax-only", "-x", "c"]);
     command.arg(match target {
         TargetArch::Aarch64 => "--target=aarch64-apple-darwin",
@@ -379,7 +389,42 @@ fn import_header(
             "@cimport('{path}') found no supported C declarations"
         ));
     }
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(cache_key, declarations.clone());
+    }
     Ok(declarations)
+}
+
+fn header_cache_key(
+    clang: &std::ffi::OsStr,
+    header: &str,
+    target: TargetArch,
+    include_paths: &[std::path::PathBuf],
+    defines: &[String],
+    sysroot: Option<&std::path::Path>,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    clang.hash(&mut hasher);
+    header.hash(&mut hasher);
+    format!("{target:?}").hash(&mut hasher);
+    for include in include_paths {
+        include.hash(&mut hasher);
+    }
+    defines.hash(&mut hasher);
+    sysroot.hash(&mut hasher);
+    if let Some(header_path) = std::iter::once(std::path::PathBuf::from(header))
+        .chain(include_paths.iter().map(|directory| directory.join(header)))
+        .find(|candidate| candidate.is_file())
+        && let Ok(contents) = std::fs::read(header_path)
+    {
+        contents.hash(&mut hasher);
+    }
+    let version = Command::new(clang).arg("--version").output();
+    if let Ok(version) = version {
+        version.stdout.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 fn import_numeric_macros(

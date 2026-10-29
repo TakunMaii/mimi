@@ -10,7 +10,7 @@ imports while preserving C types, layout, and target ABI rules.
   - [x] Import C scalar function prototypes and retain their original link names.
   - [x] Report Clang failures and reject headers without supported prototypes.
   - [x] Pass defines and sysroot configuration through the CLI.
-  - [ ] Cache parsed headers using content, Clang version, target, and flags.
+  - [x] Cache parsed headers within a compiler process by Clang version, header content/path, target, and flags.
 - [ ] Import typedef names as reusable Mimi types.
   - [x] Resolve scalar typedefs while importing function prototypes.
   - [ ] Expose typedef aliases and target-sized integer widths to Mimi code.
@@ -38,5 +38,5 @@ imports while preserving C types, layout, and target ABI rules.
   - [ ] Provide source level `@cDefine` configuration.
 - [ ] Support variadic C functions and default argument promotions.
 - [ ] Support Mimi callbacks passed to C, with explicit lifetime/trampoline rules.
-- [ ] Build and link C source files alongside Mimi modules.
-- [ ] Document Clang discovery, target/sysroot setup, linking, and unsupported constructs.
+- [x] Build and link C source files alongside Mimi modules with `--c-source`.
+- [x] Document Clang discovery, target/sysroot setup, linking, and unsupported constructs.

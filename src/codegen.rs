@@ -31,6 +31,10 @@ struct ObjectSymbol {
 pub(crate) struct LinkOptions {
     pub(crate) library_paths: Vec<std::path::PathBuf>,
     pub(crate) libraries: Vec<String>,
+    pub(crate) c_sources: Vec<std::path::PathBuf>,
+    pub(crate) include_paths: Vec<std::path::PathBuf>,
+    pub(crate) defines: Vec<String>,
+    pub(crate) sysroot: Option<std::path::PathBuf>,
 }
 
 pub(crate) fn emit_assembly(module: &LirModule) -> Result<String, String> {
@@ -101,6 +105,10 @@ pub(crate) fn compile_executable_with_options(
         command.arg(format!("-l{library}"));
     }
     command.arg(&object_path);
+    let c_objects = compile_c_sources(module, output, options)?;
+    for object in &c_objects {
+        command.arg(object);
+    }
     if let Some(runtime) = &float8_object {
         command.arg(runtime);
     }
@@ -108,6 +116,9 @@ pub(crate) fn compile_executable_with_options(
     let _ = std::fs::remove_file(&object_path);
     if let Some(runtime) = float8_object {
         let _ = std::fs::remove_file(runtime);
+    }
+    for object in c_objects {
+        let _ = std::fs::remove_file(object);
     }
     let result = result.map_err(|error| format!("cannot invoke ld: {error}"))?;
     if result.status.success() {
@@ -157,7 +168,11 @@ fn compile_x86_64(module: &LirModule, output: &Path, options: &LinkOptions) -> R
     for path in &options.library_paths {
         linker.arg("-L").arg(path);
     }
+    let c_objects = compile_c_sources(module, output, options)?;
     linker.arg(&object_path);
+    for object in &c_objects {
+        linker.arg(object);
+    }
     if let Some(runtime) = &float8_object {
         linker.arg(runtime);
     }
@@ -170,12 +185,64 @@ fn compile_x86_64(module: &LirModule, output: &Path, options: &LinkOptions) -> R
     if let Some(runtime) = float8_object {
         let _ = std::fs::remove_file(runtime);
     }
+    for object in c_objects {
+        let _ = std::fs::remove_file(object);
+    }
     let linked = linked.map_err(|error| format!("cannot invoke x86_64 linker: {error}"))?;
     if linked.status.success() {
         Ok(())
     } else {
         Err(String::from_utf8_lossy(&linked.stderr).into_owned())
     }
+}
+
+fn compile_c_sources(
+    module: &LirModule,
+    output: &Path,
+    options: &LinkOptions,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    let mut objects = Vec::new();
+    for (index, source) in options.c_sources.iter().enumerate() {
+        let object = output.with_extension(format!("c{index}.o"));
+        let mut compiler = Command::new("cc");
+        if cfg!(target_os = "macos") {
+            compiler.args([
+                "-arch",
+                match module.target {
+                    TargetArch::Aarch64 => "arm64",
+                    TargetArch::X86_64 => "x86_64",
+                },
+            ]);
+        }
+        if let Some(sysroot) = &options.sysroot {
+            compiler.arg("--sysroot").arg(sysroot);
+        }
+        for include in &options.include_paths {
+            compiler.arg("-I").arg(include);
+        }
+        for define in &options.defines {
+            compiler.arg(format!("-D{define}"));
+        }
+        let result = compiler
+            .args(["-std=c11", "-O2", "-c"])
+            .arg(source)
+            .arg("-o")
+            .arg(&object)
+            .output()
+            .map_err(|error| format!("cannot compile C source '{}': {error}", source.display()))?;
+        if !result.status.success() {
+            for object in &objects {
+                let _ = std::fs::remove_file(object);
+            }
+            return Err(format!(
+                "C compilation failed for '{}': {}",
+                source.display(),
+                String::from_utf8_lossy(&result.stderr).trim()
+            ));
+        }
+        objects.push(object);
+    }
+    Ok(objects)
 }
 
 fn compile_float8_runtime(

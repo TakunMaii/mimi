@@ -30,6 +30,7 @@ fn run_cli() -> Result<(), String> {
             let mut libraries = Vec::new();
             let mut defines = Vec::new();
             let mut sysroot = None;
+            let mut c_sources = Vec::new();
             while let Some(argument) = args.next() {
                 if argument == "-o" {
                     output = Some(args.next().ok_or("missing output path after -o")?);
@@ -63,6 +64,13 @@ fn run_cli() -> Result<(), String> {
                     ));
                 } else if let Some(path) = argument.strip_prefix("--sysroot=") {
                     sysroot = Some(std::path::PathBuf::from(path));
+                } else if argument == "--c-source" {
+                    c_sources.push(std::path::PathBuf::from(
+                        args.next()
+                            .ok_or("missing C source path after --c-source")?,
+                    ));
+                } else if let Some(path) = argument.strip_prefix("--c-source=") {
+                    c_sources.push(std::path::PathBuf::from(path));
                 } else if argument == "--target" {
                     target = parse_target(&args.next().ok_or("missing value after --target")?)?;
                 } else if let Some(value) = argument.strip_prefix("--target=") {
@@ -71,7 +79,7 @@ fn run_cli() -> Result<(), String> {
                     input = Some(argument);
                 } else {
                     return Err(
-                        "usage: mimi build <source> -o <output> [--target host|aarch64|x86_64] [-Ipath] [-Lpath] [-lname] [-Dname[=value]] [--sysroot path]".into(),
+                        "usage: mimi build <source> -o <output> [--target host|aarch64|x86_64] [-Ipath] [-Lpath] [-lname] [-Dname[=value]] [--sysroot path] [--c-source file.c]".into(),
                     );
                 }
             }
@@ -84,6 +92,7 @@ fn run_cli() -> Result<(), String> {
                 target,
                 &defines,
                 sysroot.as_deref(),
+                &c_sources,
             )
         }
         _ => Err("usage: mimi build <source> -o <output>".into()),
@@ -135,6 +144,7 @@ fn build_file_for_target(
         target,
         &[],
         None,
+        &[],
     )
 }
 
@@ -147,6 +157,7 @@ fn build_file_for_target_with_c_options(
     target: lir::TargetArch,
     defines: &[String],
     sysroot: Option<&std::path::Path>,
+    c_sources: &[std::path::PathBuf],
 ) -> Result<(), String> {
     let source = std::fs::read_to_string(input)
         .map_err(|error| format!("cannot read '{input}': {error}"))?;
@@ -183,6 +194,10 @@ fn build_file_for_target_with_c_options(
         &codegen::LinkOptions {
             library_paths: library_paths.to_vec(),
             libraries: libraries.to_vec(),
+            c_sources: c_sources.to_vec(),
+            include_paths: import_paths.clone(),
+            defines: defines.to_vec(),
+            sysroot: sysroot.map(std::path::Path::to_path_buf),
         },
     )
 }

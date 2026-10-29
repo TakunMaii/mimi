@@ -1,5 +1,6 @@
 use super::{
-    build_file, build_file_for_target, codegen, hir, lexer::tokenize, lir, mir, parser::parse,
+    build_file, build_file_for_target, build_file_for_target_with_c_options, codegen, hir,
+    lexer::tokenize, lir, mir, parser::parse,
 };
 
 #[test]
@@ -381,6 +382,46 @@ fn imports_simple_c_struct_layout() {
     .unwrap();
     let status = std::process::Command::new(&executable).status().unwrap();
     assert_eq!(status.code(), Some(12));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn compiles_and_links_c_source_with_mimi_program() {
+    let directory = std::env::temp_dir().join(format!("mimi_c_source_link_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("main.mi");
+    let c_source = directory.join("helper.c");
+    let header = directory.join("helper_config.h");
+    let executable = directory.join("main");
+    std::fs::write(
+        &source,
+        "extern helper : fn(value : i32)i32 main :: fn () i32 { helper(40) - 42 }",
+    )
+    .unwrap();
+    std::fs::write(
+        &header,
+        "#ifndef MIMI_C_BUILD_VALUE\n#error missing compiler definition\n#endif\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include \"helper_config.h\"\nint helper(int value) { return value + 2; }\n",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &["MIMI_C_BUILD_VALUE=42".to_string()],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
     std::fs::remove_dir_all(directory).unwrap();
 }
 
