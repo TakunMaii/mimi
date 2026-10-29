@@ -221,6 +221,10 @@ pub(crate) enum ASTNode {
         name: String,
         value: String,
     },
+    CTypeAlias {
+        name: String,
+        data_type: DataType,
+    },
     Public(Box<ASTNode>),
 }
 

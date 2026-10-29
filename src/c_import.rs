@@ -295,12 +295,136 @@ pub(crate) fn expand(
                 ASTNode::CompileTimeConstant { name, .. } => {
                     *name = format!("{alias}.{name}");
                 }
+                ASTNode::CTypeAlias { name, .. } => {
+                    *name = format!("{alias}.{name}");
+                }
                 _ => {}
             }
             node
         }));
     }
+    let aliases = output
+        .iter()
+        .filter_map(|node| match node {
+            ASTNode::CTypeAlias { name, data_type } => Some((name.clone(), *data_type)),
+            _ => None,
+        })
+        .collect::<HashMap<_, _>>();
+    rewrite_c_aliases(&mut output, &aliases);
     Ok(output)
+}
+
+fn rewrite_c_aliases(nodes: &mut [ASTNode], aliases: &HashMap<String, DataType>) {
+    fn rewrite(data_type: DataType, aliases: &HashMap<String, DataType>) -> DataType {
+        match data_type {
+            DataType::Struct(name) => aliases.get(name).copied().unwrap_or(data_type),
+            DataType::Pointer(inner) => {
+                DataType::Pointer(Box::leak(Box::new(rewrite(*inner, aliases))))
+            }
+            DataType::Array(length, inner) => {
+                DataType::Array(length, Box::leak(Box::new(rewrite(*inner, aliases))))
+            }
+            DataType::Slice(inner) => {
+                DataType::Slice(Box::leak(Box::new(rewrite(*inner, aliases))))
+            }
+            DataType::Function(parameters, result) => DataType::Function(
+                Box::leak(
+                    parameters
+                        .iter()
+                        .map(|parameter| rewrite(*parameter, aliases))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
+                Box::leak(Box::new(rewrite(*result, aliases))),
+            ),
+            other => other,
+        }
+    }
+    fn rewrite_expression(expression: &mut Expression, aliases: &HashMap<String, DataType>) {
+        match expression {
+            Expression::Block(nodes) => rewrite_c_aliases(nodes, aliases),
+            Expression::Call { arguments, .. } | Expression::ArrayLiteral(arguments) => {
+                for argument in arguments {
+                    rewrite_expression(argument, aliases);
+                }
+            }
+            Expression::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                rewrite_expression(condition, aliases);
+                rewrite_expression(then_branch, aliases);
+                rewrite_expression(else_branch, aliases);
+            }
+            Expression::StructLiteral { fields, .. } => {
+                for (_, value) in fields {
+                    rewrite_expression(value, aliases);
+                }
+            }
+            Expression::CallValue { callee, arguments } => {
+                rewrite_expression(callee, aliases);
+                for argument in arguments {
+                    rewrite_expression(argument, aliases);
+                }
+            }
+            _ => {}
+        }
+    }
+    for node in nodes {
+        match node {
+            ASTNode::VariableDefinition {
+                data_type, value, ..
+            }
+            | ASTNode::CompileTimeConstant {
+                data_type, value, ..
+            } => {
+                if let Some(data_type) = data_type {
+                    *data_type = rewrite(*data_type, aliases);
+                }
+                rewrite_expression(value, aliases);
+            }
+            ASTNode::Expression(value) => rewrite_expression(value, aliases),
+            ASTNode::FunctionDefinition {
+                parameters,
+                return_type,
+                body,
+                ..
+            } => {
+                for (_, data_type) in parameters {
+                    *data_type = rewrite(*data_type, aliases);
+                }
+                *return_type = rewrite(*return_type, aliases);
+                rewrite_expression(body, aliases);
+            }
+            ASTNode::ExternalFunction {
+                parameters,
+                return_type,
+                ..
+            } => {
+                for (_, data_type) in parameters {
+                    *data_type = rewrite(*data_type, aliases);
+                }
+                *return_type = rewrite(*return_type, aliases);
+            }
+            ASTNode::StructDefinition {
+                fields, methods, ..
+            } => {
+                for (_, data_type, _, _) in fields {
+                    *data_type = rewrite(*data_type, aliases);
+                }
+                for method in methods {
+                    for (_, data_type) in &mut method.parameters {
+                        *data_type = rewrite(*data_type, aliases);
+                    }
+                    method.return_type = rewrite(method.return_type, aliases);
+                    rewrite_expression(&mut method.body, aliases);
+                }
+            }
+            ASTNode::Public(inner) => rewrite_c_aliases(std::slice::from_mut(inner), aliases),
+            _ => {}
+        }
+    }
 }
 
 fn qualify_c_type(data_type: DataType, alias: &str) -> DataType {
@@ -630,9 +754,13 @@ fn declarations_from_ast(root: &Json, header: &str) -> Result<Vec<ASTNode>, Stri
                 .get("type")
                 .and_then(|ty| ty.get("desugaredQualType").or_else(|| ty.get("qualType")))
                 .and_then(Json::string),
-        ) && let Some(data_type) = c_scalar_type(ty)
+        ) && let Some(data_type) = c_type(ty, &alias_types)
         {
             alias_types.insert(name.to_string(), data_type);
+            output.push(ASTNode::CTypeAlias {
+                name: name.to_string(),
+                data_type,
+            });
         }
     }
     for declaration in inner {

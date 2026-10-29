@@ -1607,6 +1607,7 @@ fn check_statement(
         ASTNode::Import { .. }
         | ASTNode::CImport { .. }
         | ASTNode::CDefine { .. }
+        | ASTNode::CTypeAlias { .. }
         | ASTNode::Public(_) => Ok(()),
         ASTNode::IfLet {
             variant,

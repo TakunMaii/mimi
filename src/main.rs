@@ -544,7 +544,8 @@ fn qualify_imported_node(
         | ASTNode::Continue
         | ASTNode::Import { .. }
         | ASTNode::CImport { .. }
-        | ASTNode::CDefine { .. } => {}
+        | ASTNode::CDefine { .. }
+        | ASTNode::CTypeAlias { .. } => {}
     }
     node
 }

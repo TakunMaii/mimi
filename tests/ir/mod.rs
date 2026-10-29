@@ -429,6 +429,31 @@ fn applies_source_c_define_during_header_import() {
 }
 
 #[test]
+fn uses_imported_scalar_typedef_as_a_source_type() {
+    let source =
+        std::env::temp_dir().join(format!("mimi_c_typedef_source_{}.mi", std::process::id()));
+    let executable =
+        std::env::temp_dir().join(format!("mimi_c_typedef_executable_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"stddef.h\") identity :: fn (value : c.size_t) c.size_t { value } main :: fn () i32 { value : c.size_t = identity(42) value value - value 0 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
 fn imports_simple_c_struct_layout() {
     let directory =
         std::env::temp_dir().join(format!("mimi_cimport_struct_{}", std::process::id()));

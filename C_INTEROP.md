@@ -28,7 +28,7 @@ config :: @cDefine("PLATFORM", 1)
 c :: @cimport("platform.h")
 ```
 
-Scalar C functions, scalar typedefs used in prototypes, ordinary pointers,
+Scalar C functions, scalar typedef names (for example `c.size_t`), ordinary pointers,
 integer enum constants, simple numeric macros, and simple named struct fields
 are imported. Imported function calls use their C linker names. Prototypes
 using by-value records or function pointer parameters are skipped because the
