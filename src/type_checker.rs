@@ -1166,6 +1166,23 @@ pub(crate) fn check_with_import_paths(
             );
         }
     }
+    for node in nodes {
+        if let ASTNode::CompileTimeConstant {
+            name,
+            data_type: Some(data_type),
+            ..
+        } = node
+            && name.contains('.')
+        {
+            scopes[0].insert(
+                name.clone(),
+                Symbol {
+                    data_type: *data_type,
+                    mutable: false,
+                },
+            );
+        }
+    }
 
     let imported_symbols = scopes[0]
         .iter()
@@ -1445,7 +1462,10 @@ fn check_statement(
             if let Some(data_type) = data_type {
                 validate_generic_type_use(*data_type, structs)?;
             }
-            if scopes.last().unwrap().contains_key(name) {
+            if let Some(existing) = scopes.last().unwrap().get(name)
+                && !(name.contains('.')
+                    && data_type.is_some_and(|data_type| data_type == existing.data_type))
+            {
                 return Err(error(format!("'{name}' is already defined")));
             }
             match infer_expression(value, scopes, functions, structs, *data_type).and_then(

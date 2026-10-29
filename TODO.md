@@ -11,7 +11,11 @@ imports while preserving C types, layout, and target ABI rules.
   - [x] Report Clang failures and reject headers without supported prototypes.
   - [ ] Pass defines and sysroot configuration through the CLI.
   - [ ] Cache parsed headers using content, Clang version, target, and flags.
-- [ ] Import typedefs, target-sized integer aliases, enums, and integer constants.
+- [ ] Import typedef names as reusable Mimi types.
+  - [x] Resolve scalar typedefs while importing function prototypes.
+  - [ ] Expose typedef aliases and target-sized integer widths to Mimi code.
+  - [x] Import integer-valued C enum constants.
+  - [ ] Preserve C enum types and their underlying representation.
 - [ ] Preserve C pointer and function-pointer types, qualifiers, and calling convention.
 - [ ] Import forward declarations as opaque C types usable through pointers.
 - [ ] Add explicit conversions for C strings, buffers, and Mimi slices.

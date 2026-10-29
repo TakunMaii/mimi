@@ -299,6 +299,35 @@ fn imports_and_calls_libc_abs_from_standard_header() {
 }
 
 #[test]
+fn imports_libc_enum_constants() {
+    let source = std::env::temp_dir().join(format!(
+        "mimi_cimport_libc_constant_source_{}.mi",
+        std::process::id()
+    ));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_cimport_libc_constant_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"stdlib.h\") main :: fn () i32 { c.P_ALL }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
 fn builds_and_runs_lowercase_generic_type_and_enum_if_let() {
     let source = std::env::temp_dir().join(format!(
         "mimi_generic_lower_source_{}.mi",

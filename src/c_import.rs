@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::process::Command;
 
 use crate::lir::TargetArch;
-use crate::parser::{ASTNode, DataType};
+use crate::parser::{ASTNode, DataType, Expression};
 
 #[derive(Clone, Debug, PartialEq)]
 enum Json {
@@ -265,8 +265,12 @@ pub(crate) fn expand(
     for (alias, path) in imports {
         let declarations = import_header(&path, target, include_paths, defines)?;
         output.extend(declarations.into_iter().map(|mut node| {
-            if let ASTNode::ExternalFunction { name, .. } = &mut node {
-                *name = format!("{alias}.{name}");
+            match &mut node {
+                ASTNode::ExternalFunction { name, .. }
+                | ASTNode::CompileTimeConstant { name, .. } => {
+                    *name = format!("{alias}.{name}");
+                }
+                _ => {}
             }
             node
         }));
@@ -327,6 +331,7 @@ fn declarations_from_ast(root: &Json, header: &str) -> Result<Vec<ASTNode>, Stri
     let Some(inner) = root.get("inner").and_then(Json::array) else {
         return Err("clang AST has no translation unit declarations".into());
     };
+    collect_enum_constants(inner, &mut output, &mut seen);
     for declaration in inner {
         if declaration.get("kind").and_then(Json::string) != Some("TypedefDecl") {
             continue;
@@ -421,6 +426,78 @@ fn declarations_from_ast(root: &Json, header: &str) -> Result<Vec<ASTNode>, Stri
     }
 }
 
+fn collect_enum_constants(
+    declarations: &[Json],
+    output: &mut Vec<ASTNode>,
+    seen: &mut HashSet<String>,
+) {
+    for declaration in declarations {
+        match declaration.get("kind").and_then(Json::string) {
+            Some("EnumDecl") => {
+                let Some(constants) = declaration.get("inner").and_then(Json::array) else {
+                    continue;
+                };
+                let mut next_value = 0i64;
+                for constant in constants {
+                    if constant.get("kind").and_then(Json::string) != Some("EnumConstantDecl") {
+                        continue;
+                    }
+                    let Some(name) = constant.get("name").and_then(Json::string) else {
+                        continue;
+                    };
+                    let value = constant
+                        .get("inner")
+                        .and_then(Json::array)
+                        .and_then(|inner| find_integer_value(inner))
+                        .unwrap_or(next_value);
+                    next_value = value.saturating_add(1);
+                    if !seen.insert(format!("constant:{name}")) {
+                        continue;
+                    }
+                    let expression = if value < 0 {
+                        Expression::Negate(Box::new(Expression::LiteralNumber(
+                            value.saturating_abs().to_string(),
+                        )))
+                    } else {
+                        Expression::LiteralNumber(value.to_string())
+                    };
+                    output.push(ASTNode::CompileTimeConstant {
+                        name: name.to_string(),
+                        data_type: Some(DataType::I32),
+                        value: expression,
+                    });
+                }
+                collect_enum_constants(constants, output, seen);
+            }
+            _ => {
+                if let Some(inner) = declaration.get("inner").and_then(Json::array) {
+                    collect_enum_constants(inner, output, seen);
+                }
+            }
+        }
+    }
+}
+
+fn find_integer_value(nodes: &[Json]) -> Option<i64> {
+    for node in nodes {
+        if let Some(value) = node.get("value") {
+            let text = match value {
+                Json::String(value) | Json::Number(value) => value,
+                _ => "",
+            };
+            if let Ok(value) = text.parse() {
+                return Some(value);
+            }
+        }
+        if let Some(inner) = node.get("inner").and_then(Json::array)
+            && let Some(value) = find_integer_value(inner)
+        {
+            return Some(value);
+        }
+    }
+    None
+}
+
 fn function_return_type(signature: &str) -> Option<&str> {
     let open = signature.find('(')?;
     Some(signature[..open].trim())
@@ -473,7 +550,7 @@ fn is_supported_c_abi_type(data_type: DataType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{Json, JsonParser, c_type, declarations_from_ast};
-    use crate::parser::{ASTNode, DataType};
+    use crate::parser::{ASTNode, DataType, Expression};
     use std::collections::HashMap;
 
     #[test]
@@ -503,8 +580,33 @@ mod tests {
         )
         .unwrap();
         let declarations = declarations_from_ast(&json, "stdlib.h").unwrap();
-        assert!(
-            matches!(&declarations[0], ASTNode::ExternalFunction { name, link_name: Some(link), parameters, return_type: DataType::I32 } if name == "abs" && link == "abs" && parameters == &[("value".into(), DataType::I32)])
-        );
+        assert!(declarations.iter().any(|declaration| matches!(declaration,
+            ASTNode::ExternalFunction { name, link_name: Some(link), parameters, return_type: DataType::I32 }
+                if name == "abs" && link == "abs" && parameters == &[("value".into(), DataType::I32)]
+        )));
+    }
+
+    #[test]
+    fn extracts_enum_constants_with_implicit_values() {
+        let json = JsonParser::parse(
+            r#"{"inner":[{"kind":"EnumDecl","inner":[{"kind":"EnumConstantDecl","name":"first"},{"kind":"EnumConstantDecl","name":"second","inner":[{"kind":"ConstantExpr","value":"7"}]},{"kind":"EnumConstantDecl","name":"third"}]}]}"#,
+        )
+        .unwrap();
+        let declarations = declarations_from_ast(&json, "test.h").unwrap();
+        assert!(matches!(
+            &declarations[0],
+            ASTNode::CompileTimeConstant { name, data_type: Some(DataType::I32), value: Expression::LiteralNumber(value) }
+                if name == "first" && value == "0"
+        ));
+        assert!(matches!(
+            &declarations[1],
+            ASTNode::CompileTimeConstant { name, value: Expression::LiteralNumber(value), .. }
+                if name == "second" && value == "7"
+        ));
+        assert!(matches!(
+            &declarations[2],
+            ASTNode::CompileTimeConstant { name, value: Expression::LiteralNumber(value), .. }
+                if name == "third" && value == "8"
+        ));
     }
 }
