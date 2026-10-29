@@ -843,7 +843,26 @@ fn c_scalar_type(name: &str) -> Option<DataType> {
 }
 
 fn is_supported_c_abi_type(data_type: DataType) -> bool {
-    !matches!(data_type, DataType::Pointer(inner) if matches!(*inner, DataType::Void))
+    match data_type {
+        DataType::Pointer(inner) => !matches!(
+            *inner,
+            DataType::Void | DataType::Function(_, _) | DataType::Array(_, _) | DataType::Slice(_)
+        ),
+        DataType::U8
+        | DataType::U16
+        | DataType::U32
+        | DataType::U64
+        | DataType::I8
+        | DataType::I16
+        | DataType::I32
+        | DataType::I64
+        | DataType::F16
+        | DataType::F32
+        | DataType::F64
+        | DataType::Bool
+        | DataType::Void => true,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -931,5 +950,14 @@ mod tests {
                 if name == "use_opaque"
                     && parameters == &[("value".into(), DataType::Pointer(Box::leak(Box::new(DataType::Struct("Opaque")))))]
         )));
+    }
+
+    #[test]
+    fn skips_signatures_without_a_supported_c_abi() {
+        let json = JsonParser::parse(
+            r#"{"inner":[{"kind":"FunctionDecl","name":"take_record","type":{"qualType":"void (struct Record)"},"inner":[{"kind":"ParmVarDecl","name":"record","type":{"qualType":"struct Record"}}]},{"kind":"FunctionDecl","name":"take_callback","type":{"qualType":"void (int (*)(int))"},"inner":[{"kind":"ParmVarDecl","name":"callback","type":{"qualType":"int (*)(int)"}}]}]}"#,
+        )
+        .unwrap();
+        assert!(declarations_from_ast(&json, "abi.h").unwrap().is_empty());
     }
 }
