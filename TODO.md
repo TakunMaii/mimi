@@ -16,7 +16,8 @@ imports while preserving C types, layout, and target ABI rules.
   - [ ] Expose typedef aliases and target-sized integer widths to Mimi code.
   - [x] Import integer-valued C enum constants.
   - [ ] Preserve C enum types and their underlying representation.
-- [ ] Preserve C pointer and function-pointer types, qualifiers, and calling convention.
+- [x] Preserve C pointer and function-pointer types in imported declarations.
+  - [ ] Preserve C qualifiers and calling convention metadata.
 - [ ] Import forward declarations as opaque C types usable through pointers.
 - [ ] Add explicit conversions for C strings, buffers, and Mimi slices.
 

@@ -505,6 +505,24 @@ fn function_return_type(signature: &str) -> Option<&str> {
 
 fn c_type(type_name: &str, aliases: &HashMap<String, DataType>) -> Option<DataType> {
     let type_name = type_name.trim();
+    if let Some(pointer) = type_name.find("(*") {
+        let return_type = c_type(type_name[..pointer].trim(), aliases)?;
+        let parameters = type_name[pointer + 2..]
+            .strip_prefix(")(")?
+            .strip_suffix(')')?;
+        let parameters = if parameters.trim().is_empty() || parameters.trim() == "void" {
+            Vec::new()
+        } else {
+            parameters
+                .split(',')
+                .map(|parameter| c_type(parameter.trim(), aliases))
+                .collect::<Option<Vec<_>>>()?
+        };
+        return Some(DataType::Pointer(Box::leak(Box::new(DataType::Function(
+            Box::leak(parameters.into_boxed_slice()),
+            Box::leak(Box::new(return_type)),
+        )))));
+    }
     if let Some(inner) = type_name.strip_suffix('*') {
         return Some(DataType::Pointer(Box::leak(Box::new(c_type(
             inner, aliases,
@@ -571,6 +589,13 @@ mod tests {
             c_type("const char *", &HashMap::new()),
             Some(DataType::Pointer(Box::leak(Box::new(DataType::I8))))
         );
+        assert!(matches!(
+            c_type("int (*)(int, const char *)", &HashMap::new()),
+            Some(DataType::Pointer(function))
+                if matches!(*function, DataType::Function(parameters, return_type)
+                    if parameters == &[DataType::I32, DataType::Pointer(Box::leak(Box::new(DataType::I8)))]
+                        && *return_type == DataType::I32)
+        ));
     }
 
     #[test]
