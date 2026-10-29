@@ -84,6 +84,68 @@ fn parses_all_statement_kinds_with_expression_values() {
 }
 
 #[test]
+fn parses_generic_structs_and_instantiations() {
+    let nodes = parse(tokenize(
+        "pair :: struct <T> { x : T, y : T } value : pair<i32> = pair<i32> { x = 1, y = 2 }"
+            .chars(),
+    ));
+    let [
+        ASTNode::StructDefinition {
+            name,
+            parameters,
+            fields,
+            ..
+        },
+        ASTNode::VariableDefinition {
+            data_type: Some(DataType::GenericStruct(instance, arguments)),
+            value:
+                Expression::StructLiteral {
+                    type_name: Some(literal_type),
+                    ..
+                },
+            ..
+        },
+    ] = nodes.as_slice()
+    else {
+        panic!("expected generic declaration and instantiation: {nodes:#?}");
+    };
+    assert_eq!(*name, "pair");
+    assert_eq!(parameters, &["T"]);
+    assert_eq!(fields[0].1, DataType::Struct("T"));
+    assert_eq!(*instance, "pair");
+    assert_eq!(
+        arguments[0],
+        super::parser::GenericArgument::Type(DataType::I32)
+    );
+    assert_eq!(*literal_type, "pair<type:i32>");
+}
+
+#[test]
+fn parses_compile_time_generic_value_arguments() {
+    let nodes = parse(tokenize(
+        "fixed :: struct <dx> { x : f32 = dx } value : fixed<3.5> = fixed<3.5> {}".chars(),
+    ));
+    let ASTNode::StructDefinition {
+        parameters, fields, ..
+    } = &nodes[0]
+    else {
+        panic!("expected generic struct declaration");
+    };
+    assert_eq!(parameters, &["dx"]);
+    assert!(matches!(fields[0].2, Some(Expression::Identifier(ref name)) if name == "dx"));
+    let ASTNode::VariableDefinition {
+        data_type: Some(DataType::GenericStruct(_, arguments)),
+        ..
+    } = &nodes[1]
+    else {
+        panic!("expected instantiated generic type");
+    };
+    assert!(
+        matches!(arguments[0], super::parser::GenericArgument::Value(value) if matches!(value, Expression::LiteralNumber(number) if number == "3.5"))
+    );
+}
+
+#[test]
 fn parses_unary_negation() {
     assert_eq!(
         parse(tokenize("x := -value".chars())),
@@ -570,7 +632,7 @@ fn parses_index_assignment_through_struct_array_field() {
 fn parses_enum_definition_match_and_if_let() {
     let nodes = parse(tokenize("result :: enum { some(f32), error, none, } value := some(1.0) if some(x) := value { x } match value { some(x) => x, error => 0.0, none => 0.0 }".chars()));
     assert!(
-        matches!(&nodes[0], ASTNode::EnumDefinition { name, variants } if *name == "result" && variants.len() == 3)
+        matches!(&nodes[0], ASTNode::EnumDefinition { name, variants, .. } if *name == "result" && variants.len() == 3)
     );
     assert!(
         matches!(&nodes[2], ASTNode::IfLet { variant, binding: Some(binding), .. } if variant == "some" && binding == "x")

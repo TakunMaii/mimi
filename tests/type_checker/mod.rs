@@ -20,6 +20,90 @@ fn infers_numeric_literal_types_by_value() {
 }
 
 #[test]
+fn specializes_generic_struct_fields_and_checks_field_types() {
+    let valid = parse(tokenize(
+        "pair :: struct <T> { x : T, y : T } value : pair<i32> = pair<i32> { x = 1, y = 2 } get_x :: fn (item : pair<i32>) i32 { item.x }".chars(),
+    ));
+    check(&valid).unwrap();
+
+    let invalid = parse(tokenize(
+        "pair :: struct <T> { x : T, y : T } value : pair<i32> = pair<i32> { x = 1, y = true }"
+            .chars(),
+    ));
+    let errors = check(&invalid).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("expected i32, found bool"))
+    );
+}
+
+#[test]
+fn specializes_compile_time_generic_defaults_and_checks_argument_kind() {
+    let valid = parse(tokenize(
+        "fixed :: struct <dx> { x : f32 = dx } value : fixed<3.5> = fixed<3.5> {}".chars(),
+    ));
+    check(&valid).unwrap();
+
+    let invalid = parse(tokenize(
+        "fixed :: struct <dx> { x : f32 = dx } value : fixed<f32> = fixed<f32> {}".chars(),
+    ));
+    let errors = check(&invalid).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("requires a value"))
+    );
+}
+
+#[test]
+fn specializes_generic_enum_payload_types() {
+    let valid = parse(tokenize(
+        "option :: enum <T> { some(T), none } read :: fn (value : option<i32>) i32 { match value { some(number) => number, none => 0 } } value : option<i32> = some(42)".chars(),
+    ));
+    check(&valid).unwrap();
+
+    let invalid = parse(tokenize(
+        "option :: enum <T> { some(T), none } value : option<i32> = some(true)".chars(),
+    ));
+    let errors = check(&invalid).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("expected i32, found bool"))
+    );
+}
+
+#[test]
+fn rejects_missing_and_invalid_generic_arguments() {
+    for (program, expected) in [
+        (
+            "pair :: struct <T> { x : T } value : pair = pair { x = 1 }",
+            "requires 1 arguments",
+        ),
+        (
+            "pair :: struct <T> { x : T } value : pair<i32, i32> = pair<i32, i32> { x = 1 }",
+            "expects 1 generic arguments, got 2",
+        ),
+        (
+            "pair :: struct <T> { x : T } value : pair<Unknown> = pair<Unknown> { x = 1 }",
+            "unknown type argument 'Unknown'",
+        ),
+        (
+            "fixed :: struct <dx> { x : f32 = dx } value : fixed<true> = fixed<true> {}",
+            "expected f32, found bool",
+        ),
+    ] {
+        let ast = parse(tokenize(program.chars()));
+        let errors = check(&ast).unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.message.contains(expected)),
+            "expected diagnostic containing '{expected}', got {errors:?}"
+        );
+    }
+}
+
+#[test]
 fn uses_declared_types_as_literal_context() {
     let ast = parse(tokenize(
         "byte : u8 = 255 half : f16 = 1.5 widened : f32 = 2 flag : bool = true".chars(),

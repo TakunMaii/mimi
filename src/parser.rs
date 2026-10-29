@@ -17,12 +17,21 @@ pub(crate) enum DataType {
     Bool,
     Void,
     Struct(&'static str),
+    GenericStruct(&'static str, &'static [GenericArgument]),
     Array(u64, &'static DataType),
     Slice(&'static DataType),
     Enum(&'static str),
+    GenericEnum(&'static str, &'static [GenericArgument]),
     Function(&'static [DataType], &'static DataType),
     SelfType,
     Pointer(&'static DataType),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum GenericArgument {
+    Type(DataType),
+    Value(&'static Expression),
+    Name(&'static str),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -160,6 +169,7 @@ pub(crate) enum ASTNode {
     Continue,
     StructDefinition {
         name: &'static str,
+        parameters: Vec<String>,
         fields: Vec<(String, DataType, Option<Expression>, bool)>,
         methods: Vec<MethodDefinition>,
     },
@@ -189,6 +199,7 @@ pub(crate) enum ASTNode {
     },
     EnumDefinition {
         name: &'static str,
+        parameters: Vec<String>,
         variants: Vec<(String, Option<DataType>)>,
     },
     IfLet {
@@ -696,6 +707,7 @@ fn parse_struct_definition<I>(name: String, tokens: &mut std::iter::Peekable<I>)
 where
     I: Iterator<Item = Token> + Clone,
 {
+    let parameters = parse_generic_parameters(tokens);
     assert!(
         matches!(tokens.next(), Some(Token::LeftBrace)),
         "expected '{{' after struct"
@@ -774,6 +786,7 @@ where
     let name = Box::leak(name.into_boxed_str());
     ASTNode::StructDefinition {
         name,
+        parameters,
         fields,
         methods,
     }
@@ -796,6 +809,7 @@ fn parse_enum_definition<I>(name: String, tokens: &mut std::iter::Peekable<I>) -
 where
     I: Iterator<Item = Token> + Clone,
 {
+    let parameters = parse_generic_parameters(tokens);
     assert!(
         matches!(tokens.next(), Some(Token::LeftBrace)),
         "expected '{{' after enum"
@@ -827,8 +841,35 @@ where
     tokens.next();
     ASTNode::EnumDefinition {
         name: Box::leak(name.into_boxed_str()),
+        parameters,
         variants,
     }
+}
+
+fn parse_generic_parameters<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<String>
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    if !matches!(tokens.peek(), Some(Token::LessThan)) {
+        return Vec::new();
+    }
+    tokens.next();
+    let mut parameters = Vec::new();
+    loop {
+        let Some(Token::Identifier(name)) = tokens.next() else {
+            panic!("expected generic parameter name");
+        };
+        if parameters.contains(&name) {
+            panic!("duplicate generic parameter '{name}'");
+        }
+        parameters.push(name);
+        match tokens.next() {
+            Some(Token::Comma) => continue,
+            Some(Token::GreaterThan) => break,
+            _ => panic!("expected ',' or '>' after generic parameter"),
+        }
+    }
+    parameters
 }
 
 fn parse_data_type(name: &str) -> DataType {
@@ -867,7 +908,227 @@ where
             _ => panic!("expected type name after '.'"),
         }
     }
-    parse_data_type(&name)
+    let data_type = parse_data_type(&name);
+    if matches!(tokens.peek(), Some(Token::LessThan))
+        && let Some(arguments) = parse_generic_arguments(tokens)
+    {
+        let arguments = Box::leak(arguments.into_boxed_slice());
+        return match data_type {
+            DataType::Struct(name) => DataType::GenericStruct(name, arguments),
+            DataType::Enum(name) => DataType::GenericEnum(name, arguments),
+            _ => panic!("generic arguments require a named type"),
+        };
+    }
+    data_type
+}
+
+fn parse_generic_arguments<I>(tokens: &mut std::iter::Peekable<I>) -> Option<Vec<GenericArgument>>
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    if !matches!(tokens.next(), Some(Token::LessThan)) {
+        return None;
+    }
+    let mut arguments = Vec::new();
+    loop {
+        let argument = match tokens.next()? {
+            Token::LiteralNumber(value) => {
+                GenericArgument::Value(Box::leak(Box::new(Expression::LiteralNumber(value))))
+            }
+            Token::LiteralBool(value) => {
+                GenericArgument::Value(Box::leak(Box::new(Expression::LiteralBool(value))))
+            }
+            Token::F8 => GenericArgument::Type(DataType::F8),
+            Token::Fn => GenericArgument::Type(parse_type_from(Token::Fn, tokens)),
+            Token::Star => GenericArgument::Type(parse_type_from(Token::Star, tokens)),
+            Token::LeftBracket => {
+                GenericArgument::Type(parse_type_from(Token::LeftBracket, tokens))
+            }
+            Token::Identifier(name) if matches!(tokens.peek(), Some(Token::LessThan)) => {
+                GenericArgument::Type(parse_named_type(name, tokens))
+            }
+            Token::Identifier(name) if is_builtin_type_name(&name) => {
+                GenericArgument::Type(parse_data_type(&name))
+            }
+            Token::Identifier(name) => GenericArgument::Name(Box::leak(name.into_boxed_str())),
+            _ => return None,
+        };
+        arguments.push(argument);
+        match tokens.next()? {
+            Token::Comma => continue,
+            Token::GreaterThan => return Some(arguments),
+            _ => return None,
+        }
+    }
+}
+
+fn is_builtin_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "u8" | "u16"
+            | "u32"
+            | "u64"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "f16"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "void"
+            | "Self"
+    )
+}
+
+pub(crate) fn generic_instance_name(name: &str, arguments: &[GenericArgument]) -> String {
+    let arguments = arguments
+        .iter()
+        .map(|argument| match argument {
+            GenericArgument::Type(data_type) => format!("type:{data_type}"),
+            GenericArgument::Name(name) => format!("name:{name}"),
+            GenericArgument::Value(Expression::LiteralNumber(value)) => format!("value:{value}"),
+            GenericArgument::Value(Expression::LiteralBool(value)) => format!("value:{value}"),
+            GenericArgument::Value(Expression::Identifier(value)) => format!("value:{value}"),
+            GenericArgument::Value(_) => String::from("value:<expression>"),
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{name}<{arguments}>")
+}
+
+pub(crate) fn decode_generic_instance_name(
+    value: &str,
+) -> Option<(&'static str, &'static [GenericArgument])> {
+    let (name, arguments) = value.split_once('<')?;
+    let arguments = arguments.strip_suffix('>')?;
+    let parsed = if arguments.is_empty() {
+        Vec::new()
+    } else {
+        split_generic_arguments(arguments)
+            .into_iter()
+            .map(|argument| {
+                if let Some(type_name) = argument.strip_prefix("type:") {
+                    Some(GenericArgument::Type(parse_display_type(type_name)?))
+                } else if let Some(name) = argument.strip_prefix("name:") {
+                    Some(GenericArgument::Name(Box::leak(
+                        name.to_string().into_boxed_str(),
+                    )))
+                } else if let Some(value) = argument.strip_prefix("value:") {
+                    let expression = if value == "true" || value == "false" {
+                        Expression::LiteralBool(value == "true")
+                    } else if value.parse::<f64>().is_ok() {
+                        Expression::LiteralNumber(value.to_string())
+                    } else {
+                        Expression::Identifier(value.to_string())
+                    };
+                    Some(GenericArgument::Value(Box::leak(Box::new(expression))))
+                } else {
+                    None
+                }
+            })
+            .collect::<Option<Vec<_>>>()?
+    };
+    Some((
+        Box::leak(name.to_string().into_boxed_str()),
+        Box::leak(parsed.into_boxed_slice()),
+    ))
+}
+
+fn split_generic_arguments(value: &str) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (index, character) in value.char_indices() {
+        match character {
+            '<' | '[' => depth += 1,
+            '>' | ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                result.push(&value[start..index]);
+                start = index + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    result.push(&value[start..]);
+    result
+}
+
+fn parse_display_type(value: &str) -> Option<DataType> {
+    if let Some(inner) = value.strip_prefix('*') {
+        return Some(DataType::Pointer(Box::leak(Box::new(parse_display_type(
+            inner,
+        )?))));
+    }
+    if let Some(inner) = value.strip_prefix("[]") {
+        return Some(DataType::Slice(Box::leak(Box::new(parse_display_type(
+            inner,
+        )?))));
+    }
+    if let Some(rest) = value.strip_prefix('[') {
+        let (length, inner) = rest.split_once(']')?;
+        return Some(DataType::Array(
+            length.parse().ok()?,
+            Box::leak(Box::new(parse_display_type(inner)?)),
+        ));
+    }
+    let (base, generic) = if let Some((base, generic)) = value.split_once('<') {
+        (base, Some(generic.strip_suffix('>')?))
+    } else {
+        (value, None)
+    };
+    let data_type = match base {
+        "u8" => DataType::U8,
+        "u16" => DataType::U16,
+        "u32" => DataType::U32,
+        "u64" => DataType::U64,
+        "i8" => DataType::I8,
+        "i16" => DataType::I16,
+        "i32" => DataType::I32,
+        "i64" => DataType::I64,
+        "f8" => DataType::F8,
+        "f16" => DataType::F16,
+        "f32" => DataType::F32,
+        "f64" => DataType::F64,
+        "bool" => DataType::Bool,
+        "void" => DataType::Void,
+        _ => DataType::Struct(Box::leak(base.to_string().into_boxed_str())),
+    };
+    if let Some(generic) = generic {
+        let arguments = split_generic_arguments(generic)
+            .into_iter()
+            .map(|part| parse_generic_argument_encoding(part))
+            .collect::<Option<Vec<_>>>()?;
+        let arguments = Box::leak(arguments.into_boxed_slice());
+        Some(match data_type {
+            DataType::Struct(name) => DataType::GenericStruct(name, arguments),
+            DataType::Enum(name) => DataType::GenericEnum(name, arguments),
+            _ => return None,
+        })
+    } else {
+        Some(data_type)
+    }
+}
+
+fn parse_generic_argument_encoding(value: &str) -> Option<GenericArgument> {
+    if let Some(data_type) = value.strip_prefix("type:") {
+        Some(GenericArgument::Type(parse_display_type(data_type)?))
+    } else if let Some(name) = value.strip_prefix("name:") {
+        Some(GenericArgument::Name(Box::leak(
+            name.to_string().into_boxed_str(),
+        )))
+    } else if let Some(value) = value.strip_prefix("value:") {
+        let expression = if value == "true" || value == "false" {
+            Expression::LiteralBool(value == "true")
+        } else if value.parse::<f64>().is_ok() {
+            Expression::LiteralNumber(value.to_string())
+        } else {
+            Expression::Identifier(value.to_string())
+        };
+        Some(GenericArgument::Value(Box::leak(Box::new(expression))))
+    } else {
+        None
+    }
 }
 
 fn parse_type<I>(tokens: &mut std::iter::Peekable<I>) -> DataType
@@ -1074,6 +1335,17 @@ where
             }
             lhs = Expression::Call { name, arguments };
         } else if allow_struct_literal
+            && matches!(tokens.peek(), Some(Token::LessThan))
+            && generic_literal_follows(tokens)
+        {
+            let arguments = parse_generic_arguments(tokens).expect("generic arguments");
+            let type_name = Box::leak(generic_instance_name(&name, &arguments).into_boxed_str());
+            assert!(matches!(tokens.next(), Some(Token::LeftBrace)));
+            lhs = Expression::StructLiteral {
+                type_name: Some(type_name),
+                fields: parse_struct_fields(tokens),
+            };
+        } else if allow_struct_literal
             && let Some(literal) = parse_qualified_struct_literal(&name, tokens)
         {
             lhs = literal;
@@ -1208,6 +1480,17 @@ where
     }
 
     lhs
+}
+
+fn generic_literal_follows<I>(tokens: &std::iter::Peekable<I>) -> bool
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let mut lookahead = tokens.clone();
+    if parse_generic_arguments(&mut lookahead).is_none() {
+        return false;
+    }
+    brace_starts_struct_literal(&lookahead)
 }
 
 fn parse_pointer_assignment_or_expression<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode

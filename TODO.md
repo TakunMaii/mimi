@@ -60,6 +60,8 @@ and focused regression coverage; it does not imply support on every target.
 
 ## Functions and Modules
 
+- [x] Support compile-time struct and enum parameters, including type and value arguments with specialization checks.
+
 - [x] Implement named function values, function-value parameters, and indirect calls.
 - [x] Lift capture-free lambda bodies into callable functions.
 - [x] Capture outer values in lambda closure environments, including nested closures and inline aggregates.

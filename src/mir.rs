@@ -434,7 +434,9 @@ impl Builder {
                     if let Some(constant) = self.resolve_global_constant_name(name) {
                         return self.lower_global_constant(&constant);
                     }
-                    if let Some(variant) = self.enum_variants.get(name).cloned() {
+                    if let Some(variant) =
+                        self.enum_variant_for_type(name, self.expected_type_hint.as_ref())
+                    {
                         self.lower_enum_value(&variant, None)
                     } else {
                         let symbol = self.resolve_function_name(name);
@@ -931,7 +933,8 @@ impl Builder {
                     return result;
                 }
                 if !self.function_slice_params.contains_key(name)
-                    && let Some(variant) = self.enum_variants.get(name).cloned()
+                    && let Some(variant) =
+                        self.enum_variant_for_type(name, self.expected_type_hint.as_ref())
                 {
                     if arguments.len() != usize::from(variant.payload.is_some()) {
                         return None;
@@ -2897,6 +2900,7 @@ impl Builder {
         if arms.is_empty() {
             return None;
         }
+        let value_type = self.expression_type(value);
         let value = self.expression(value)?;
         let merge_block = self.new_block();
         let mut incoming = Vec::new();
@@ -2904,7 +2908,7 @@ impl Builder {
 
         for (index, (pattern, body)) in arms.iter().enumerate() {
             let crate::parser::Pattern::Variant { name, binding } = pattern;
-            let variant = self.enum_variants.get(name)?.clone();
+            let variant = self.enum_variant_for_type(name, value_type.as_ref())?;
             let arm_block = self.new_block();
             self.current = test_block;
             if index + 1 == arms.len() {
@@ -2987,7 +2991,10 @@ impl Builder {
         then_branch: &Expression,
         else_branch: Option<&Expression>,
     ) -> Option<()> {
-        let variant = self.enum_variants.get(variant_name)?.clone();
+        let variant = self.enum_variant_for_type(
+            variant_name,
+            self.expression_type(value_expression).as_ref(),
+        )?;
         let value = self.expression(value_expression)?;
         let discriminant = self.enum_discriminant(value, &variant)?;
         let expected = self.value();
@@ -3053,6 +3060,19 @@ impl Builder {
             then_end
         };
         Some(())
+    }
+
+    fn enum_variant_for_type(
+        &self,
+        name: &str,
+        data_type: Option<&HirType>,
+    ) -> Option<EnumVariant> {
+        if let Some(HirType::Named(owner)) = data_type {
+            if let Some(variant) = self.enum_variants.get(&format!("{owner}::{name}")) {
+                return Some(variant.clone());
+            }
+        }
+        self.enum_variants.get(name).cloned()
     }
 
     fn lower_enum_value(
@@ -3979,13 +3999,18 @@ pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout
                 .variants
                 .iter()
                 .any(|(_, payload)| payload.is_some());
+            let generic = enumeration.name.contains('<');
             enumeration
                 .variants
                 .iter()
                 .enumerate()
                 .map(move |(tag, (variant, payload))| {
                     (
-                        variant.clone(),
+                        if generic {
+                            format!("{}::{variant}", enumeration.name)
+                        } else {
+                            variant.clone()
+                        },
                         EnumVariant {
                             owner: enumeration.name.clone(),
                             tag: tag as u64,

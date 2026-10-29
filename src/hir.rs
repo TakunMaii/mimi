@@ -47,6 +47,9 @@ impl From<DataType> for HirType {
             },
             DataType::Slice(element) => Self::Slice(Box::new((*element).into())),
             DataType::Struct(name) | DataType::Enum(name) => Self::Named(name.to_string()),
+            DataType::GenericStruct(name, arguments) | DataType::GenericEnum(name, arguments) => {
+                Self::Named(crate::parser::generic_instance_name(name, arguments))
+            }
             DataType::Function(params, result) => Self::Function {
                 params: params.iter().copied().map(Into::into).collect(),
                 result: Box::new((*result).into()),
@@ -126,7 +129,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                 node => node,
             };
             match node {
-                ASTNode::EnumDefinition { name, variants } => variants
+                ASTNode::EnumDefinition { name, variants, .. } => variants
                     .iter()
                     .map(|(variant, payload)| {
                         (
@@ -203,7 +206,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                 constant_types.insert(name.clone(), data_type);
             }
         }
-        if let ASTNode::EnumDefinition { name, variants } = node {
+        if let ASTNode::EnumDefinition { name, variants, .. } = node {
             module.enums.push(HirEnum {
                 name: (*name).to_string(),
                 variants: variants
@@ -216,6 +219,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
             name,
             fields,
             methods,
+            ..
         } = node
         {
             let mut method_symbols = Vec::new();
@@ -315,6 +319,75 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                 );
             }
         }
+    }
+    for (template_name, arguments) in generic_applications(nodes) {
+        let instance_name = crate::parser::generic_instance_name(&template_name, &arguments);
+        if module.structs.iter().any(|item| item.name == instance_name)
+            || module.enums.iter().any(|item| item.name == instance_name)
+        {
+            continue;
+        }
+        let Some(template) = nodes.iter().find_map(|node| match node {
+            ASTNode::StructDefinition {
+                name,
+                parameters,
+                fields,
+                ..
+            } if *name == template_name => Some((parameters, fields)),
+            _ => None,
+        }) else {
+            if let Some((parameters, variants)) = nodes.iter().find_map(|node| match node {
+                ASTNode::EnumDefinition {
+                    name,
+                    parameters,
+                    variants,
+                } if *name == template_name => Some((parameters, variants)),
+                _ => None,
+            }) {
+                if parameters.len() != arguments.len() {
+                    continue;
+                }
+                let parameter_types = generic_enum_parameter_types(parameters, variants);
+                let types = generic_type_arguments(parameters, &arguments, &parameter_types);
+                module.enums.push(HirEnum {
+                    name: instance_name,
+                    variants: variants
+                        .iter()
+                        .map(|(variant, payload)| {
+                            (
+                                variant.clone(),
+                                payload.map(|ty| substitute_generic_data_type(ty, &types).into()),
+                            )
+                        })
+                        .collect(),
+                });
+            }
+            continue;
+        };
+        let (parameters, fields) = template;
+        if parameters.len() != arguments.len() {
+            continue;
+        }
+        let parameter_types = generic_struct_parameter_types(parameters, fields);
+        let types = generic_type_arguments(parameters, &arguments, &parameter_types);
+        let values = generic_value_arguments(parameters, &arguments, &parameter_types);
+        module.structs.push(HirStruct {
+            name: instance_name,
+            fields: fields
+                .iter()
+                .map(|(field, ty, default, _)| {
+                    (
+                        field.clone(),
+                        substitute_generic_data_type(*ty, &types).into(),
+                        default
+                            .as_ref()
+                            .map(|value| substitute_generic_expression(value, &values)),
+                    )
+                })
+                .collect(),
+            methods: Vec::new(),
+            bound_methods: Vec::new(),
+        });
     }
     let mut index = 0;
     while index < module.functions.len() {
@@ -629,6 +702,380 @@ fn inferred_negative_integer_type(text: &str) -> Option<HirType> {
         })
     } else {
         None
+    }
+}
+
+fn generic_applications(
+    nodes: &[ASTNode],
+) -> Vec<(String, &'static [crate::parser::GenericArgument])> {
+    fn add_type(
+        data_type: DataType,
+        output: &mut Vec<(String, &'static [crate::parser::GenericArgument])>,
+    ) {
+        match data_type {
+            DataType::GenericStruct(name, args) | DataType::GenericEnum(name, args) => {
+                let instance = crate::parser::generic_instance_name(name, args);
+                if !output.iter().any(|(existing, _)| *existing == instance) {
+                    output.push((name.to_string(), args));
+                }
+                for arg in args {
+                    if let crate::parser::GenericArgument::Type(data_type) = arg {
+                        add_type(*data_type, output);
+                    }
+                }
+            }
+            DataType::Array(_, inner) | DataType::Slice(inner) | DataType::Pointer(inner) => {
+                add_type(*inner, output)
+            }
+            DataType::Function(params, result) => {
+                for parameter in params {
+                    add_type(*parameter, output);
+                }
+                add_type(*result, output);
+            }
+            _ => {}
+        }
+    }
+    fn visit_expr(
+        expression: &Expression,
+        output: &mut Vec<(String, &'static [crate::parser::GenericArgument])>,
+    ) {
+        match expression {
+            Expression::StructLiteral { type_name, fields } => {
+                if let Some(name) = type_name
+                    && let Some((base, arguments)) =
+                        crate::parser::decode_generic_instance_name(name)
+                {
+                    let instance = crate::parser::generic_instance_name(base, arguments);
+                    if !output.iter().any(|(existing, _)| *existing == instance) {
+                        output.push((base.to_string(), arguments));
+                    }
+                }
+                for (_, value) in fields {
+                    visit_expr(value, output);
+                }
+            }
+            Expression::Negate(value)
+            | Expression::Not(value)
+            | Expression::AddressOf(value)
+            | Expression::Dereference(value) => visit_expr(value, output),
+            Expression::Add(a, b)
+            | Expression::Subtract(a, b)
+            | Expression::Multiply(a, b)
+            | Expression::Divide(a, b)
+            | Expression::Remainder(a, b)
+            | Expression::Equal(a, b)
+            | Expression::NotEqual(a, b)
+            | Expression::LessThan(a, b)
+            | Expression::LessThanOrEqual(a, b)
+            | Expression::GreaterThan(a, b)
+            | Expression::GreaterThanOrEqual(a, b)
+            | Expression::And(a, b)
+            | Expression::Or(a, b) => {
+                visit_expr(a, output);
+                visit_expr(b, output);
+            }
+            Expression::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                visit_expr(condition, output);
+                visit_expr(then_branch, output);
+                visit_expr(else_branch, output);
+            }
+            Expression::Block(items) => visit_nodes(items, output),
+            Expression::Call { arguments, .. }
+            | Expression::CallValue { arguments, .. }
+            | Expression::ArrayLiteral(arguments) => {
+                for argument in arguments {
+                    visit_expr(argument, output);
+                }
+            }
+            Expression::MemberAccess { object, .. } => visit_expr(object, output),
+            Expression::Index { object, index } => {
+                visit_expr(object, output);
+                visit_expr(index, output);
+            }
+            Expression::Slice { object, start, end } => {
+                visit_expr(object, output);
+                for bound in start.iter().chain(end.iter()) {
+                    visit_expr(bound, output);
+                }
+            }
+            Expression::Match { value, arms } => {
+                visit_expr(value, output);
+                for (_, body) in arms {
+                    visit_expr(body, output);
+                }
+            }
+            Expression::Lambda { body, .. } => visit_expr(body, output),
+            Expression::Identifier(_)
+            | Expression::LiteralNumber(_)
+            | Expression::LiteralString(_)
+            | Expression::LiteralBool(_)
+            | Expression::StaticAccess { .. } => {}
+        }
+    }
+    fn visit_nodes(
+        nodes: &[ASTNode],
+        output: &mut Vec<(String, &'static [crate::parser::GenericArgument])>,
+    ) {
+        for node in nodes {
+            match node {
+                ASTNode::VariableDefinition {
+                    data_type, value, ..
+                }
+                | ASTNode::CompileTimeConstant {
+                    data_type, value, ..
+                } => {
+                    if let Some(data_type) = data_type {
+                        add_type(*data_type, output);
+                    }
+                    visit_expr(value, output);
+                }
+                ASTNode::Assignment { value, .. } | ASTNode::Expression(value) => {
+                    visit_expr(value, output)
+                }
+                ASTNode::IndexAssignment {
+                    object,
+                    index,
+                    value,
+                } => {
+                    visit_expr(object, output);
+                    visit_expr(index, output);
+                    visit_expr(value, output);
+                }
+                ASTNode::PointerAssignment { pointer, value } => {
+                    visit_expr(pointer, output);
+                    visit_expr(value, output);
+                }
+                ASTNode::MemberAssignment { object, value, .. } => {
+                    visit_expr(object, output);
+                    visit_expr(value, output);
+                }
+                ASTNode::FunctionDefinition {
+                    parameters,
+                    return_type,
+                    body,
+                    ..
+                } => {
+                    for (_, ty) in parameters {
+                        add_type(*ty, output);
+                    }
+                    add_type(*return_type, output);
+                    visit_expr(body, output);
+                }
+                ASTNode::ExternalFunction {
+                    parameters,
+                    return_type,
+                    ..
+                } => {
+                    for (_, ty) in parameters {
+                        add_type(*ty, output);
+                    }
+                    add_type(*return_type, output);
+                }
+                ASTNode::Return(value) => {
+                    if let Some(value) = value {
+                        visit_expr(value, output);
+                    }
+                }
+                ASTNode::StructDefinition {
+                    fields, methods, ..
+                } => {
+                    for (_, ty, default, _) in fields {
+                        add_type(*ty, output);
+                        if let Some(default) = default {
+                            visit_expr(default, output);
+                        }
+                    }
+                    for method in methods {
+                        for (_, ty) in &method.parameters {
+                            add_type(*ty, output);
+                        }
+                        add_type(method.return_type, output);
+                        visit_expr(&method.body, output);
+                    }
+                }
+                ASTNode::EnumDefinition { variants, .. } => {
+                    for (_, payload) in variants {
+                        if let Some(payload) = payload {
+                            add_type(*payload, output);
+                        }
+                    }
+                }
+                ASTNode::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    visit_expr(condition, output);
+                    visit_expr(then_branch, output);
+                    if let Some(branch) = else_branch {
+                        visit_expr(branch, output);
+                    }
+                }
+                ASTNode::While { condition, body } | ASTNode::DoWhile { condition, body } => {
+                    visit_expr(condition, output);
+                    visit_expr(body, output);
+                }
+                ASTNode::For { iterable, body, .. } => {
+                    visit_expr(iterable, output);
+                    visit_expr(body, output);
+                }
+                ASTNode::Loop { body } | ASTNode::Defer { body } => visit_expr(body, output),
+                ASTNode::IfLet {
+                    value,
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    visit_expr(value, output);
+                    visit_expr(then_branch, output);
+                    if let Some(branch) = else_branch {
+                        visit_expr(branch, output);
+                    }
+                }
+                ASTNode::Public(inner) => visit_nodes(std::slice::from_ref(inner), output),
+                ASTNode::Break | ASTNode::Continue | ASTNode::Import { .. } => {}
+            }
+        }
+    }
+    let mut output = Vec::new();
+    visit_nodes(nodes, &mut output);
+    output
+}
+
+fn generic_type_arguments(
+    parameters: &[String],
+    arguments: &[crate::parser::GenericArgument],
+    parameter_types: &[bool],
+) -> std::collections::HashMap<String, DataType> {
+    parameters
+        .iter()
+        .zip(arguments)
+        .enumerate()
+        .filter_map(|(index, (name, argument))| match argument {
+            crate::parser::GenericArgument::Type(data_type) => Some((name.clone(), *data_type)),
+            crate::parser::GenericArgument::Name(type_name)
+                if parameter_types.get(index).copied().unwrap_or(false) =>
+            {
+                Some((name.clone(), DataType::Struct(type_name)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn generic_value_arguments(
+    parameters: &[String],
+    arguments: &[crate::parser::GenericArgument],
+    parameter_types: &[bool],
+) -> std::collections::HashMap<String, Expression> {
+    parameters
+        .iter()
+        .zip(arguments)
+        .enumerate()
+        .filter_map(|(index, (name, argument))| match argument {
+            crate::parser::GenericArgument::Value(value) => Some((name.clone(), (**value).clone())),
+            crate::parser::GenericArgument::Name(value)
+                if !parameter_types.get(index).copied().unwrap_or(false) =>
+            {
+                Some((name.clone(), Expression::Identifier(value.to_string())))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn generic_struct_parameter_types(
+    parameters: &[String],
+    fields: &[(String, DataType, Option<Expression>, bool)],
+) -> Vec<bool> {
+    parameters
+        .iter()
+        .map(|parameter| {
+            fields
+                .iter()
+                .any(|(_, data_type, _, _)| hir_data_type_contains(*data_type, parameter))
+                || parameter.chars().next().is_some_and(char::is_uppercase)
+        })
+        .collect()
+}
+
+fn generic_enum_parameter_types(
+    parameters: &[String],
+    variants: &[(String, Option<DataType>)],
+) -> Vec<bool> {
+    parameters
+        .iter()
+        .map(|parameter| {
+            variants
+                .iter()
+                .filter_map(|(_, payload)| *payload)
+                .any(|payload| hir_data_type_contains(payload, parameter))
+                || parameter.chars().next().is_some_and(char::is_uppercase)
+        })
+        .collect()
+}
+
+fn hir_data_type_contains(data_type: DataType, parameter: &str) -> bool {
+    match data_type {
+        DataType::Struct(name) => name == parameter,
+        DataType::Array(_, inner) | DataType::Slice(inner) | DataType::Pointer(inner) => {
+            hir_data_type_contains(*inner, parameter)
+        }
+        DataType::Function(parameters, result) => {
+            parameters
+                .iter()
+                .any(|ty| hir_data_type_contains(*ty, parameter))
+                || hir_data_type_contains(*result, parameter)
+        }
+        _ => false,
+    }
+}
+
+fn substitute_generic_data_type(
+    data_type: DataType,
+    arguments: &std::collections::HashMap<String, DataType>,
+) -> DataType {
+    match data_type {
+        DataType::Struct(name) => arguments.get(name).copied().unwrap_or(data_type),
+        DataType::Array(length, inner) => DataType::Array(
+            length,
+            Box::leak(Box::new(substitute_generic_data_type(*inner, arguments))),
+        ),
+        DataType::Slice(inner) => DataType::Slice(Box::leak(Box::new(
+            substitute_generic_data_type(*inner, arguments),
+        ))),
+        DataType::Pointer(inner) => DataType::Pointer(Box::leak(Box::new(
+            substitute_generic_data_type(*inner, arguments),
+        ))),
+        DataType::Function(params, result) => DataType::Function(
+            Box::leak(
+                params
+                    .iter()
+                    .map(|param| substitute_generic_data_type(*param, arguments))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
+            Box::leak(Box::new(substitute_generic_data_type(*result, arguments))),
+        ),
+        _ => data_type,
+    }
+}
+
+fn substitute_generic_expression(
+    expression: &Expression,
+    arguments: &std::collections::HashMap<String, Expression>,
+) -> Expression {
+    match expression {
+        Expression::Identifier(name) => arguments
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| expression.clone()),
+        _ => expression.clone(),
     }
 }
 

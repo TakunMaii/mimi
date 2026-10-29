@@ -24,6 +24,8 @@ struct Function {
 }
 
 struct StructInfo {
+    parameters: Vec<String>,
+    parameter_types: Vec<bool>,
     fields: HashMap<String, FieldInfo>,
     variants: HashMap<String, Option<DataType>>,
     methods: HashMap<String, Function>,
@@ -33,6 +35,301 @@ struct FieldInfo {
     data_type: DataType,
     default: Option<Expression>,
     mutable: bool,
+}
+
+fn generic_type_contains(data_type: DataType, parameter: &str) -> bool {
+    match data_type {
+        DataType::Struct(name) => name == parameter,
+        DataType::Array(_, inner) | DataType::Slice(inner) | DataType::Pointer(inner) => {
+            generic_type_contains(*inner, parameter)
+        }
+        DataType::Function(parameters, result) => {
+            parameters
+                .iter()
+                .any(|ty| generic_type_contains(*ty, parameter))
+                || generic_type_contains(*result, parameter)
+        }
+        _ => false,
+    }
+}
+
+fn generic_expression_contains(expression: &Expression, parameter: &str) -> bool {
+    match expression {
+        Expression::Identifier(name) => name == parameter,
+        Expression::Negate(value)
+        | Expression::Not(value)
+        | Expression::AddressOf(value)
+        | Expression::Dereference(value) => generic_expression_contains(value, parameter),
+        Expression::Add(a, b)
+        | Expression::Subtract(a, b)
+        | Expression::Multiply(a, b)
+        | Expression::Divide(a, b)
+        | Expression::Remainder(a, b)
+        | Expression::Equal(a, b)
+        | Expression::NotEqual(a, b)
+        | Expression::LessThan(a, b)
+        | Expression::LessThanOrEqual(a, b)
+        | Expression::GreaterThan(a, b)
+        | Expression::GreaterThanOrEqual(a, b)
+        | Expression::And(a, b)
+        | Expression::Or(a, b) => {
+            generic_expression_contains(a, parameter) || generic_expression_contains(b, parameter)
+        }
+        _ => false,
+    }
+}
+
+fn infer_generic_parameter_types<'a>(
+    parameters: &[String],
+    fields: impl Iterator<Item = (DataType, Option<&'a Expression>)>,
+) -> Vec<bool> {
+    let fields = fields.collect::<Vec<_>>();
+    parameters
+        .iter()
+        .map(|parameter| {
+            let used_as_type = fields
+                .iter()
+                .any(|(ty, _)| generic_type_contains(*ty, parameter));
+            let used_as_value = fields.iter().any(|(_, value)| {
+                value.is_some_and(|value| generic_expression_contains(value, parameter))
+            });
+            used_as_type
+                || (!used_as_value && parameter.chars().next().is_some_and(char::is_uppercase))
+        })
+        .collect()
+}
+
+fn infer_generic_enum_parameter_types(
+    parameters: &[String],
+    variants: &[(String, Option<DataType>)],
+) -> Vec<bool> {
+    parameters
+        .iter()
+        .map(|parameter| {
+            variants
+                .iter()
+                .filter_map(|(_, payload)| *payload)
+                .any(|payload| generic_type_contains(payload, parameter))
+                || parameter.chars().next().is_some_and(char::is_uppercase)
+        })
+        .collect()
+}
+
+fn specialize_struct_info(
+    template_name: &'static str,
+    arguments: &[crate::parser::GenericArgument],
+    structs: &HashMap<&'static str, StructInfo>,
+) -> Result<(DataType, StructInfo), TypeError> {
+    let template = structs
+        .get(template_name)
+        .ok_or_else(|| error(format!("unknown generic type '{template_name}'")))?;
+    if arguments.len() != template.parameters.len() {
+        return Err(error(format!(
+            "type '{template_name}' expects {} generic arguments, got {}",
+            template.parameters.len(),
+            arguments.len()
+        )));
+    }
+    let mut type_arguments = HashMap::new();
+    let mut value_arguments = HashMap::new();
+    for (index, (parameter, argument)) in template.parameters.iter().zip(arguments).enumerate() {
+        let is_type_parameter = template
+            .parameter_types
+            .get(index)
+            .copied()
+            .unwrap_or_else(|| parameter.chars().next().is_some_and(char::is_uppercase));
+        match (is_type_parameter, argument) {
+            (true, crate::parser::GenericArgument::Type(data_type)) => {
+                validate_generic_argument_type(*data_type, structs)?;
+                type_arguments.insert(parameter.as_str(), *data_type);
+            }
+            (true, crate::parser::GenericArgument::Name(name)) => {
+                if !structs.contains_key(name) {
+                    return Err(error(format!("unknown type argument '{name}'")));
+                }
+                type_arguments.insert(parameter.as_str(), DataType::Struct(name));
+            }
+            (false, crate::parser::GenericArgument::Value(value)) => {
+                value_arguments.insert(parameter.as_str(), (**value).clone());
+            }
+            (false, crate::parser::GenericArgument::Name(name)) => {
+                value_arguments
+                    .insert(parameter.as_str(), Expression::Identifier(name.to_string()));
+            }
+            (true, _) => {
+                return Err(error(format!(
+                    "generic parameter '{parameter}' requires a type"
+                )));
+            }
+            (false, _) => {
+                return Err(error(format!(
+                    "generic parameter '{parameter}' requires a value"
+                )));
+            }
+        }
+    }
+    let specialized = StructInfo {
+        parameters: Vec::new(),
+        parameter_types: Vec::new(),
+        fields: template
+            .fields
+            .iter()
+            .map(|(name, field)| {
+                (
+                    name.clone(),
+                    FieldInfo {
+                        data_type: substitute_generic_type(field.data_type, &type_arguments),
+                        default: field
+                            .default
+                            .as_ref()
+                            .map(|value| substitute_generic_value(value, &value_arguments)),
+                        mutable: field.mutable,
+                    },
+                )
+            })
+            .collect(),
+        variants: template
+            .variants
+            .iter()
+            .map(|(name, payload)| {
+                (
+                    name.clone(),
+                    payload.map(|payload| substitute_generic_type(payload, &type_arguments)),
+                )
+            })
+            .collect(),
+        methods: template.methods.clone(),
+    };
+    let instance_name =
+        Box::leak(crate::parser::generic_instance_name(template_name, arguments).into_boxed_str());
+    let instance_type = if template.variants.is_empty() {
+        DataType::Struct(instance_name)
+    } else {
+        DataType::Enum(instance_name)
+    };
+    Ok((instance_type, specialized))
+}
+
+fn validate_generic_type_use(
+    data_type: DataType,
+    structs: &HashMap<&'static str, StructInfo>,
+) -> Result<(), TypeError> {
+    match data_type {
+        DataType::Struct(name) | DataType::Enum(name) => {
+            if let Some(info) = structs.get(name)
+                && !info.parameters.is_empty()
+            {
+                Err(error(format!(
+                    "generic type '{name}' requires {} arguments",
+                    info.parameters.len()
+                )))
+            } else {
+                Ok(())
+            }
+        }
+        DataType::GenericStruct(name, arguments) | DataType::GenericEnum(name, arguments) => {
+            specialize_struct_info(name, arguments, structs)?;
+            Ok(())
+        }
+        DataType::Array(_, inner) | DataType::Slice(inner) | DataType::Pointer(inner) => {
+            validate_generic_type_use(*inner, structs)
+        }
+        DataType::Function(parameters, result) => {
+            for parameter in parameters {
+                validate_generic_type_use(*parameter, structs)?;
+            }
+            validate_generic_type_use(*result, structs)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn specialized_info_by_name(
+    name: &'static str,
+    structs: &HashMap<&'static str, StructInfo>,
+) -> Result<Option<StructInfo>, TypeError> {
+    let Some((template, arguments)) = crate::parser::decode_generic_instance_name(name) else {
+        return Ok(None);
+    };
+    specialize_struct_info(template, arguments, structs).map(|(_, info)| Some(info))
+}
+
+fn substitute_generic_type(data_type: DataType, arguments: &HashMap<&str, DataType>) -> DataType {
+    match data_type {
+        DataType::Struct(name) => arguments.get(name).copied().unwrap_or(data_type),
+        DataType::GenericStruct(name, generic_arguments) => {
+            let generic_arguments = generic_arguments
+                .iter()
+                .map(|argument| match argument {
+                    crate::parser::GenericArgument::Type(data_type) => {
+                        crate::parser::GenericArgument::Type(substitute_generic_type(
+                            *data_type, arguments,
+                        ))
+                    }
+                    crate::parser::GenericArgument::Name(name) => arguments
+                        .get(name)
+                        .copied()
+                        .map(crate::parser::GenericArgument::Type)
+                        .unwrap_or(*argument),
+                    other => *other,
+                })
+                .collect::<Vec<_>>();
+            DataType::GenericStruct(name, Box::leak(generic_arguments.into_boxed_slice()))
+        }
+        DataType::GenericEnum(name, generic_arguments) => {
+            let generic_arguments = generic_arguments
+                .iter()
+                .map(|argument| match argument {
+                    crate::parser::GenericArgument::Type(data_type) => {
+                        crate::parser::GenericArgument::Type(substitute_generic_type(
+                            *data_type, arguments,
+                        ))
+                    }
+                    crate::parser::GenericArgument::Name(name) => arguments
+                        .get(name)
+                        .copied()
+                        .map(crate::parser::GenericArgument::Type)
+                        .unwrap_or(*argument),
+                    other => *other,
+                })
+                .collect::<Vec<_>>();
+            DataType::GenericEnum(name, Box::leak(generic_arguments.into_boxed_slice()))
+        }
+        DataType::Array(length, element) => DataType::Array(
+            length,
+            Box::leak(Box::new(substitute_generic_type(*element, arguments))),
+        ),
+        DataType::Slice(element) => DataType::Slice(Box::leak(Box::new(substitute_generic_type(
+            *element, arguments,
+        )))),
+        DataType::Pointer(element) => DataType::Pointer(Box::leak(Box::new(
+            substitute_generic_type(*element, arguments),
+        ))),
+        DataType::Function(parameters, result) => DataType::Function(
+            Box::leak(
+                parameters
+                    .iter()
+                    .map(|parameter| substitute_generic_type(*parameter, arguments))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
+            Box::leak(Box::new(substitute_generic_type(*result, arguments))),
+        ),
+        _ => data_type,
+    }
+}
+
+fn substitute_generic_value(
+    expression: &Expression,
+    arguments: &HashMap<&str, Expression>,
+) -> Expression {
+    match expression {
+        Expression::Identifier(name) => arguments
+            .get(name.as_str())
+            .cloned()
+            .unwrap_or_else(|| expression.clone()),
+        _ => expression.clone(),
+    }
 }
 
 struct ImportedExports {
@@ -117,7 +414,7 @@ fn imported_exports_inner(
             declaration => declaration,
         })
         .filter_map(|node| match node {
-            ASTNode::EnumDefinition { name, variants } => Some(
+            ASTNode::EnumDefinition { name, variants, .. } => Some(
                 variants
                     .iter()
                     .map(|(variant, payload)| (variant.clone(), (*name, *payload)))
@@ -242,8 +539,10 @@ fn imported_exports_inner(
             }
             ASTNode::StructDefinition {
                 name,
+                parameters,
                 fields,
                 methods,
+                ..
             } => {
                 let qualified_name: &'static str =
                     Box::leak(format!("{package}.{name}").into_boxed_str());
@@ -251,6 +550,16 @@ fn imported_exports_inner(
                 types.insert(
                     qualified_name,
                     StructInfo {
+                        parameters: parameters.clone(),
+                        parameter_types: infer_generic_parameter_types(
+                            &parameters,
+                            fields.iter().map(|(_, ty, default, _)| {
+                                (
+                                    qualify_imported_type(*ty, package, &local_type_names),
+                                    default.as_ref(),
+                                )
+                            }),
+                        ),
                         fields: fields
                             .into_iter()
                             .map(|(field_name, data_type, default, mutable)| {
@@ -306,13 +615,32 @@ fn imported_exports_inner(
                     },
                 );
             }
-            ASTNode::EnumDefinition { name, variants } => {
+            ASTNode::EnumDefinition {
+                name,
+                parameters,
+                variants,
+            } => {
                 let qualified_name: &'static str =
                     Box::leak(format!("{package}.{name}").into_boxed_str());
                 exports.insert(name.to_string(), DataType::Enum(qualified_name));
                 types.insert(
                     qualified_name,
                     StructInfo {
+                        parameters: parameters.clone(),
+                        parameter_types: infer_generic_enum_parameter_types(
+                            &parameters,
+                            &variants
+                                .iter()
+                                .map(|(name, payload)| {
+                                    (
+                                        name.clone(),
+                                        payload.map(|ty| {
+                                            qualify_imported_type(ty, package, &local_type_names)
+                                        }),
+                                    )
+                                })
+                                .collect::<Vec<_>>(),
+                        ),
                         fields: HashMap::new(),
                         variants: variants
                             .into_iter()
@@ -818,10 +1146,17 @@ pub(crate) fn check_with_import_paths(
         .collect::<HashMap<_, _>>();
 
     for node in nodes {
-        if let ASTNode::EnumDefinition { name, variants } = node {
+        if let ASTNode::EnumDefinition {
+            name,
+            parameters,
+            variants,
+        } = node
+        {
             structs.insert(
                 *name,
                 StructInfo {
+                    parameters: parameters.clone(),
+                    parameter_types: infer_generic_enum_parameter_types(parameters, variants),
                     fields: HashMap::new(),
                     variants: variants.iter().cloned().collect(),
                     methods: HashMap::new(),
@@ -830,8 +1165,10 @@ pub(crate) fn check_with_import_paths(
         }
         if let ASTNode::StructDefinition {
             name,
+            parameters,
             fields,
             methods,
+            ..
         } = node
         {
             let mut field_names = std::collections::HashSet::new();
@@ -846,6 +1183,13 @@ pub(crate) fn check_with_import_paths(
                 .insert(
                     *name,
                     StructInfo {
+                        parameters: parameters.clone(),
+                        parameter_types: infer_generic_parameter_types(
+                            parameters,
+                            fields
+                                .iter()
+                                .map(|(_, ty, default, _)| (*ty, default.as_ref())),
+                        ),
                         fields: fields
                             .iter()
                             .map(|(name, data_type, default, mutable)| {
@@ -936,6 +1280,15 @@ pub(crate) fn check_with_import_paths(
                 for method in methods {
                     let mut method_scopes = vec![imported_symbols.clone(), HashMap::new()];
                     for (parameter_name, data_type) in &method.parameters {
+                        let resolved_type = resolve_self(*data_type, name);
+                        if resolved_type != DataType::Struct(*name)
+                            && let Err(err) = validate_generic_type_use(resolved_type, &structs)
+                        {
+                            errors.push(error(format!(
+                                "method '{}::{}': {}",
+                                name, method.name, err.message
+                            )));
+                        }
                         method_scopes[1].insert(
                             parameter_name.clone(),
                             Symbol {
@@ -964,6 +1317,14 @@ pub(crate) fn check_with_import_paths(
                 return_type,
                 body,
             } => {
+                for (_, data_type) in parameters {
+                    if let Err(err) = validate_generic_type_use(*data_type, &structs) {
+                        errors.push(error(format!("function '{name}': {}", err.message)));
+                    }
+                }
+                if let Err(err) = validate_generic_type_use(*return_type, &structs) {
+                    errors.push(error(format!("function '{name}': {}", err.message)));
+                }
                 let mut function_scopes = vec![imported_symbols.clone(), HashMap::new()];
                 for (parameter_name, data_type) in parameters {
                     if function_scopes[1]
@@ -1023,6 +1384,9 @@ fn check_statement(
             data_type,
             value,
         } => {
+            if let Some(data_type) = data_type {
+                validate_generic_type_use(*data_type, structs)?;
+            }
             if scopes.last().unwrap().contains_key(name) {
                 return Err(error(format!("'{name}' is already defined")));
             }
@@ -1050,6 +1414,9 @@ fn check_statement(
             data_type,
             value,
         } => {
+            if let Some(data_type) = data_type {
+                validate_generic_type_use(*data_type, structs)?;
+            }
             if scopes.last().unwrap().contains_key(name) {
                 return Err(error(format!("'{name}' is already defined")));
             }
@@ -1130,8 +1497,34 @@ fn check_statement(
             let object_type = infer_expression(object, scopes, functions, structs, None)?;
             let struct_name = match object_type {
                 DataType::Struct(name) => name,
+                DataType::GenericStruct(name, arguments) => {
+                    let (DataType::Struct(instance), info) =
+                        specialize_struct_info(name, arguments, structs)?
+                    else {
+                        unreachable!()
+                    };
+                    if let Some(field) = info.fields.get(member) {
+                        if !field.mutable {
+                            return Err(error(format!("cannot assign to fixed field '{member}'")));
+                        }
+                        infer_expression(value, scopes, functions, structs, Some(field.data_type))?;
+                        return Ok(());
+                    }
+                    instance
+                }
                 DataType::Pointer(inner) => match *inner {
                     DataType::Struct(name) => name,
+                    DataType::GenericStruct(name, arguments) => {
+                        let (_, info) = specialize_struct_info(name, arguments, structs)?;
+                        let field = info.fields.get(member).ok_or_else(|| {
+                            error(format!("unknown field '{member}' in '{name}'"))
+                        })?;
+                        if !field.mutable {
+                            return Err(error(format!("cannot assign to fixed field '{member}'")));
+                        }
+                        infer_expression(value, scopes, functions, structs, Some(field.data_type))?;
+                        return Ok(());
+                    }
                     _ => return Err(error("member assignment requires a struct value")),
                 },
                 _ => return Err(error("member assignment requires a struct value")),
@@ -1174,10 +1567,16 @@ fn check_statement(
             let value_type = infer_expression(value, scopes, functions, structs, None)?;
             let enum_name = match value_type {
                 DataType::Enum(name) | DataType::Struct(name) => name,
+                DataType::GenericEnum(name, arguments)
+                | DataType::GenericStruct(name, arguments) => Box::leak(
+                    crate::parser::generic_instance_name(name, arguments).into_boxed_str(),
+                ),
                 _ => return Err(error("if-let requires an enum value")),
             };
-            let info = structs
-                .get(enum_name)
+            let specialized = specialized_info_by_name(enum_name, structs)?;
+            let info = specialized
+                .as_ref()
+                .or_else(|| structs.get(enum_name))
                 .ok_or_else(|| error("unknown enum type"))?;
             let payload = info
                 .variants
@@ -1351,10 +1750,25 @@ fn infer_expression(
                             .map(|_| *enum_name)
                     })
                     .collect();
-                match matches.as_slice() {
-                    [enum_name] => DataType::Enum(enum_name),
-                    [] => return Err(error(format!("use of undefined identifier '{name}'"))),
-                    _ => return Err(error(format!("ambiguous enum variant '{name}'"))),
+                if let Some(
+                    DataType::GenericEnum(enum_name, arguments)
+                    | DataType::GenericStruct(enum_name, arguments),
+                ) = expected
+                    && specialize_struct_info(enum_name, arguments, structs)?
+                        .1
+                        .variants
+                        .get(name)
+                        .is_some_and(Option::is_none)
+                {
+                    DataType::Enum(Box::leak(
+                        crate::parser::generic_instance_name(enum_name, arguments).into_boxed_str(),
+                    ))
+                } else {
+                    match matches.as_slice() {
+                        [enum_name] => DataType::Enum(enum_name),
+                        [] => return Err(error(format!("use of undefined identifier '{name}'"))),
+                        _ => return Err(error(format!("ambiguous enum variant '{name}'"))),
+                    }
                 }
             };
             require_compatible(data_type, expected)?;
@@ -1576,6 +1990,23 @@ fn infer_expression(
                 require_compatible(*return_type, expected)?;
                 return Ok(*return_type);
             }
+            if let Some(
+                DataType::GenericEnum(enum_name, generic_arguments)
+                | DataType::GenericStruct(enum_name, generic_arguments),
+            ) = expected
+            {
+                let (instance, info) =
+                    specialize_struct_info(enum_name, generic_arguments, structs)?;
+                if let Some(payload) = info.variants.get(name) {
+                    if arguments.len() != usize::from(payload.is_some()) {
+                        return Err(error(format!("invalid payload for enum variant '{name}'")));
+                    }
+                    if let (Some(payload), Some(argument)) = (payload, arguments.first()) {
+                        infer_expression(argument, scopes, functions, structs, Some(*payload))?;
+                    }
+                    return Ok(instance);
+                }
+            }
             for (enum_name, info) in structs {
                 if let Some(payload) = info.variants.get(name) {
                     if arguments.len() != usize::from(payload.is_some()) {
@@ -1618,16 +2049,34 @@ fn infer_expression(
         }
         Expression::StructLiteral { type_name, fields } => {
             let result = match (type_name, expected) {
-                (Some(name), _) => Ok(DataType::Struct(name)),
+                (Some(name), _) => {
+                    if let Some((template, arguments)) =
+                        crate::parser::decode_generic_instance_name(name)
+                    {
+                        specialize_struct_info(template, arguments, structs).map(|(ty, _)| ty)
+                    } else {
+                        Ok(DataType::Struct(name))
+                    }
+                }
                 (None, Some(data_type @ DataType::Struct(_))) => Ok(data_type),
+                (None, Some(DataType::GenericStruct(name, arguments))) => {
+                    specialize_struct_info(name, arguments, structs).map(|(ty, _)| ty)
+                }
                 (None, _) => Err(error("cannot infer anonymous struct type")),
             }?;
             let struct_name = match result {
                 DataType::Struct(name) => name,
                 _ => unreachable!(),
             };
-            let info = structs
-                .get(struct_name)
+            let decoded = crate::parser::decode_generic_instance_name(struct_name);
+            let specialized = if let Some((template, arguments)) = decoded {
+                Some(specialize_struct_info(template, arguments, structs)?.1)
+            } else {
+                None
+            };
+            let info = specialized
+                .as_ref()
+                .or_else(|| structs.get(struct_name))
                 .ok_or_else(|| error(format!("undefined struct type '{struct_name}'")))?;
             let mut provided = HashSet::new();
             for (field_name, value) in fields {
@@ -1680,8 +2129,22 @@ fn infer_expression(
             let object_type = infer_expression(object, scopes, functions, structs, None)?;
             let struct_name = match object_type {
                 DataType::Struct(name) => name,
+                DataType::GenericStruct(name, arguments) => {
+                    let (_, info) = specialize_struct_info(name, arguments, structs)?;
+                    if let Some(field) = info.fields.get(member) {
+                        return Ok(field.data_type);
+                    }
+                    return Err(error(format!("unknown member '{member}' in '{name}'")));
+                }
                 DataType::Pointer(element) => match *element {
                     DataType::Struct(name) => name,
+                    DataType::GenericStruct(name, arguments) => {
+                        let (_, info) = specialize_struct_info(name, arguments, structs)?;
+                        if let Some(field) = info.fields.get(member) {
+                            return Ok(field.data_type);
+                        }
+                        return Err(error(format!("unknown member '{member}' in '{name}'")));
+                    }
                     _ => return Err(error("member access requires a struct value")),
                 },
                 _ => return Err(error("member access requires a struct value")),
@@ -1924,10 +2387,16 @@ fn infer_expression(
             let value_type = infer_expression(value, scopes, functions, structs, None)?;
             let enum_name = match value_type {
                 DataType::Enum(name) | DataType::Struct(name) => name,
+                DataType::GenericEnum(name, arguments)
+                | DataType::GenericStruct(name, arguments) => Box::leak(
+                    crate::parser::generic_instance_name(name, arguments).into_boxed_str(),
+                ),
                 _ => return Err(error("match requires an enum value")),
             };
-            let info = structs
-                .get(enum_name)
+            let specialized = specialized_info_by_name(enum_name, structs)?;
+            let info = specialized
+                .as_ref()
+                .or_else(|| structs.get(enum_name))
                 .ok_or_else(|| error("unknown enum type"))?;
             let mut result = None;
             let mut covered = HashSet::new();
@@ -2233,14 +2702,73 @@ fn common_numeric_type(lhs: DataType, rhs: DataType) -> Option<DataType> {
 }
 
 fn require_compatible(actual: DataType, expected: Option<DataType>) -> Result<(), TypeError> {
-    if let Some(expected) = expected
-        && actual != expected
-        && !matches!((actual, expected), (DataType::Struct(a), DataType::Enum(b)) | (DataType::Enum(a), DataType::Struct(b)) if a == b)
+    if let Some(expected) = expected.map(|expected| normalize_generic_type(expected))
+        && normalize_generic_type(actual) != expected
+        && !matches!((normalize_generic_type(actual), expected), (DataType::Struct(a), DataType::Enum(b)) | (DataType::Enum(a), DataType::Struct(b)) if a == b)
         && !(actual.is_integer() && expected.is_float())
     {
         return Err(error(format!("expected {expected}, found {actual}")));
     }
     Ok(())
+}
+
+fn normalize_generic_type(data_type: DataType) -> DataType {
+    match data_type {
+        DataType::GenericStruct(name, arguments) => DataType::Struct(Box::leak(
+            crate::parser::generic_instance_name(name, arguments).into_boxed_str(),
+        )),
+        DataType::GenericEnum(name, arguments) => DataType::Enum(Box::leak(
+            crate::parser::generic_instance_name(name, arguments).into_boxed_str(),
+        )),
+        DataType::Array(length, inner) => {
+            DataType::Array(length, Box::leak(Box::new(normalize_generic_type(*inner))))
+        }
+        DataType::Slice(inner) => {
+            DataType::Slice(Box::leak(Box::new(normalize_generic_type(*inner))))
+        }
+        DataType::Pointer(inner) => {
+            DataType::Pointer(Box::leak(Box::new(normalize_generic_type(*inner))))
+        }
+        DataType::Function(parameters, result) => DataType::Function(
+            Box::leak(
+                parameters
+                    .iter()
+                    .map(|parameter| normalize_generic_type(*parameter))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
+            Box::leak(Box::new(normalize_generic_type(*result))),
+        ),
+        _ => data_type,
+    }
+}
+
+fn validate_generic_argument_type(
+    data_type: DataType,
+    structs: &HashMap<&'static str, StructInfo>,
+) -> Result<(), TypeError> {
+    match data_type {
+        DataType::Struct(name) | DataType::Enum(name) => {
+            if structs.contains_key(name) {
+                Ok(())
+            } else {
+                Err(error(format!("unknown type argument '{name}'")))
+            }
+        }
+        DataType::GenericStruct(name, arguments) | DataType::GenericEnum(name, arguments) => {
+            specialize_struct_info(name, arguments, structs).map(|_| ())
+        }
+        DataType::Array(_, inner) | DataType::Slice(inner) | DataType::Pointer(inner) => {
+            validate_generic_argument_type(*inner, structs)
+        }
+        DataType::Function(parameters, result) => {
+            for parameter in parameters {
+                validate_generic_argument_type(*parameter, structs)?;
+            }
+            validate_generic_argument_type(*result, structs)
+        }
+        _ => Ok(()),
+    }
 }
 
 fn error(message: impl Into<String>) -> TypeError {
@@ -2294,9 +2822,9 @@ impl DataType {
             Self::U64 | Self::I64 | Self::F64 => 64,
             Self::Bool => 1,
             Self::Void => 0,
-            Self::Struct(_) => 0,
+            Self::Struct(_) | Self::GenericStruct(_, _) => 0,
             Self::Array(_, _) | Self::Slice(_) => 0,
-            Self::Enum(_) => 0,
+            Self::Enum(_) | Self::GenericEnum(_, _) => 0,
             Self::Function(_, _) | Self::SelfType | Self::Pointer(_) => 0,
         }
     }
@@ -2344,9 +2872,15 @@ impl std::fmt::Display for DataType {
             Self::Bool => "bool",
             Self::Void => "void",
             Self::Struct(name) => name,
+            Self::GenericStruct(name, arguments) => {
+                return formatter.write_str(&crate::parser::generic_instance_name(name, arguments));
+            }
             Self::Array(length, element) => return write!(formatter, "[{length}]{element}"),
             Self::Slice(element) => return write!(formatter, "[]{element}"),
             Self::Enum(name) => name,
+            Self::GenericEnum(name, arguments) => {
+                return formatter.write_str(&crate::parser::generic_instance_name(name, arguments));
+            }
             Self::SelfType => "Self",
             Self::Function(parameters, return_type) => {
                 return write!(formatter, "fn({parameters:?}){return_type}");

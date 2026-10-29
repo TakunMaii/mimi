@@ -212,6 +212,93 @@ fn builds_and_runs_lambdas_that_capture_aggregate_values() {
 }
 
 #[test]
+fn builds_and_runs_generic_struct_specializations() {
+    let source = std::env::temp_dir().join(format!(
+        "mimi_generic_struct_source_{}.mi",
+        std::process::id()
+    ));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_generic_struct_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "pair :: struct <T> { x : T, y : T } offset :: struct <dx> { x : i32 = dx } main :: fn () i32 { values : pair<i32> = pair<i32> { x = 17, y = 20 } origin : offset<5> = offset<5> {} values.x + values.y + origin.x - 42 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
+fn builds_and_runs_generic_enum_specializations() {
+    let source = std::env::temp_dir().join(format!(
+        "mimi_generic_enum_source_{}.mi",
+        std::process::id()
+    ));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_generic_enum_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "option :: enum <T> { some(T), none } main :: fn () i32 { value : option<i32> = some(41) match value { some(number) => number + 1, none => 0 } - 42 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
+fn builds_and_runs_lowercase_generic_type_and_enum_if_let() {
+    let source = std::env::temp_dir().join(format!(
+        "mimi_generic_lower_source_{}.mi",
+        std::process::id()
+    ));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_generic_lower_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "point :: struct { x : i32 } holder :: struct <item> { value : item } option :: enum <T> { some(T), none } main :: fn () i32 { wrapped : holder<point> = holder<point> { value = point { x = 40 } } choice : option<i32> = some(2) result := wrapped.value.x if some(value) := choice { result = result + value } result - 42 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
 fn builds_and_runs_imported_external_functions() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

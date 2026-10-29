@@ -266,6 +266,44 @@ fn qualify_imported_type(
     local_type_names: &std::collections::HashSet<String>,
 ) -> parser::DataType {
     match data_type {
+        parser::DataType::GenericStruct(name, arguments) => {
+            let name = if local_type_names.contains(name) || name.contains('.') {
+                Box::leak(format!("{package}.{name}").into_boxed_str())
+            } else {
+                name
+            };
+            parser::DataType::GenericStruct(
+                name,
+                Box::leak(
+                    arguments
+                        .iter()
+                        .map(|argument| {
+                            qualify_imported_generic_argument(*argument, package, local_type_names)
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
+            )
+        }
+        parser::DataType::GenericEnum(name, arguments) => {
+            let name = if local_type_names.contains(name) || name.contains('.') {
+                Box::leak(format!("{package}.{name}").into_boxed_str())
+            } else {
+                name
+            };
+            parser::DataType::GenericEnum(
+                name,
+                Box::leak(
+                    arguments
+                        .iter()
+                        .map(|argument| {
+                            qualify_imported_generic_argument(*argument, package, local_type_names)
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
+            )
+        }
         parser::DataType::Struct(name) if local_type_names.contains(name) || name.contains('.') => {
             parser::DataType::Struct(Box::leak(format!("{package}.{name}").into_boxed_str()))
         }
@@ -300,6 +338,19 @@ fn qualify_imported_type(
                 package,
                 local_type_names,
             ))),
+        ),
+        other => other,
+    }
+}
+
+fn qualify_imported_generic_argument(
+    argument: parser::GenericArgument,
+    package: &str,
+    local_type_names: &std::collections::HashSet<String>,
+) -> parser::GenericArgument {
+    match argument {
+        parser::GenericArgument::Type(data_type) => parser::GenericArgument::Type(
+            qualify_imported_type(data_type, package, local_type_names),
         ),
         other => other,
     }
@@ -372,6 +423,7 @@ fn qualify_imported_node(
             name,
             fields,
             methods,
+            ..
         } => {
             *name = Box::leak(format!("{package}.{name}").into_boxed_str());
             for (_, ty, default, _) in fields {
@@ -411,7 +463,7 @@ fn qualify_imported_node(
         ASTNode::Loop { body } | ASTNode::Defer { body } => {
             qualify_imported_expression(body, package, local_type_names);
         }
-        ASTNode::EnumDefinition { name, variants } => {
+        ASTNode::EnumDefinition { name, variants, .. } => {
             *name = Box::leak(format!("{package}.{name}").into_boxed_str());
             for (_, payload) in variants {
                 *payload = payload.map(|ty| qualify_imported_type(ty, package, local_type_names));
