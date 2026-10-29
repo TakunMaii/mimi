@@ -37,7 +37,7 @@ imports while preserving C types, layout, and target ABI rules.
 ## Advanced C Declarations
 
 - [x] Import simple numeric macro constants through Clang's preprocessor output.
-  - [ ] Provide source level `@cDefine` configuration.
+  - [x] Provide source level `@cDefine` configuration.
 - [ ] Support variadic C functions and default argument promotions.
 - [ ] Support Mimi callbacks passed to C, with explicit lifetime/trampoline rules.
 - [x] Build and link C source files alongside Mimi modules with `--c-source`.

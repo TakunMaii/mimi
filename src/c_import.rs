@@ -259,13 +259,19 @@ pub(crate) fn expand(
 ) -> Result<Vec<ASTNode>, String> {
     let mut output = nodes.to_vec();
     let mut imports = Vec::new();
+    let mut source_defines = Vec::new();
     for node in nodes {
         if let ASTNode::CImport { alias, path } = node {
             imports.push((alias.clone(), path.clone()));
         }
+        if let ASTNode::CDefine { name, value } = node {
+            source_defines.push(format!("{name}={value}"));
+        }
     }
+    let mut defines = defines.to_vec();
+    defines.extend(source_defines);
     for (alias, path) in imports {
-        let declarations = import_header(&path, target, include_paths, defines, sysroot)?;
+        let declarations = import_header(&path, target, include_paths, &defines, sysroot)?;
         output.extend(declarations.into_iter().map(|mut node| {
             match &mut node {
                 ASTNode::ExternalFunction {

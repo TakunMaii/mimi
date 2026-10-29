@@ -388,6 +388,47 @@ fn imports_numeric_c_macros() {
 }
 
 #[test]
+fn applies_source_c_define_during_header_import() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_cdefine_import_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("feature.h");
+    let c_source = directory.join("feature.c");
+    let source = directory.join("main.mi");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "#ifdef MIMI_FEATURE_VALUE\nint feature_value(void);\n#else\n#error source definition was not passed to clang\n#endif\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#define MIMI_FEATURE_VALUE 42\n#include \"feature.h\"\nint feature_value(void) { return MIMI_FEATURE_VALUE; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "config :: @cDefine(\"MIMI_FEATURE_VALUE\", 42) c :: @cimport(\"feature.h\") main :: fn () i32 { c.feature_value() - 42 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn imports_simple_c_struct_layout() {
     let directory =
         std::env::temp_dir().join(format!("mimi_cimport_struct_{}", std::process::id()));

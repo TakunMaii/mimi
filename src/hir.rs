@@ -941,7 +941,8 @@ fn generic_applications(
                 ASTNode::Break
                 | ASTNode::Continue
                 | ASTNode::Import { .. }
-                | ASTNode::CImport { .. } => {}
+                | ASTNode::CImport { .. }
+                | ASTNode::CDefine { .. } => {}
             }
         }
     }
@@ -1137,7 +1138,8 @@ fn collect_free_names(
             | ASTNode::StructDefinition { .. }
             | ASTNode::EnumDefinition { .. }
             | ASTNode::Import { .. }
-            | ASTNode::CImport { .. } => {}
+            | ASTNode::CImport { .. }
+            | ASTNode::CDefine { .. } => {}
             ASTNode::If {
                 condition,
                 then_branch,
@@ -1486,7 +1488,8 @@ fn lift_lambdas_in_node(
         | ASTNode::StructDefinition { .. }
         | ASTNode::EnumDefinition { .. }
         | ASTNode::Import { .. }
-        | ASTNode::CImport { .. } => {}
+        | ASTNode::CImport { .. }
+        | ASTNode::CDefine { .. } => {}
     }
 }
 

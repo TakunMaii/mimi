@@ -540,7 +540,11 @@ fn qualify_imported_node(
             **declaration =
                 qualify_imported_node((**declaration).clone(), package, local_type_names);
         }
-        ASTNode::Break | ASTNode::Continue | ASTNode::Import { .. } | ASTNode::CImport { .. } => {}
+        ASTNode::Break
+        | ASTNode::Continue
+        | ASTNode::Import { .. }
+        | ASTNode::CImport { .. }
+        | ASTNode::CDefine { .. } => {}
     }
     node
 }

@@ -157,6 +157,17 @@ fn parses_c_header_imports() {
 }
 
 #[test]
+fn parses_c_macro_definitions() {
+    assert_eq!(
+        parse(tokenize("config :: @cDefine(\"FEATURE_LEVEL\", 3)".chars())),
+        vec![ASTNode::CDefine {
+            name: "FEATURE_LEVEL".into(),
+            value: "3".into(),
+        }]
+    );
+}
+
+#[test]
 fn parses_unary_negation() {
     assert_eq!(
         parse(tokenize("x := -value".chars())),

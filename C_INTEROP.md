@@ -21,6 +21,13 @@ preprocessor definitions, and a sysroot can be configured on the build command:
 mimi build main.mi -o main -I/path/to/include -DPLATFORM=1 --sysroot /sdk
 ```
 
+Source files can set definitions for header import before importing the header:
+
+```mimi
+config :: @cDefine("PLATFORM", 1)
+c :: @cimport("platform.h")
+```
+
 Scalar C functions, scalar typedefs used in prototypes, ordinary pointers,
 integer enum constants, simple numeric macros, and simple named struct fields
 are imported. Imported function calls use their C linker names. Prototypes

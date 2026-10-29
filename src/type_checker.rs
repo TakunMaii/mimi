@@ -1604,7 +1604,10 @@ fn check_statement(
         }
         ASTNode::StructDefinition { .. } => Ok(()),
         ASTNode::EnumDefinition { .. } => Ok(()),
-        ASTNode::Import { .. } | ASTNode::CImport { .. } | ASTNode::Public(_) => Ok(()),
+        ASTNode::Import { .. }
+        | ASTNode::CImport { .. }
+        | ASTNode::CDefine { .. }
+        | ASTNode::Public(_) => Ok(()),
         ASTNode::IfLet {
             variant,
             binding,

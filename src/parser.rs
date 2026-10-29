@@ -217,6 +217,10 @@ pub(crate) enum ASTNode {
         alias: String,
         path: String,
     },
+    CDefine {
+        name: String,
+        value: String,
+    },
     Public(Box<ASTNode>),
 }
 
@@ -585,7 +589,10 @@ where
                         Some(Token::Identifier(kind)) if kind == "cimport" => {
                             parse_c_import(name, tokens)
                         }
-                        _ => panic!("expected @import or @cimport after '::'"),
+                        Some(Token::Identifier(kind)) if kind == "cDefine" => {
+                            parse_c_define(name, tokens)
+                        }
+                        _ => panic!("expected @import, @cimport, or @cDefine after '::'"),
                     };
                 }
                 (2, None)
@@ -697,6 +704,30 @@ where
         "expected ')' after header path"
     );
     ASTNode::CImport { alias, path }
+}
+
+fn parse_c_define<I>(_alias: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    assert!(matches!(tokens.next(), Some(Token::At)));
+    assert!(matches!(tokens.next(), Some(Token::Identifier(name)) if name == "cDefine"));
+    assert!(matches!(tokens.next(), Some(Token::LeftParen)));
+    let name = match tokens.next() {
+        Some(Token::LiteralString(value)) => value,
+        _ => panic!("expected macro name in '@cDefine'"),
+    };
+    assert!(
+        matches!(tokens.next(), Some(Token::Comma)),
+        "expected ',' in '@cDefine'"
+    );
+    let value = match tokens.next() {
+        Some(Token::LiteralString(value)) => value,
+        Some(Token::LiteralNumber(value)) => value,
+        _ => panic!("expected macro value in '@cDefine'"),
+    };
+    assert!(matches!(tokens.next(), Some(Token::RightParen)));
+    ASTNode::CDefine { name, value }
 }
 
 fn parse_function<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
