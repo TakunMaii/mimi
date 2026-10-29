@@ -146,6 +146,17 @@ fn parses_compile_time_generic_value_arguments() {
 }
 
 #[test]
+fn parses_c_header_imports() {
+    assert_eq!(
+        parse(tokenize("c :: @cimport(\"stdlib.h\")".chars())),
+        vec![ASTNode::CImport {
+            alias: "c".into(),
+            path: "stdlib.h".into(),
+        }]
+    );
+}
+
+#[test]
 fn parses_unary_negation() {
     assert_eq!(
         parse(tokenize("x := -value".chars())),

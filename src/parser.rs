@@ -213,6 +213,10 @@ pub(crate) enum ASTNode {
         alias: String,
         path: String,
     },
+    CImport {
+        alias: String,
+        path: String,
+    },
     Public(Box<ASTNode>),
 }
 
@@ -572,7 +576,17 @@ where
                     return parse_function(name, tokens);
                 }
                 if matches!(tokens.peek(), Some(Token::At)) {
-                    return parse_import(name, tokens);
+                    let mut lookahead = tokens.clone();
+                    lookahead.next();
+                    return match lookahead.next() {
+                        Some(Token::Identifier(kind)) if kind == "import" => {
+                            parse_import(name, tokens)
+                        }
+                        Some(Token::Identifier(kind)) if kind == "cimport" => {
+                            parse_c_import(name, tokens)
+                        }
+                        _ => panic!("expected @import or @cimport after '::'"),
+                    };
                 }
                 (2, None)
             }
@@ -659,6 +673,30 @@ where
         "expected ')' after import path"
     );
     ASTNode::Import { alias, path }
+}
+
+fn parse_c_import<I>(alias: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    assert!(matches!(tokens.next(), Some(Token::At)));
+    assert!(
+        matches!(tokens.next(), Some(Token::Identifier(name)) if name == "cimport"),
+        "expected '@cimport'"
+    );
+    assert!(
+        matches!(tokens.next(), Some(Token::LeftParen)),
+        "expected '(' after '@cimport'"
+    );
+    let path = match tokens.next() {
+        Some(Token::LiteralString(path)) => path,
+        _ => panic!("expected header path in '@cimport'"),
+    };
+    assert!(
+        matches!(tokens.next(), Some(Token::RightParen)),
+        "expected ')' after header path"
+    );
+    ASTNode::CImport { alias, path }
 }
 
 fn parse_function<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode

@@ -938,7 +938,10 @@ fn generic_applications(
                     }
                 }
                 ASTNode::Public(inner) => visit_nodes(std::slice::from_ref(inner), output),
-                ASTNode::Break | ASTNode::Continue | ASTNode::Import { .. } => {}
+                ASTNode::Break
+                | ASTNode::Continue
+                | ASTNode::Import { .. }
+                | ASTNode::CImport { .. } => {}
             }
         }
     }
@@ -1133,7 +1136,8 @@ fn collect_free_names(
             | ASTNode::Continue
             | ASTNode::StructDefinition { .. }
             | ASTNode::EnumDefinition { .. }
-            | ASTNode::Import { .. } => {}
+            | ASTNode::Import { .. }
+            | ASTNode::CImport { .. } => {}
             ASTNode::If {
                 condition,
                 then_branch,
@@ -1481,7 +1485,8 @@ fn lift_lambdas_in_node(
         | ASTNode::ExternalFunction { .. }
         | ASTNode::StructDefinition { .. }
         | ASTNode::EnumDefinition { .. }
-        | ASTNode::Import { .. } => {}
+        | ASTNode::Import { .. }
+        | ASTNode::CImport { .. } => {}
     }
 }
 

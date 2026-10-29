@@ -1139,6 +1139,34 @@ pub(crate) fn check_with_import_paths(
             }
         }
     }
+    for node in nodes {
+        if let ASTNode::ExternalFunction {
+            name,
+            parameters,
+            return_type,
+            ..
+        } = node
+            && name.contains('.')
+        {
+            scopes[0].insert(
+                name.clone(),
+                Symbol {
+                    data_type: DataType::Function(
+                        Box::leak(
+                            parameters
+                                .iter()
+                                .map(|(_, data_type)| *data_type)
+                                .collect::<Vec<_>>()
+                                .into_boxed_slice(),
+                        ),
+                        Box::leak(Box::new(*return_type)),
+                    ),
+                    mutable: false,
+                },
+            );
+        }
+    }
+
     let imported_symbols = scopes[0]
         .iter()
         .filter(|(name, _)| name.contains('.'))
@@ -1556,7 +1584,7 @@ fn check_statement(
         }
         ASTNode::StructDefinition { .. } => Ok(()),
         ASTNode::EnumDefinition { .. } => Ok(()),
-        ASTNode::Import { .. } | ASTNode::Public(_) => Ok(()),
+        ASTNode::Import { .. } | ASTNode::CImport { .. } | ASTNode::Public(_) => Ok(()),
         ASTNode::IfLet {
             variant,
             binding,

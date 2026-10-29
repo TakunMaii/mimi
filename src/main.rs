@@ -1,3 +1,4 @@
+mod c_import;
 mod codegen;
 mod codegen_x86_64;
 mod float8;
@@ -118,6 +119,7 @@ fn build_file_for_target(
         import_paths.push(parent.to_path_buf());
     }
     let ast = parser::parse(lexer::tokenize(source.chars()));
+    let ast = c_import::expand(&ast, target, &import_paths, &[])?;
     type_checker::check_with_import_paths(&ast, &import_paths).map_err(|errors| {
         errors
             .into_iter()
@@ -485,7 +487,7 @@ fn qualify_imported_node(
             **declaration =
                 qualify_imported_node((**declaration).clone(), package, local_type_names);
         }
-        ASTNode::Break | ASTNode::Continue | ASTNode::Import { .. } => {}
+        ASTNode::Break | ASTNode::Continue | ASTNode::Import { .. } | ASTNode::CImport { .. } => {}
     }
     node
 }
