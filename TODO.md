@@ -18,7 +18,7 @@ imports while preserving C types, layout, and target ABI rules.
   - [ ] Preserve C enum types and their underlying representation.
 - [x] Preserve C pointer and function-pointer types in imported declarations.
   - [ ] Preserve C qualifiers and calling convention metadata.
-- [ ] Import forward declarations as opaque C types usable through pointers.
+- [x] Import forward declarations as opaque C types usable through pointers.
   - [x] Resolve pointers to complete imported C struct types.
 - [x] Pass string literals as NUL-terminated C `char *` arguments.
   - [ ] Add explicit conversions for mutable buffers and general Mimi slices.

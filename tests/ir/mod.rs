@@ -455,6 +455,47 @@ fn compiles_and_links_c_source_with_mimi_program() {
 }
 
 #[test]
+fn uses_opaque_c_handle_through_pointer_functions() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_c_opaque_handle_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("handle.h");
+    let c_source = directory.join("handle.c");
+    let source = directory.join("main.mi");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "struct Handle; struct Handle *make_handle(void); void destroy_handle(struct Handle *handle);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <stdlib.h>\nstruct Handle { int value; }; struct Handle *make_handle(void) { return malloc(sizeof(struct Handle)); } void destroy_handle(struct Handle *handle) { free(handle); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"handle.h\") main :: fn () i32 { handle := c.make_handle() c.destroy_handle(handle) 0 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn builds_and_runs_lowercase_generic_type_and_enum_if_let() {
     let source = std::env::temp_dir().join(format!(
         "mimi_generic_lower_source_{}.mi",

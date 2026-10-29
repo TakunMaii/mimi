@@ -540,6 +540,36 @@ fn declarations_from_ast(root: &Json, header: &str) -> Result<Vec<ASTNode>, Stri
         return Err("clang AST has no translation unit declarations".into());
     };
     collect_enum_constants(inner, &mut output, &mut seen);
+    let complete_records = inner
+        .iter()
+        .filter(|declaration| {
+            declaration.get("kind").and_then(Json::string) == Some("RecordDecl")
+                && declaration.get("completeDefinition").and_then(Json::bool) == Some(true)
+        })
+        .filter_map(|declaration| declaration.get("name")?.string())
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+    for declaration in inner {
+        if declaration.get("kind").and_then(Json::string) != Some("RecordDecl")
+            || declaration.get("completeDefinition").and_then(Json::bool) == Some(true)
+        {
+            continue;
+        }
+        let Some(record_name) = declaration.get("name").and_then(Json::string) else {
+            continue;
+        };
+        if complete_records.contains(record_name) || !seen.insert(format!("record:{record_name}")) {
+            continue;
+        }
+        let record_name = Box::leak(record_name.to_string().into_boxed_str());
+        alias_types.insert(record_name.to_string(), DataType::Struct(record_name));
+        output.push(ASTNode::StructDefinition {
+            name: record_name,
+            parameters: Vec::new(),
+            fields: Vec::new(),
+            methods: Vec::new(),
+        });
+    }
     for declaration in inner {
         if declaration.get("kind").and_then(Json::string) != Some("RecordDecl")
             || declaration.get("completeDefinition").and_then(Json::bool) != Some(true)
@@ -550,6 +580,7 @@ fn declarations_from_ast(root: &Json, header: &str) -> Result<Vec<ASTNode>, Stri
             continue;
         };
         let record_name = Box::leak(record_name.to_string().into_boxed_str());
+        seen.insert(format!("record:{record_name}"));
         alias_types.insert(record_name.to_string(), DataType::Struct(record_name));
         let Some(fields) = declaration.get("inner").and_then(Json::array) else {
             continue;
@@ -610,9 +641,10 @@ fn declarations_from_ast(root: &Json, header: &str) -> Result<Vec<ASTNode>, Stri
         if !seen.insert(name.to_string()) {
             continue;
         }
-        let Some(children) = declaration.get("inner").and_then(Json::array) else {
-            continue;
-        };
+        let children = declaration
+            .get("inner")
+            .and_then(Json::array)
+            .unwrap_or_default();
         let mut parameters = Vec::new();
         let mut supported = true;
         for (index, child) in children
@@ -882,5 +914,22 @@ mod tests {
             ASTNode::CompileTimeConstant { name, value: Expression::LiteralNumber(value), .. }
                 if name == "third" && value == "8"
         ));
+    }
+
+    #[test]
+    fn imports_forward_declared_records_for_pointer_signatures() {
+        let json = JsonParser::parse(
+            r#"{"inner":[{"kind":"RecordDecl","name":"Opaque","tagUsed":"struct"},{"kind":"FunctionDecl","name":"use_opaque","type":{"qualType":"int (struct Opaque *)"},"inner":[{"kind":"ParmVarDecl","name":"value","type":{"qualType":"struct Opaque *"}}]}]}"#,
+        )
+        .unwrap();
+        let declarations = declarations_from_ast(&json, "opaque.h").unwrap();
+        assert!(declarations.iter().any(|declaration| matches!(declaration,
+            ASTNode::StructDefinition { name, fields, .. } if *name == "Opaque" && fields.is_empty()
+        )));
+        assert!(declarations.iter().any(|declaration| matches!(declaration,
+            ASTNode::ExternalFunction { name, parameters, .. }
+                if name == "use_opaque"
+                    && parameters == &[("value".into(), DataType::Pointer(Box::leak(Box::new(DataType::Struct("Opaque")))))]
+        )));
     }
 }
