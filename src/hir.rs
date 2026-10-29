@@ -102,6 +102,7 @@ pub(crate) struct HirStruct {
     pub(crate) name: String,
     pub(crate) fields: Vec<(String, HirType, Option<Expression>)>,
     pub(crate) methods: Vec<(String, String, bool)>,
+    pub(crate) bound_methods: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -216,6 +217,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
         } = node
         {
             let mut method_symbols = Vec::new();
+            let mut bound_methods = Vec::new();
             for method in methods {
                 let symbol = format!("mimi_{}__{}", name, method.name);
                 let has_receiver = method
@@ -232,6 +234,44 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                     result: method_type(method.return_type, *name),
                     body: method.body.clone(),
                 });
+                if has_receiver {
+                    let bound_symbol = format!("mimi_bound_{}__{}", name, method.name);
+                    let receiver_type = method_type(method.parameters[0].1, *name);
+                    let mut bound_params = method
+                        .parameters
+                        .iter()
+                        .skip(1)
+                        .map(|(parameter, ty)| (parameter.clone(), method_type(*ty, *name)))
+                        .collect::<Vec<_>>();
+                    let receiver_name = (0..)
+                        .map(|index| format!("__mimi_bound_receiver_{index}"))
+                        .find(|candidate| {
+                            method
+                                .parameters
+                                .iter()
+                                .all(|(parameter, _)| parameter != candidate)
+                        })
+                        .expect("generated receiver name must be available");
+                    let mut arguments = vec![Expression::Identifier(receiver_name.clone())];
+                    arguments.extend(
+                        method
+                            .parameters
+                            .iter()
+                            .skip(1)
+                            .map(|(parameter, _)| Expression::Identifier(parameter.clone())),
+                    );
+                    bound_params.push((receiver_name, receiver_type));
+                    module.functions.push(HirFunction {
+                        name: bound_symbol.clone(),
+                        params: bound_params,
+                        result: method_type(method.return_type, *name),
+                        body: Expression::Call {
+                            name: symbol.clone(),
+                            arguments,
+                        },
+                    });
+                    bound_methods.push((method.name.clone(), bound_symbol));
+                }
                 method_symbols.push((method.name.clone(), symbol, has_receiver));
             }
             module.structs.push(HirStruct {
@@ -243,6 +283,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                     })
                     .collect(),
                 methods: method_symbols,
+                bound_methods,
             });
         }
     }

@@ -1674,6 +1674,18 @@ fn builds_x86_64_arrays_slices_pointers_and_loops() {
             "pos :: struct { offset() :: fn (value : i32) i32 { value + 1 } } apply :: fn (function : fn(i32)i32, value : i32) i32 { function(value) } main :: fn () i32 { method := pos::offset apply(pos::offset, 5) + method(5) - 12 }",
             0,
         ),
+        (
+            "apply :: fn (function : fn(i32)i32) i32 { function(3) } pos :: struct { x : i32, add() :: fn (self : Self, value : i32) i32 { self.x + value } } make :: fn () fn(i32)i32 { point := pos { x = 7 } point.add } main :: fn () i32 { method := make() apply(method) - 10 }",
+            0,
+        ),
+        (
+            "pos :: struct { x : f64, add() :: fn (self : Self, value : f64) f64 { self.x + value } } main :: fn () i32 { point := pos { x = 1.5 } method := point.add result := if method(2.0) == 3.5 { 0 } else { 1 } result }",
+            0,
+        ),
+        (
+            "counter :: struct { x : i32, increment() :: fn (self : *Self) i32 { self.x = self.x + 1 self.x } } main :: fn () i32 { value := counter { x = 4 } pointer := &value method := pointer.increment method() + value.x - 10 }",
+            0,
+        ),
     ] {
         std::fs::write(&source, program).unwrap();
         build_file_for_target(
@@ -2116,6 +2128,106 @@ fn builds_and_runs_function_values_forwarded_through_indirect_calls() {
     .unwrap();
     let status = std::process::Command::new(&executable).status().unwrap();
     assert_eq!(status.code(), Some(36));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
+fn builds_and_runs_returned_bound_method_values() {
+    if !cfg!(target_arch = "x86_64")
+        && !(cfg!(target_os = "macos") && cfg!(target_arch = "aarch64"))
+    {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_bound_method_source_{}.mi",
+        std::process::id()
+    ));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_bound_method_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "apply :: fn (function : fn(i32)i32) i32 { function(3) } pos :: struct { x : i32, add() :: fn (self : Self, value : i32) i32 { self.x + value } } make :: fn () fn(i32)i32 { point := pos { x = 7 } point.add } main :: fn () i32 { method := make() apply(method) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(10));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
+fn builds_and_runs_bound_pointer_receiver_values() {
+    if !cfg!(target_arch = "x86_64")
+        && !(cfg!(target_os = "macos") && cfg!(target_arch = "aarch64"))
+    {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_bound_pointer_source_{}.mi",
+        std::process::id()
+    ));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_bound_pointer_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "counter :: struct { x : i32, increment() :: fn (self : *Self) i32 { self.x = self.x + 1 self.x } } main :: fn () i32 { value := counter { x = 4 } pointer := &value method := pointer.increment method() + value.x }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(10));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
+fn builds_and_runs_bound_method_values_stored_in_struct_fields() {
+    if !cfg!(target_arch = "x86_64")
+        && !(cfg!(target_os = "macos") && cfg!(target_arch = "aarch64"))
+    {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_bound_field_source_{}.mi", std::process::id()));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_bound_field_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "pos :: struct { x : i32, add() :: fn (self : Self, value : i32) i32 { self.x + value } } holder :: struct { callback : fn(i32)i32 } main :: fn () i32 { point := pos { x = 7 } stored := holder { callback = point.add } function := stored.callback function(5) + stored.callback(5) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(24));
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(executable).unwrap();
 }

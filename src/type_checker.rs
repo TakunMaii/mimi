@@ -1745,51 +1745,51 @@ fn infer_expression(
                     },
                     _ => return Err(error("method call requires a struct value")),
                 };
-                let method = structs
+                if let Some(method) = structs
                     .get(struct_name)
                     .and_then(|info| info.methods.get(member))
-                    .ok_or_else(|| {
-                        error(format!("unknown method '{member}' in '{struct_name}'"))
-                    })?;
-                let Some(receiver_parameter) = method.parameters.first().copied() else {
-                    return Err(error("method must declare a receiver parameter"));
-                };
-                if arguments.len() == method.parameters.len() {
-                    for (argument, parameter_type) in arguments.iter().zip(method.parameters.iter())
-                    {
-                        infer_expression(
-                            argument,
+                {
+                    let Some(receiver_parameter) = method.parameters.first().copied() else {
+                        return Err(error("method must declare a receiver parameter"));
+                    };
+                    if arguments.len() == method.parameters.len() {
+                        for (argument, parameter_type) in
+                            arguments.iter().zip(method.parameters.iter())
+                        {
+                            infer_expression(
+                                argument,
+                                scopes,
+                                functions,
+                                structs,
+                                Some(*parameter_type),
+                            )?;
+                        }
+                    } else if arguments.len() + 1 == method.parameters.len() {
+                        check_receiver_compatibility(
+                            object_type,
+                            receiver_parameter,
+                            object,
                             scopes,
                             functions,
                             structs,
-                            Some(*parameter_type),
                         )?;
+                        for (argument, parameter_type) in
+                            arguments.iter().zip(method.parameters.iter().skip(1))
+                        {
+                            infer_expression(
+                                argument,
+                                scopes,
+                                functions,
+                                structs,
+                                Some(*parameter_type),
+                            )?;
+                        }
+                    } else {
+                        return Err(error("wrong number of method arguments"));
                     }
-                } else if arguments.len() + 1 == method.parameters.len() {
-                    check_receiver_compatibility(
-                        object_type,
-                        receiver_parameter,
-                        object,
-                        scopes,
-                        functions,
-                        structs,
-                    )?;
-                    for (argument, parameter_type) in
-                        arguments.iter().zip(method.parameters.iter().skip(1))
-                    {
-                        infer_expression(
-                            argument,
-                            scopes,
-                            functions,
-                            structs,
-                            Some(*parameter_type),
-                        )?;
-                    }
-                } else {
-                    return Err(error("wrong number of method arguments"));
+                    require_compatible(method.return_type, expected)?;
+                    return Ok(method.return_type);
                 }
-                require_compatible(method.return_type, expected)?;
-                return Ok(method.return_type);
             }
             let function_type = infer_expression(callee, scopes, functions, structs, None)?;
             let (parameters, return_type) = match function_type {

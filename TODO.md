@@ -65,7 +65,7 @@ and focused regression coverage; it does not imply support on every target.
 - [ ] Capture outer values in lambda closure environments.
 - [x] Lower direct instance and static method calls with automatic or explicit receivers.
 - [x] Support static methods as function values and indirect calls.
-- [ ] Support bound instance methods as function values and indirect calls.
+- [x] Support bound instance methods as function values and indirect calls.
 - [x] Allocate virtual registers with liveness and preserve values live across calls.
 - [x] Pass ARM64 integer arguments beyond x0-x7 on the stack (up to 16 total).
 - [x] Allocate and preserve ARM64 callee-saved registers.

@@ -281,6 +281,7 @@ struct SavedBinding {
 #[derive(Clone)]
 struct MethodTarget {
     symbol: String,
+    bound_symbol: Option<String>,
     parameter_count: usize,
     has_receiver: bool,
 }
@@ -565,6 +566,9 @@ impl Builder {
                 if let Some(data_type @ HirType::Slice(_)) = data_type.as_ref() {
                     return self.load_slice_descriptor(address, data_type);
                 }
+                if let Some(data_type @ HirType::Function { .. }) = data_type.as_ref() {
+                    return self.load_function_descriptor(address, data_type);
+                }
                 let result = self.value();
                 self.emit_load_indirect(result, address, data_type.as_ref());
                 if let Some(data_type) = data_type {
@@ -612,6 +616,9 @@ impl Builder {
                 if let Some(data_type @ HirType::Slice(_)) = data_type.as_ref() {
                     return self.load_slice_descriptor(address, data_type);
                 }
+                if let Some(data_type @ HirType::Function { .. }) = data_type.as_ref() {
+                    return self.load_function_descriptor(address, data_type);
+                }
                 let result = self.value();
                 self.emit_load_indirect(result, address, data_type.as_ref());
                 if let Some(data_type) = data_type {
@@ -657,6 +664,15 @@ impl Builder {
                     }
                 }
                 let struct_name = self.expression_struct_name(object)?;
+                if self.struct_field_offset(&struct_name, member).is_none()
+                    && let Some(target) = self
+                        .method_targets
+                        .get(&(struct_name.clone(), member.clone()))
+                        .cloned()
+                    && target.has_receiver
+                {
+                    return self.lower_bound_method_value(object, &target);
+                }
                 let field_offset = self.struct_field_offset(&struct_name, member)?;
                 let field_type = self
                     .struct_field_types
@@ -672,6 +688,9 @@ impl Builder {
                 }
                 if let HirType::Slice(_) = field_type {
                     return self.load_slice_descriptor(address, &field_type);
+                }
+                if matches!(field_type, HirType::Function { .. }) {
+                    return self.load_function_descriptor(address, &field_type);
                 }
                 let result = self.value();
                 self.emit(MirInstruction::LoadIndirect { result, address });
@@ -1048,6 +1067,16 @@ impl Builder {
                         result_float,
                     });
                     return result;
+                }
+                if let Expression::MemberAccess { object, member } = callee.as_ref()
+                    && let Some(struct_name) = self.expression_struct_name(object)
+                    && let Some(HirType::Function { params, result }) = self
+                        .struct_field_types
+                        .get(&struct_name)
+                        .and_then(|fields| fields.iter().find(|(name, _)| name == member))
+                        .map(|(_, ty)| ty.clone())
+                {
+                    return self.lower_indirect_function_call(callee, arguments, &params, &result);
                 }
                 let (target, receiver) = match callee.as_ref() {
                     Expression::StaticAccess { type_name, member } => (
@@ -1765,6 +1794,48 @@ impl Builder {
         Some((values, float_args))
     }
 
+    fn lower_indirect_function_call(
+        &mut self,
+        callee: &Expression,
+        arguments: &[Expression],
+        parameter_types: &[HirType],
+        return_type: &HirType,
+    ) -> Option<ValueId> {
+        let callee = self.expression(callee)?;
+        let (mut args, mut float_args) =
+            self.lower_function_value_arguments(arguments, parameter_types)?;
+        self.append_function_environment(callee, &mut args);
+        let aggregate_result = self.is_inline_aggregate(return_type);
+        let result = if aggregate_result {
+            Some(self.allocate_inline_temporary(return_type)?)
+        } else {
+            (*return_type != HirType::Void).then(|| self.value())
+        };
+        if aggregate_result {
+            self.prepend_indirect_result(&mut args, &mut float_args, result?);
+        }
+        let result_slice_length =
+            (!aggregate_result && self.is_slice_abi_type(return_type)).then(|| self.value());
+        if let Some(result) = result {
+            self.value_types.insert(result, return_type.clone());
+        }
+        if let (Some(result), Some(environment)) = (result, result_slice_length) {
+            self.slice_value_lengths.insert(result, environment);
+            if matches!(return_type, HirType::Function { .. }) {
+                self.function_value_environments.insert(result, environment);
+            }
+        }
+        self.emit(MirInstruction::CallIndirect {
+            result: if aggregate_result { None } else { result },
+            result_slice_length,
+            callee,
+            args,
+            float_args,
+            result_float: self.float_abi_width(return_type),
+        });
+        result
+    }
+
     fn binary(&mut self, lhs: &Expression, rhs: &Expression, kind: u8) -> Option<ValueId> {
         if matches!(kind, 0 | 1) {
             let lhs_type = self.expression_type(lhs);
@@ -2006,6 +2077,39 @@ impl Builder {
         Some(())
     }
 
+    fn load_function_descriptor(
+        &mut self,
+        address: ValueId,
+        data_type: &HirType,
+    ) -> Option<ValueId> {
+        let result = self.value();
+        self.emit(MirInstruction::LoadIndirect { result, address });
+        let environment_address = self.byte_offset_address(address, self.layout.pointer_bytes());
+        let environment = self.value();
+        self.emit(MirInstruction::LoadIndirect {
+            result: environment,
+            address: environment_address,
+        });
+        self.function_value_environments.insert(result, environment);
+        self.slice_value_lengths.insert(result, environment);
+        self.value_types.insert(result, data_type.clone());
+        Some(result)
+    }
+
+    fn store_function_descriptor(&mut self, address: ValueId, function: ValueId) -> Option<()> {
+        let environment = self.function_value_environments.get(&function).copied()?;
+        self.emit(MirInstruction::StoreIndirect {
+            address,
+            value: function,
+        });
+        let environment_address = self.byte_offset_address(address, self.layout.pointer_bytes());
+        self.emit(MirInstruction::StoreIndirect {
+            address: environment_address,
+            value: environment,
+        });
+        Some(())
+    }
+
     fn expression_type(&self, expression: &Expression) -> Option<HirType> {
         match expression {
             Expression::Identifier(name) => self
@@ -2073,6 +2177,18 @@ impl Builder {
                     }
                 }
                 let struct_name = self.expression_struct_name(object)?;
+                if self.struct_field_offset(&struct_name, member).is_none()
+                    && let Some(bound_symbol) = self
+                        .method_targets
+                        .get(&(struct_name.clone(), member.clone()))
+                        .and_then(|target| target.bound_symbol.as_ref())
+                    && let Some((params, result)) = self.function_signatures.get(bound_symbol)
+                {
+                    return Some(HirType::Function {
+                        params: params[..params.len() - 1].to_vec(),
+                        result: Box::new(result.clone()),
+                    });
+                }
                 self.struct_field_types
                     .get(&struct_name)?
                     .iter()
@@ -2477,12 +2593,21 @@ impl Builder {
                         .cloned()
                 }),
             Expression::MemberAccess { object, member } => {
-                let Expression::Identifier(package) = object.as_ref() else {
-                    return None;
-                };
-                self.function_signatures
-                    .get(&self.resolve_package_member_name(package, member))
-                    .cloned()
+                if let Expression::Identifier(package) = object.as_ref()
+                    && let Some(signature) = self
+                        .function_signatures
+                        .get(&self.resolve_package_member_name(package, member))
+                {
+                    return Some(signature.clone());
+                }
+                let struct_name = self.expression_struct_name(object)?;
+                let bound_symbol = self
+                    .method_targets
+                    .get(&(struct_name, member.clone()))?
+                    .bound_symbol
+                    .as_ref()?;
+                let (params, result) = self.function_signatures.get(bound_symbol)?;
+                Some((params[..params.len() - 1].to_vec(), result.clone()))
             }
             Expression::StaticAccess { type_name, member } => {
                 let target = self
@@ -3137,6 +3262,68 @@ impl Builder {
         args.push(environment);
     }
 
+    fn lower_bound_method_value(
+        &mut self,
+        object: &Expression,
+        target: &MethodTarget,
+    ) -> Option<ValueId> {
+        let symbol = target.bound_symbol.as_ref()?;
+        let receiver_type = self
+            .function_signatures
+            .get(&target.symbol)?
+            .0
+            .first()?
+            .clone();
+        let object_type = self.expression_type(object)?;
+        let environment = match &receiver_type {
+            HirType::Named(_) => {
+                let source = self.expression(object)?;
+                let layout = self.type_layouts.layout(&receiver_type)?;
+                let size = self.value();
+                self.emit(MirInstruction::ConstInt {
+                    result: size,
+                    value: layout.size_bytes as i128,
+                });
+                let environment = self.value();
+                self.emit(MirInstruction::Call {
+                    result: Some(environment),
+                    result_slice_length: None,
+                    name: "malloc".to_string(),
+                    args: vec![size],
+                    float_args: vec![],
+                    result_float: None,
+                });
+                self.copy_inline_value_to_address(&receiver_type, source, environment)?;
+                environment
+            }
+            HirType::Pointer(_) => {
+                if matches!(object_type, HirType::Pointer(_)) {
+                    self.expression(object)?
+                } else {
+                    self.expression(&Expression::AddressOf(Box::new(object.clone())))?
+                }
+            }
+            _ => return None,
+        };
+        let result = self.value();
+        self.emit(MirInstruction::LoadFunctionAddress {
+            result,
+            symbol: format!("_{symbol}"),
+            external: false,
+        });
+        let (params, return_type) = self.function_signatures.get(symbol)?;
+        self.value_types.insert(
+            result,
+            HirType::Function {
+                params: params[..params.len() - 1].to_vec(),
+                result: Box::new(return_type.clone()),
+            },
+        );
+        self.function_value_environments.insert(result, environment);
+        self.slice_value_lengths.insert(result, environment);
+        Some(result)
+    }
+
     fn copy_return_value(&mut self, value: Option<ValueId>) -> Option<Option<ValueId>> {
         if self.is_inline_aggregate(&self.return_type) {
             let source = value?;
@@ -3238,6 +3425,10 @@ impl Builder {
                 let value = self.expression_expected(expression, data_type)?;
                 self.store_slice_descriptor(destination, value)
             }
+            HirType::Function { .. } => {
+                let value = self.expression_expected(expression, data_type)?;
+                self.store_function_descriptor(destination, value)
+            }
             HirType::Named(name) if self.struct_fields.contains_key(name) => {
                 if let Expression::StructLiteral { fields, .. } = expression {
                     self.lower_struct_fields_into_address(name, fields, destination)
@@ -3312,6 +3503,7 @@ impl Builder {
                 Some(())
             }
             HirType::Slice(_) => self.store_slice_descriptor(destination, source),
+            HirType::Function { .. } => self.copy_words_to_address(source, destination, 2),
             _ => {
                 let value = self.value();
                 self.emit_load_indirect(value, source, Some(data_type));
@@ -3718,6 +3910,11 @@ pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout
                         (structure.name.clone(), method.clone()),
                         MethodTarget {
                             symbol: symbol.clone(),
+                            bound_symbol: structure
+                                .bound_methods
+                                .iter()
+                                .find(|(name, _)| name == method)
+                                .map(|(_, symbol)| symbol.clone()),
                             parameter_count,
                             has_receiver: *has_receiver,
                         },
