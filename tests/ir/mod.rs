@@ -300,6 +300,35 @@ fn imports_and_calls_libc_abs_from_standard_header() {
 }
 
 #[test]
+fn passes_string_literal_as_c_char_pointer() {
+    let source = std::env::temp_dir().join(format!(
+        "mimi_cimport_puts_source_{}.mi",
+        std::process::id()
+    ));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_cimport_puts_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"stdlib.h\") main :: fn () i32 { c.atoi(\"42\") }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(42));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
 fn imports_libc_enum_constants() {
     let source = std::env::temp_dir().join(format!(
         "mimi_cimport_libc_constant_source_{}.mi",
@@ -2711,7 +2740,7 @@ fn lowers_string_literals_to_data_symbols_in_lir() {
     let lir = lir::lower_mir(&mir, &lir::HostTarget);
     assert_eq!(
         lir.strings,
-        vec![("_mimi_string_0".into(), b"hello".to_vec())]
+        vec![("_mimi_string_0".into(), b"hello\0".to_vec())]
     );
     assert!(matches!(
         lir.functions[0].blocks[0].instructions.as_slice(),

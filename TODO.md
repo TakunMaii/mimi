@@ -20,7 +20,8 @@ imports while preserving C types, layout, and target ABI rules.
   - [ ] Preserve C qualifiers and calling convention metadata.
 - [ ] Import forward declarations as opaque C types usable through pointers.
   - [x] Resolve pointers to complete imported C struct types.
-- [ ] Add explicit conversions for C strings, buffers, and Mimi slices.
+- [x] Pass string literals as NUL-terminated C `char *` arguments.
+  - [ ] Add explicit conversions for mutable buffers and general Mimi slices.
 
 ## C Layout And ABI
 

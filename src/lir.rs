@@ -431,7 +431,9 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                         }
                         MirInstruction::ConstString { result, bytes } => {
                             let symbol = format!("_mimi_string_{}", strings.len());
-                            strings.push((symbol.clone(), bytes.clone()));
+                            let mut c_bytes = bytes.clone();
+                            c_bytes.push(0);
+                            strings.push((symbol.clone(), c_bytes));
                             LirInstruction::LoadAddress {
                                 register: *result,
                                 symbol,

@@ -24,6 +24,9 @@ mimi build main.mi -o main -I/path/to/include -DPLATFORM=1 --sysroot /sdk
 Scalar C functions, scalar typedefs used in prototypes, pointers, function
 pointers, integer enum constants, simple numeric macros, and simple named
 struct fields are imported. Imported function calls use their C linker names.
+String literals passed to imported `char *` parameters are emitted as
+NUL-terminated static byte arrays. Mutable buffers and arbitrary Mimi slices
+still require explicit conversion support.
 
 ## Linking Libraries And C Sources
 
