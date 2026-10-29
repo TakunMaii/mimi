@@ -48,7 +48,7 @@ impl TypeLayouts {
         Some(match data_type {
             HirType::Void => AbiClass::Void,
             HirType::Float { bits } => AbiClass::Float(*bits),
-            HirType::Slice(_) => AbiClass::SlicePair,
+            HirType::Slice(_) | HirType::Function { .. } => AbiClass::SlicePair,
             ty if self.is_aggregate_type(ty) => AbiClass::IndirectAggregate {
                 slots: self.aggregate_slot_count(data_type)?,
             },
@@ -145,7 +145,11 @@ impl TypeLayouts {
                 size_bytes: 0,
                 align_bytes: 1,
             }),
-            HirType::Pointer(_) | HirType::Function { .. } => Some(TypeLayout {
+            HirType::Function { .. } => Some(TypeLayout {
+                size_bytes: self.target.pointer_bytes().checked_mul(2)?,
+                align_bytes: self.target.pointer_bytes(),
+            }),
+            HirType::Pointer(_) => Some(TypeLayout {
                 size_bytes: self.target.pointer_bytes(),
                 align_bytes: self.target.pointer_bytes(),
             }),

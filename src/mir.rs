@@ -243,6 +243,8 @@ struct Builder {
     variable_types: std::collections::HashMap<String, HirType>,
     value_types: std::collections::HashMap<ValueId, HirType>,
     slice_value_lengths: std::collections::HashMap<ValueId, ValueId>,
+    function_value_environments: std::collections::HashMap<ValueId, ValueId>,
+    function_environment_slots: std::collections::HashMap<String, SlotId>,
     expected_type_hint: Option<HirType>,
     return_type: HirType,
     return_pointer: Option<ValueId>,
@@ -407,6 +409,17 @@ impl Builder {
                         });
                         self.slice_value_lengths.insert(result, length);
                     }
+                    if let Some(environment_slot) =
+                        self.function_environment_slots.get(name).copied()
+                    {
+                        let environment = self.value();
+                        self.emit(MirInstruction::LoadSlot {
+                            result: environment,
+                            slot: environment_slot,
+                        });
+                        self.function_value_environments.insert(result, environment);
+                        self.slice_value_lengths.insert(result, environment);
+                    }
                     Some(result)
                 }
                 None => {
@@ -426,6 +439,13 @@ impl Builder {
                             symbol: format!("_{symbol}"),
                             external,
                         });
+                        let environment = self.value();
+                        self.emit(MirInstruction::ConstInt {
+                            result: environment,
+                            value: 0,
+                        });
+                        self.function_value_environments.insert(result, environment);
+                        self.slice_value_lengths.insert(result, environment);
                         Some(result)
                     }
                 }
@@ -626,6 +646,13 @@ impl Builder {
                                 result: Box::new(result_type),
                             },
                         );
+                        let environment = self.value();
+                        self.emit(MirInstruction::ConstInt {
+                            result: environment,
+                            value: 0,
+                        });
+                        self.function_value_environments.insert(result, environment);
+                        self.slice_value_lengths.insert(result, environment);
                         return Some(result);
                     }
                 }
@@ -663,6 +690,13 @@ impl Builder {
                     symbol: format!("_{symbol}"),
                     external: false,
                 });
+                let environment = self.value();
+                self.emit(MirInstruction::ConstInt {
+                    result: environment,
+                    value: 0,
+                });
+                self.function_value_environments.insert(result, environment);
+                self.slice_value_lengths.insert(result, environment);
                 if let Some((parameters, result_type)) =
                     self.function_signature_for_expression(expression)
                 {
@@ -804,6 +838,18 @@ impl Builder {
                     result,
                     incoming: vec![(then_end, then_value), (else_end, else_value)],
                 });
+                if let (Some(then_environment), Some(else_environment)) = (
+                    self.function_value_environments.get(&then_value).copied(),
+                    self.function_value_environments.get(&else_value).copied(),
+                ) {
+                    let environment = self.value();
+                    self.emit(MirInstruction::Phi {
+                        result: environment,
+                        incoming: vec![(then_end, then_environment), (else_end, else_environment)],
+                    });
+                    self.function_value_environments.insert(result, environment);
+                    self.slice_value_lengths.insert(result, environment);
+                }
                 if let (Some(then_length), Some(else_length)) = (
                     self.slice_value_lengths.get(&then_value).copied(),
                     self.slice_value_lengths.get(&else_value).copied(),
@@ -825,6 +871,7 @@ impl Builder {
                     let callee = self.expression(&Expression::Identifier(name.clone()))?;
                     let (mut args, mut float_args) =
                         self.lower_function_value_arguments(arguments, &parameter_types)?;
+                    self.append_function_environment(callee, &mut args);
                     let aggregate_result = self.is_inline_aggregate(&return_type);
                     let result = if aggregate_result {
                         Some(self.allocate_inline_temporary(&return_type)?)
@@ -835,13 +882,16 @@ impl Builder {
                         self.prepend_indirect_result(&mut args, &mut float_args, result?);
                     }
                     let result_slice_length = (!aggregate_result
-                        && matches!(return_type, HirType::Slice(_)))
+                        && self.is_slice_abi_type(&return_type))
                     .then(|| self.value());
                     if let Some(result) = result {
                         self.value_types.insert(result, return_type.clone());
                     }
                     if let (Some(result), Some(length)) = (result, result_slice_length) {
                         self.slice_value_lengths.insert(result, length);
+                        if matches!(return_type, HirType::Function { .. }) {
+                            self.function_value_environments.insert(result, length);
+                        }
                     }
                     let result_float = self.float_abi_width(&return_type);
                     self.emit(MirInstruction::CallIndirect {
@@ -886,13 +936,19 @@ impl Builder {
                 let result_slice_length = (!aggregate_result
                     && return_type
                         .as_ref()
-                        .is_some_and(|ty| matches!(ty, HirType::Slice(_))))
+                        .is_some_and(|ty| self.is_slice_abi_type(ty)))
                 .then(|| self.value());
                 if let (Some(result), Some(return_type)) = (result, return_type.as_ref()) {
                     self.value_types.insert(result, return_type.clone());
                 }
                 if let (Some(result), Some(length)) = (result, result_slice_length) {
                     self.slice_value_lengths.insert(result, length);
+                    if return_type
+                        .as_ref()
+                        .is_some_and(|ty| matches!(ty, HirType::Function { .. }))
+                    {
+                        self.function_value_environments.insert(result, length);
+                    }
                 }
                 let symbol = self.link_function_name(&function_name);
                 self.emit(MirInstruction::Call {
@@ -923,13 +979,16 @@ impl Builder {
                             self.prepend_indirect_result(&mut args, &mut float_args, result?);
                         }
                         let result_slice_length = (!aggregate_result
-                            && matches!(return_type, HirType::Slice(_)))
+                            && self.is_slice_abi_type(&return_type))
                         .then(|| self.value());
                         if let Some(result) = result {
                             self.value_types.insert(result, return_type.clone());
                         }
                         if let (Some(result), Some(length)) = (result, result_slice_length) {
                             self.slice_value_lengths.insert(result, length);
+                            if matches!(return_type, HirType::Function { .. }) {
+                                self.function_value_environments.insert(result, length);
+                            }
                         }
                         let symbol = self.link_function_name(&name);
                         self.emit(MirInstruction::Call {
@@ -957,6 +1016,7 @@ impl Builder {
                     let callee = self.expression(callee)?;
                     let (mut args, mut float_args) =
                         self.lower_function_value_arguments(arguments, &parameter_types)?;
+                    self.append_function_environment(callee, &mut args);
                     let aggregate_result = self.is_inline_aggregate(&return_type);
                     let result = if aggregate_result {
                         Some(self.allocate_inline_temporary(&return_type)?)
@@ -967,13 +1027,16 @@ impl Builder {
                         self.prepend_indirect_result(&mut args, &mut float_args, result?);
                     }
                     let result_slice_length = (!aggregate_result
-                        && matches!(return_type, HirType::Slice(_)))
+                        && self.is_slice_abi_type(&return_type))
                     .then(|| self.value());
                     if let Some(result) = result {
                         self.value_types.insert(result, return_type.clone());
                     }
                     if let (Some(result), Some(length)) = (result, result_slice_length) {
                         self.slice_value_lengths.insert(result, length);
+                        if matches!(return_type, HirType::Function { .. }) {
+                            self.function_value_environments.insert(result, length);
+                        }
                     }
                     let result_float = self.float_abi_width(&return_type);
                     self.emit(MirInstruction::CallIndirect {
@@ -1041,13 +1104,19 @@ impl Builder {
                 let result_slice_length = (!aggregate_result
                     && return_type
                         .as_ref()
-                        .is_some_and(|ty| matches!(ty, HirType::Slice(_))))
+                        .is_some_and(|ty| self.is_slice_abi_type(ty)))
                 .then(|| self.value());
                 if let (Some(result), Some(return_type)) = (result, return_type.as_ref()) {
                     self.value_types.insert(result, return_type.clone());
                 }
                 if let (Some(result), Some(length)) = (result, result_slice_length) {
                     self.slice_value_lengths.insert(result, length);
+                    if return_type
+                        .as_ref()
+                        .is_some_and(|ty| matches!(ty, HirType::Function { .. }))
+                    {
+                        self.function_value_environments.insert(result, length);
+                    }
                 }
                 self.emit(MirInstruction::Call {
                     result: if aggregate_result { None } else { result },
@@ -1156,6 +1225,7 @@ impl Builder {
                 let outer_variable_types = self.variable_types.clone();
                 let outer_array_lengths = self.array_lengths.clone();
                 let outer_slice_lengths = self.slice_lengths.clone();
+                let outer_function_environment_slots = self.function_environment_slots.clone();
                 let outer_slice_scales = self.slice_scales.clone();
                 let outer_pointer_scales = self.pointer_scales.clone();
                 let outer_function_signatures = self.variable_function_signatures.clone();
@@ -1212,7 +1282,13 @@ impl Builder {
                                         ))
                                     }
                                     _ => self.function_signature_for_expression(value),
-                                };
+                                }
+                                .or_else(|| match value_type.as_ref() {
+                                    Some(HirType::Function { params, result }) => {
+                                        Some((params.clone(), result.as_ref().clone()))
+                                    }
+                                    _ => None,
+                                });
                                 let (value, slice_view) = if is_slice {
                                     let view = match value_type.as_ref() {
                                         Some(data_type) => {
@@ -1243,8 +1319,8 @@ impl Builder {
                                 let slot = self.slot();
                                 self.emit(MirInstruction::StoreSlot { slot, value });
                                 self.variables.insert(name.clone(), Variable::Slot(slot));
-                                if let Some(data_type) = value_type {
-                                    self.variable_types.insert(name.clone(), data_type);
+                                if let Some(data_type) = value_type.as_ref() {
+                                    self.variable_types.insert(name.clone(), data_type.clone());
                                 }
                                 if let Some((length, scale)) = slice_view {
                                     let length_slot = self.slot();
@@ -1254,6 +1330,29 @@ impl Builder {
                                     });
                                     self.slice_lengths.insert(name.clone(), length_slot);
                                     self.slice_scales.insert(name.clone(), scale);
+                                } else if value_type
+                                    .as_ref()
+                                    .is_some_and(|ty| matches!(ty, HirType::Function { .. }))
+                                {
+                                    let environment = self
+                                        .function_value_environments
+                                        .get(&value)
+                                        .copied()
+                                        .unwrap_or_else(|| {
+                                            let environment = self.value();
+                                            self.emit(MirInstruction::ConstInt {
+                                                result: environment,
+                                                value: 0,
+                                            });
+                                            environment
+                                        });
+                                    let environment_slot = self.slot();
+                                    self.emit(MirInstruction::StoreSlot {
+                                        slot: environment_slot,
+                                        value: environment,
+                                    });
+                                    self.function_environment_slots
+                                        .insert(name.clone(), environment_slot);
                                 } else {
                                     self.slice_lengths.remove(name);
                                     self.slice_scales.remove(name);
@@ -1320,6 +1419,8 @@ impl Builder {
                                     self.function_signature_for_expression(value);
                                 let expected_type = self.variable_types.get(name).cloned();
                                 let slice_length_slot = self.slice_lengths.get(name).copied();
+                                let function_environment_slot =
+                                    self.function_environment_slots.get(name).copied();
                                 let slice_assignment =
                                     slice_length_slot.is_some() || self.is_slice_value(value);
                                 let (value, slice_view) = if slice_assignment {
@@ -1355,6 +1456,24 @@ impl Builder {
                                         value: length,
                                     });
                                     self.slice_scales.insert(name.clone(), scale);
+                                }
+                                if let Some(environment_slot) = function_environment_slot {
+                                    let environment = self
+                                        .function_value_environments
+                                        .get(&value)
+                                        .copied()
+                                        .unwrap_or_else(|| {
+                                            let environment = self.value();
+                                            self.emit(MirInstruction::ConstInt {
+                                                result: environment,
+                                                value: 0,
+                                            });
+                                            environment
+                                        });
+                                    self.emit(MirInstruction::StoreSlot {
+                                        slot: environment_slot,
+                                        value: environment,
+                                    });
                                 }
                                 if let Some(struct_name) = struct_name {
                                     self.variable_structs.insert(name.clone(), struct_name);
@@ -1502,7 +1621,7 @@ impl Builder {
                                 let value = self.copy_return_value(value)?;
                                 self.run_all_defers();
                                 let slice_length = value.and_then(|value| {
-                                    matches!(&self.return_type, HirType::Slice(_))
+                                    self.is_slice_abi_type(&self.return_type)
                                         .then(|| self.slice_value_lengths.get(&value).copied())
                                         .flatten()
                                 });
@@ -1540,6 +1659,7 @@ impl Builder {
                 self.variable_types = outer_variable_types;
                 self.array_lengths = outer_array_lengths;
                 self.slice_lengths = outer_slice_lengths;
+                self.function_environment_slots = outer_function_environment_slots;
                 self.slice_scales = outer_slice_scales;
                 self.pointer_scales = outer_pointer_scales;
                 self.variable_function_signatures = outer_function_signatures;
@@ -1565,6 +1685,25 @@ impl Builder {
             let parameter_type = parameter_types
                 .as_ref()
                 .and_then(|parameters| parameters.get(index));
+            if parameter_type.is_some_and(|ty| matches!(ty, HirType::Function { .. })) {
+                let data_type = parameter_type.expect("checked function parameter");
+                let value = self.expression_expected(argument, data_type)?;
+                values.push(value);
+                let environment = self
+                    .function_value_environments
+                    .get(&value)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        let environment = self.value();
+                        self.emit(MirInstruction::ConstInt {
+                            result: environment,
+                            value: 0,
+                        });
+                        environment
+                    });
+                values.push(environment);
+                continue;
+            }
             if parameter_type.is_some_and(|ty| self.is_slice_abi_type(ty)) {
                 let (base, length, _) = self.lower_array_view_expected(
                     argument,
@@ -1605,6 +1744,11 @@ impl Builder {
                         self.lower_array_view_expected(argument, parameter_type)?;
                     values.push(base);
                     values.push(length);
+                }
+                HirType::Function { .. } => {
+                    let value = self.expression_expected(argument, parameter_type)?;
+                    values.push(value);
+                    self.append_function_environment(value, &mut values);
                 }
                 _ => {
                     if self.is_inline_aggregate(parameter_type) {
@@ -2977,6 +3121,22 @@ impl Builder {
         }
     }
 
+    fn append_function_environment(&mut self, callee: ValueId, args: &mut Vec<ValueId>) {
+        let environment = self
+            .function_value_environments
+            .get(&callee)
+            .copied()
+            .unwrap_or_else(|| {
+                let environment = self.value();
+                self.emit(MirInstruction::ConstInt {
+                    result: environment,
+                    value: 0,
+                });
+                environment
+            });
+        args.push(environment);
+    }
+
     fn copy_return_value(&mut self, value: Option<ValueId>) -> Option<Option<ValueId>> {
         if self.is_inline_aggregate(&self.return_type) {
             let source = value?;
@@ -3265,6 +3425,8 @@ fn lower_function(
         variable_types: std::collections::HashMap::new(),
         value_types: std::collections::HashMap::new(),
         slice_value_lengths: std::collections::HashMap::new(),
+        function_value_environments: std::collections::HashMap::new(),
+        function_environment_slots: std::collections::HashMap::new(),
         expected_type_hint: None,
         return_type: function.result.clone(),
         return_pointer: None,
@@ -3319,6 +3481,16 @@ fn lower_function(
             builder
                 .variable_function_signatures
                 .insert(name.clone(), (params.clone(), (**result).clone()));
+            let environment = builder.value();
+            abi_params.push(environment);
+            let environment_slot = builder.slot();
+            builder
+                .function_environment_slots
+                .insert(name.clone(), environment_slot);
+            builder.emit(MirInstruction::StoreSlot {
+                slot: environment_slot,
+                value: environment,
+            });
         }
         if let Some(struct_name) = struct_name_from_hir_type(ty, &builder.struct_fields) {
             builder.variable_structs.insert(name.clone(), struct_name);
@@ -3340,7 +3512,8 @@ fn lower_function(
         .expect("aggregate function result must have a hidden return buffer");
     if builder.is_open(builder.current) {
         let slice_length = result.and_then(|value| {
-            matches!(&function.result, HirType::Slice(_))
+            builder
+                .is_slice_abi_type(&function.result)
                 .then(|| builder.slice_value_lengths.get(&value).copied())
                 .flatten()
         });

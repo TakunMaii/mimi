@@ -2053,6 +2053,74 @@ fn builds_and_runs_function_values_and_indirect_calls() {
 }
 
 #[test]
+fn builds_and_runs_returned_function_values() {
+    if !cfg!(target_arch = "x86_64")
+        && !(cfg!(target_os = "macos") && cfg!(target_arch = "aarch64"))
+    {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_returned_function_source_{}.mi",
+        std::process::id()
+    ));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_returned_function_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "square :: fn (value : i32) i32 { value * value } get_square :: fn () fn(i32)i32 { square } main :: fn () i32 { function := get_square() function(7) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(49));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
+fn builds_and_runs_function_values_forwarded_through_indirect_calls() {
+    if !cfg!(target_arch = "x86_64")
+        && !(cfg!(target_os = "macos") && cfg!(target_arch = "aarch64"))
+    {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!(
+        "mimi_forwarded_function_source_{}.mi",
+        std::process::id()
+    ));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_forwarded_function_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "square :: fn (x : i32) i32 { x * x } apply :: fn (function : fn(i32)i32, x : i32) i32 { function(x) } forward :: fn (function : fn(fn(i32)i32,i32)i32, value : fn(i32)i32) i32 { function(value, 6) } main :: fn () i32 { forward(apply, square) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(36));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
 fn builds_and_runs_static_method_values() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;
