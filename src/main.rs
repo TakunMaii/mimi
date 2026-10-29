@@ -28,6 +28,8 @@ fn run_cli() -> Result<(), String> {
             let mut import_paths = Vec::new();
             let mut library_paths = Vec::new();
             let mut libraries = Vec::new();
+            let mut defines = Vec::new();
+            let mut sysroot = None;
             while let Some(argument) = args.next() {
                 if argument == "-o" {
                     output = Some(args.next().ok_or("missing output path after -o")?);
@@ -49,6 +51,18 @@ fn run_cli() -> Result<(), String> {
                     } else {
                         library.to_string()
                     });
+                } else if let Some(define) = argument.strip_prefix("-D") {
+                    defines.push(if define.is_empty() {
+                        args.next().ok_or("missing definition after -D")?
+                    } else {
+                        define.to_string()
+                    });
+                } else if argument == "--sysroot" {
+                    sysroot = Some(std::path::PathBuf::from(
+                        args.next().ok_or("missing path after --sysroot")?,
+                    ));
+                } else if let Some(path) = argument.strip_prefix("--sysroot=") {
+                    sysroot = Some(std::path::PathBuf::from(path));
                 } else if argument == "--target" {
                     target = parse_target(&args.next().ok_or("missing value after --target")?)?;
                 } else if let Some(value) = argument.strip_prefix("--target=") {
@@ -57,17 +71,19 @@ fn run_cli() -> Result<(), String> {
                     input = Some(argument);
                 } else {
                     return Err(
-                        "usage: mimi build <source> -o <output> [--target host|aarch64|x86_64] [-Ipath] [-Lpath] [-lname]".into(),
+                        "usage: mimi build <source> -o <output> [--target host|aarch64|x86_64] [-Ipath] [-Lpath] [-lname] [-Dname[=value]] [--sysroot path]".into(),
                     );
                 }
             }
-            build_file_for_target(
+            build_file_for_target_with_c_options(
                 &input.ok_or("missing source path")?,
                 &output.ok_or("missing output path")?,
                 &import_paths,
                 &library_paths,
                 &libraries,
                 target,
+                &defines,
+                sysroot.as_deref(),
             )
         }
         _ => Err("usage: mimi build <source> -o <output>".into()),
@@ -110,6 +126,28 @@ fn build_file_for_target(
     libraries: &[String],
     target: lir::TargetArch,
 ) -> Result<(), String> {
+    build_file_for_target_with_c_options(
+        input,
+        output,
+        import_paths,
+        library_paths,
+        libraries,
+        target,
+        &[],
+        None,
+    )
+}
+
+fn build_file_for_target_with_c_options(
+    input: &str,
+    output: &str,
+    import_paths: &[std::path::PathBuf],
+    library_paths: &[std::path::PathBuf],
+    libraries: &[String],
+    target: lir::TargetArch,
+    defines: &[String],
+    sysroot: Option<&std::path::Path>,
+) -> Result<(), String> {
     let source = std::fs::read_to_string(input)
         .map_err(|error| format!("cannot read '{input}': {error}"))?;
     let mut import_paths = import_paths.to_vec();
@@ -119,7 +157,7 @@ fn build_file_for_target(
         import_paths.push(parent.to_path_buf());
     }
     let ast = parser::parse(lexer::tokenize(source.chars()));
-    let ast = c_import::expand(&ast, target, &import_paths, &[])?;
+    let ast = c_import::expand(&ast, target, &import_paths, defines, sysroot)?;
     type_checker::check_with_import_paths(&ast, &import_paths).map_err(|errors| {
         errors
             .into_iter()

@@ -328,6 +328,36 @@ fn imports_libc_enum_constants() {
 }
 
 #[test]
+fn imports_numeric_c_macros() {
+    let directory = std::env::temp_dir().join(format!("mimi_cimport_macro_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("config.h");
+    let source = directory.join("main.mi");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "#define MIMI_TEST_VALUE 37\n#define MIMI_TEST_HEX 0x2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"config.h\") main :: fn () i32 { c.MIMI_TEST_VALUE + c.MIMI_TEST_HEX }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(39));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn builds_and_runs_lowercase_generic_type_and_enum_if_let() {
     let source = std::env::temp_dir().join(format!(
         "mimi_generic_lower_source_{}.mi",

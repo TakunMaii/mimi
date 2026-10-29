@@ -9,7 +9,7 @@ imports while preserving C types, layout, and target ABI rules.
   - [x] Pass the selected target triple and include paths to Clang.
   - [x] Import C scalar function prototypes and retain their original link names.
   - [x] Report Clang failures and reject headers without supported prototypes.
-  - [ ] Pass defines and sysroot configuration through the CLI.
+  - [x] Pass defines and sysroot configuration through the CLI.
   - [ ] Cache parsed headers using content, Clang version, target, and flags.
 - [ ] Import typedef names as reusable Mimi types.
   - [x] Resolve scalar typedefs while importing function prototypes.
@@ -32,7 +32,8 @@ imports while preserving C types, layout, and target ABI rules.
 
 ## Advanced C Declarations
 
-- [ ] Import supported macro constants and provide `@cDefine` configuration.
+- [x] Import simple numeric macro constants through Clang's preprocessor output.
+  - [ ] Provide source level `@cDefine` configuration.
 - [ ] Support variadic C functions and default argument promotions.
 - [ ] Support Mimi callbacks passed to C, with explicit lifetime/trampoline rules.
 - [ ] Build and link C source files alongside Mimi modules.

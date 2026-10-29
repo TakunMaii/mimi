@@ -254,6 +254,7 @@ pub(crate) fn expand(
     target: TargetArch,
     include_paths: &[std::path::PathBuf],
     defines: &[String],
+    sysroot: Option<&std::path::Path>,
 ) -> Result<Vec<ASTNode>, String> {
     let mut output = nodes.to_vec();
     let mut imports = Vec::new();
@@ -263,7 +264,7 @@ pub(crate) fn expand(
         }
     }
     for (alias, path) in imports {
-        let declarations = import_header(&path, target, include_paths, defines)?;
+        let declarations = import_header(&path, target, include_paths, defines, sysroot)?;
         output.extend(declarations.into_iter().map(|mut node| {
             match &mut node {
                 ASTNode::ExternalFunction { name, .. }
@@ -283,6 +284,7 @@ fn import_header(
     target: TargetArch,
     include_paths: &[std::path::PathBuf],
     defines: &[String],
+    sysroot: Option<&std::path::Path>,
 ) -> Result<Vec<ASTNode>, String> {
     let mut command = Command::new(std::env::var_os("MIMI_CLANG").unwrap_or("clang".into()));
     command.args(["-Xclang", "-ast-dump=json", "-fsyntax-only", "-x", "c"]);
@@ -290,6 +292,9 @@ fn import_header(
         TargetArch::Aarch64 => "--target=aarch64-apple-darwin",
         TargetArch::X86_64 => "--target=x86_64-apple-darwin",
     });
+    if let Some(sysroot) = sysroot {
+        command.arg("--sysroot").arg(sysroot);
+    }
     command.arg("-include").arg(path);
     for include in include_paths {
         command.arg("-I").arg(include);
@@ -321,7 +326,121 @@ fn import_header(
         ));
     }
     let json = JsonParser::parse(&String::from_utf8_lossy(&result.stdout))?;
-    declarations_from_ast(&json, path)
+    let mut declarations = declarations_from_ast(&json, path)?;
+    declarations.extend(import_numeric_macros(
+        path,
+        target,
+        include_paths,
+        defines,
+        sysroot,
+        &declarations,
+    )?);
+    if declarations.is_empty() {
+        return Err(format!(
+            "@cimport('{path}') found no supported C declarations"
+        ));
+    }
+    Ok(declarations)
+}
+
+fn import_numeric_macros(
+    path: &str,
+    target: TargetArch,
+    include_paths: &[std::path::PathBuf],
+    defines: &[String],
+    sysroot: Option<&std::path::Path>,
+    existing: &[ASTNode],
+) -> Result<Vec<ASTNode>, String> {
+    let mut command = Command::new(std::env::var_os("MIMI_CLANG").unwrap_or("clang".into()));
+    command.args(["-dM", "-E", "-x", "c"]);
+    command.arg(match target {
+        TargetArch::Aarch64 => "--target=aarch64-apple-darwin",
+        TargetArch::X86_64 => "--target=x86_64-apple-darwin",
+    });
+    if let Some(sysroot) = sysroot {
+        command.arg("--sysroot").arg(sysroot);
+    }
+    command.arg("-include").arg(path);
+    for include in include_paths {
+        command.arg("-I").arg(include);
+    }
+    for define in defines {
+        command.arg(format!("-D{define}"));
+    }
+    command.arg("-");
+    command.stdin(std::process::Stdio::piped());
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().map_err(|error| {
+        format!("cannot start clang macro pass for @cimport('{path}'): {error}")
+    })?;
+    use std::io::Write;
+    child
+        .stdin
+        .as_mut()
+        .ok_or("clang stdin unavailable")?
+        .write_all(b"\n")
+        .map_err(|error| format!("cannot provide clang macro input: {error}"))?;
+    let result = child
+        .wait_with_output()
+        .map_err(|error| format!("cannot read clang macro output: {error}"))?;
+    if !result.status.success() {
+        return Err(format!(
+            "clang failed while importing macros from '{path}': {}",
+            String::from_utf8_lossy(&result.stderr).trim()
+        ));
+    }
+    let existing = existing
+        .iter()
+        .filter_map(|node| match node {
+            ASTNode::CompileTimeConstant { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let mut output = Vec::new();
+    for line in String::from_utf8_lossy(&result.stdout).lines() {
+        let Some(rest) = line.strip_prefix("#define ") else {
+            continue;
+        };
+        let mut parts = rest.splitn(2, char::is_whitespace);
+        let Some(name) = parts.next() else {
+            continue;
+        };
+        if name.starts_with('_') || name.contains('(') || existing.contains(name) {
+            continue;
+        }
+        let Some(value) = parts
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let value = value
+            .strip_suffix("U")
+            .or_else(|| value.strip_suffix("L"))
+            .unwrap_or(value);
+        let expression = if let Some(hex) = value
+            .strip_prefix("0x")
+            .or_else(|| value.strip_prefix("0X"))
+        {
+            let Ok(value) = u64::from_str_radix(hex.trim_end_matches(['u', 'U', 'l', 'L']), 16)
+            else {
+                continue;
+            };
+            Expression::LiteralNumber(value.to_string())
+        } else if value.parse::<f64>().is_ok() {
+            Expression::LiteralNumber(value.to_string())
+        } else {
+            continue;
+        };
+        output.push(ASTNode::CompileTimeConstant {
+            name: name.to_string(),
+            data_type: None,
+            value: expression,
+        });
+    }
+    Ok(output)
 }
 
 fn declarations_from_ast(root: &Json, header: &str) -> Result<Vec<ASTNode>, String> {
@@ -417,13 +536,8 @@ fn declarations_from_ast(root: &Json, header: &str) -> Result<Vec<ASTNode>, Stri
             return_type,
         });
     }
-    if output.is_empty() {
-        Err(format!(
-            "@cimport('{header}') found no supported C function prototypes"
-        ))
-    } else {
-        Ok(output)
-    }
+    let _ = header;
+    Ok(output)
 }
 
 fn collect_enum_constants(
