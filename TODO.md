@@ -19,13 +19,15 @@ imports while preserving C types, layout, and target ABI rules.
 - [x] Preserve C pointer and function-pointer types in imported declarations.
   - [ ] Preserve C qualifiers and calling convention metadata.
 - [ ] Import forward declarations as opaque C types usable through pointers.
+  - [x] Resolve pointers to complete imported C struct types.
 - [ ] Add explicit conversions for C strings, buffers, and Mimi slices.
 
 ## C Layout And ABI
 
 - [ ] Add an explicit C type representation that remains distinct from Mimi types.
 - [ ] Query target C record layouts from Clang, including size, alignment, and offsets.
-- [ ] Support C struct/union fields and nested C records.
+- [x] Import simple named C struct fields with scalar and pointer members.
+  - [ ] Support nested records, unions, bitfields, and exact C layout metadata.
 - [ ] Classify C aggregate arguments and returns for each supported target ABI.
 - [ ] Support C global variables and thread-local declarations.
 - [ ] Add cross-target ABI tests for scalar and aggregate C calls.

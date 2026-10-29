@@ -358,6 +358,33 @@ fn imports_numeric_c_macros() {
 }
 
 #[test]
+fn imports_simple_c_struct_layout() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_cimport_struct_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("point.h");
+    let source = directory.join("main.mi");
+    let executable = directory.join("main");
+    std::fs::write(&header, "struct Point { int x; int y; };\n").unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"point.h\") main :: fn () i32 { p := c.Point {x=7, y=5} p.x + p.y }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(12));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn builds_and_runs_lowercase_generic_type_and_enum_if_let() {
     let source = std::env::temp_dir().join(format!(
         "mimi_generic_lower_source_{}.mi",

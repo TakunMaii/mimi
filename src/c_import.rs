@@ -267,8 +267,25 @@ pub(crate) fn expand(
         let declarations = import_header(&path, target, include_paths, defines, sysroot)?;
         output.extend(declarations.into_iter().map(|mut node| {
             match &mut node {
-                ASTNode::ExternalFunction { name, .. }
-                | ASTNode::CompileTimeConstant { name, .. } => {
+                ASTNode::ExternalFunction {
+                    name,
+                    parameters,
+                    return_type,
+                    ..
+                } => {
+                    *name = format!("{alias}.{name}");
+                    for (_, data_type) in parameters {
+                        *data_type = qualify_c_type(*data_type, &alias);
+                    }
+                    *return_type = qualify_c_type(*return_type, &alias);
+                }
+                ASTNode::StructDefinition { name, fields, .. } => {
+                    *name = Box::leak(format!("{alias}.{}", *name).into_boxed_str());
+                    for (_, data_type, _, _) in fields {
+                        *data_type = qualify_c_type(*data_type, &alias);
+                    }
+                }
+                ASTNode::CompileTimeConstant { name, .. } => {
                     *name = format!("{alias}.{name}");
                 }
                 _ => {}
@@ -277,6 +294,28 @@ pub(crate) fn expand(
         }));
     }
     Ok(output)
+}
+
+fn qualify_c_type(data_type: DataType, alias: &str) -> DataType {
+    match data_type {
+        DataType::Struct(name) => {
+            DataType::Struct(Box::leak(format!("{alias}.{name}").into_boxed_str()))
+        }
+        DataType::Pointer(inner) => {
+            DataType::Pointer(Box::leak(Box::new(qualify_c_type(*inner, alias))))
+        }
+        DataType::Function(parameters, result) => DataType::Function(
+            Box::leak(
+                parameters
+                    .iter()
+                    .map(|parameter| qualify_c_type(*parameter, alias))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
+            Box::leak(Box::new(qualify_c_type(*result, alias))),
+        ),
+        other => other,
+    }
 }
 
 fn import_header(
@@ -420,7 +459,12 @@ fn import_numeric_macros(
             .strip_suffix("U")
             .or_else(|| value.strip_suffix("L"))
             .unwrap_or(value);
-        let expression = if let Some(hex) = value
+        let expression = if let Some(negative) = value.strip_prefix('-') {
+            if !negative.chars().all(|character| character.is_ascii_digit()) {
+                continue;
+            }
+            Expression::Negate(Box::new(Expression::LiteralNumber(negative.to_string())))
+        } else if let Some(hex) = value
             .strip_prefix("0x")
             .or_else(|| value.strip_prefix("0X"))
         {
@@ -451,6 +495,49 @@ fn declarations_from_ast(root: &Json, header: &str) -> Result<Vec<ASTNode>, Stri
         return Err("clang AST has no translation unit declarations".into());
     };
     collect_enum_constants(inner, &mut output, &mut seen);
+    for declaration in inner {
+        if declaration.get("kind").and_then(Json::string) != Some("RecordDecl")
+            || declaration.get("completeDefinition").and_then(Json::bool) != Some(true)
+        {
+            continue;
+        }
+        let Some(record_name) = declaration.get("name").and_then(Json::string) else {
+            continue;
+        };
+        let record_name = Box::leak(record_name.to_string().into_boxed_str());
+        alias_types.insert(record_name.to_string(), DataType::Struct(record_name));
+        let Some(fields) = declaration.get("inner").and_then(Json::array) else {
+            continue;
+        };
+        let mut imported_fields = Vec::new();
+        for field in fields {
+            if field.get("kind").and_then(Json::string) != Some("FieldDecl") {
+                continue;
+            }
+            let (Some(field_name), Some(type_name)) = (
+                field.get("name").and_then(Json::string),
+                field
+                    .get("type")
+                    .and_then(|ty| ty.get("qualType"))
+                    .and_then(Json::string),
+            ) else {
+                continue;
+            };
+            let Some(data_type) = c_type(type_name, &alias_types) else {
+                imported_fields.clear();
+                break;
+            };
+            imported_fields.push((field_name.to_string(), data_type, None, true));
+        }
+        if !imported_fields.is_empty() {
+            output.push(ASTNode::StructDefinition {
+                name: record_name,
+                parameters: Vec::new(),
+                fields: imported_fields,
+                methods: Vec::new(),
+            });
+        }
+    }
     for declaration in inner {
         if declaration.get("kind").and_then(Json::string) != Some("TypedefDecl") {
             continue;
@@ -565,16 +652,13 @@ fn collect_enum_constants(
                         .and_then(|inner| find_integer_value(inner))
                         .unwrap_or(next_value);
                     next_value = value.saturating_add(1);
+                    if value < 0 {
+                        continue;
+                    }
                     if !seen.insert(format!("constant:{name}")) {
                         continue;
                     }
-                    let expression = if value < 0 {
-                        Expression::Negate(Box::new(Expression::LiteralNumber(
-                            value.saturating_abs().to_string(),
-                        )))
-                    } else {
-                        Expression::LiteralNumber(value.to_string())
-                    };
+                    let expression = Expression::LiteralNumber(value.to_string());
                     output.push(ASTNode::CompileTimeConstant {
                         name: name.to_string(),
                         data_type: Some(DataType::I32),
@@ -649,6 +733,12 @@ fn c_type(type_name: &str, aliases: &HashMap<String, DataType>) -> Option<DataTy
         .join(" ");
     if let Some(data_type) = aliases.get(&normalized) {
         return Some(*data_type);
+    }
+    if let Some(name) = normalized
+        .strip_prefix("struct ")
+        .or_else(|| normalized.strip_prefix("union "))
+    {
+        return aliases.get(name).copied();
     }
     c_scalar_type(&normalized)
 }
