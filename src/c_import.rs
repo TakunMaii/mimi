@@ -1220,10 +1220,10 @@ fn generate_c_aggregate_thunk(
     for (index, (c_type, (_, data_type))) in parameter_c_types.iter().zip(parameters).enumerate() {
         let argument = format!("mimi_arg_{index}");
         if is_complete_c_aggregate(*data_type, record_layouts) {
-            declarations.push(format!("{c_type} *{argument}"));
+            declarations.push(c_parameter_declaration(&format!("{c_type} *"), &argument));
             arguments.push(format!("*{argument}"));
         } else {
-            declarations.push(format!("{c_type} {argument}"));
+            declarations.push(c_parameter_declaration(c_type, &argument));
             arguments.push(argument);
         }
     }
@@ -1246,6 +1246,14 @@ fn generate_c_aggregate_thunk(
         return_c_type
     };
     format!("#include \"{include}\"\n{wrapper_return} {wrapper}({parameter_list}) {{ {body} }}\n")
+}
+
+fn c_parameter_declaration(c_type: &str, name: &str) -> String {
+    if let Some(pointer) = c_type.find("(*") {
+        format!("{}(*{}{}", &c_type[..pointer], name, &c_type[pointer + 2..])
+    } else {
+        format!("{c_type} {name}")
+    }
 }
 
 fn collect_enum_constants(
@@ -1389,10 +1397,16 @@ fn c_scalar_type(name: &str) -> Option<DataType> {
 
 fn is_supported_c_abi_type(data_type: DataType) -> bool {
     match data_type {
-        DataType::Pointer(inner) => !matches!(
-            *inner,
-            DataType::Function(_, _) | DataType::Array(_, _) | DataType::Slice(_)
-        ),
+        DataType::Pointer(inner) => match *inner {
+            DataType::Function(parameters, result) => {
+                parameters
+                    .iter()
+                    .all(|data_type| is_supported_c_scalar_abi_type(*data_type))
+                    && is_supported_c_scalar_abi_type(*result)
+            }
+            DataType::Array(_, _) | DataType::Slice(_) => false,
+            _ => true,
+        },
         DataType::U8
         | DataType::U16
         | DataType::U32
@@ -1408,6 +1422,25 @@ fn is_supported_c_abi_type(data_type: DataType) -> bool {
         | DataType::Void => true,
         _ => false,
     }
+}
+
+fn is_supported_c_scalar_abi_type(data_type: DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::U8
+            | DataType::U16
+            | DataType::U32
+            | DataType::U64
+            | DataType::I8
+            | DataType::I16
+            | DataType::I32
+            | DataType::I64
+            | DataType::F16
+            | DataType::F32
+            | DataType::F64
+            | DataType::Bool
+            | DataType::Void
+    ) || matches!(data_type, DataType::Pointer(inner) if !matches!(*inner, DataType::Function(_, _) | DataType::Array(_, _) | DataType::Slice(_)))
 }
 
 #[cfg(test)]
@@ -1602,15 +1635,23 @@ mod tests {
     }
 
     #[test]
-    fn skips_signatures_without_a_supported_c_abi() {
+    fn imports_scalar_callbacks_and_skips_unsupported_c_abis() {
         let json = JsonParser::parse(
             r#"{"inner":[{"kind":"FunctionDecl","name":"take_record","type":{"qualType":"void (struct Record)"},"inner":[{"kind":"ParmVarDecl","name":"record","type":{"qualType":"struct Record"}}]},{"kind":"FunctionDecl","name":"take_callback","type":{"qualType":"void (int (*)(int))"},"inner":[{"kind":"ParmVarDecl","name":"callback","type":{"qualType":"int (*)(int)"}}]},{"kind":"FunctionDecl","name":"printf","type":{"qualType":"int (const char *, ...)"},"inner":[{"kind":"ParmVarDecl","name":"format","type":{"qualType":"const char *"}}]}]}"#,
         )
         .unwrap();
-        assert!(
-            declarations_from_ast(&json, "abi.h", &HashMap::new())
-                .unwrap()
-                .is_empty()
-        );
+        let declarations = declarations_from_ast(&json, "abi.h", &HashMap::new()).unwrap();
+        assert!(declarations.iter().any(|declaration| matches!(
+            declaration,
+            ASTNode::ExternalFunction { name, parameters, .. }
+                if name == "take_callback"
+                    && matches!(parameters.as_slice(), [(_, DataType::Pointer(inner))]
+                        if matches!(**inner, DataType::Function(args, result)
+                            if args == &[DataType::I32] && *result == DataType::I32))
+        )));
+        assert!(!declarations.iter().any(|declaration| matches!(
+            declaration,
+            ASTNode::ExternalFunction { name, .. } if name == "take_record" || name == "printf"
+        )));
     }
 }

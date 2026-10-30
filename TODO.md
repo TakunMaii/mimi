@@ -19,7 +19,9 @@ imports while preserving C types, layout, and target ABI rules.
   - [x] Import integer-valued C enum constants.
   - [ ] Preserve C enum types and their underlying representation.
 - [x] Parse ordinary C pointer and function-pointer spellings.
-  - [ ] Pass C function pointers through calls using a C ABI representation.
+- [x] Pass top-level non-capturing Mimi functions as scalar C callbacks.
+  - [ ] Support capturing closures through explicit callback context/trampolines.
+  - [ ] Support callback parameters with aggregate C ABI arguments or returns.
   - [ ] Preserve C qualifiers and calling convention metadata.
 - [x] Import forward declarations as opaque C types usable through pointers.
   - [x] Resolve pointers to complete imported C struct types.

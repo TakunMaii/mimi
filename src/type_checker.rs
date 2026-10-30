@@ -2139,6 +2139,7 @@ fn infer_expression(
                 )));
             }
             for (argument, parameter_type) in arguments.iter().zip(&function.parameters) {
+                ensure_c_callback_argument(argument, *parameter_type, scopes, functions)?;
                 let actual =
                     infer_expression(argument, scopes, functions, structs, Some(*parameter_type))?;
                 require_compatible(actual, Some(*parameter_type))?;
@@ -2297,6 +2298,7 @@ fn infer_expression(
                         )));
                     }
                     for (argument, parameter_type) in arguments.iter().zip(parameters.iter()) {
+                        ensure_c_callback_argument(argument, *parameter_type, scopes, functions)?;
                         infer_expression(
                             argument,
                             scopes,
@@ -2826,10 +2828,46 @@ fn require_compatible(actual: DataType, expected: Option<DataType>) -> Result<()
             && matches!(expected, DataType::Pointer(inner) if *inner == DataType::I8))
         && !matches!((actual, expected), (DataType::Pointer(actual), DataType::Pointer(expected)) if *actual == DataType::U8 && *expected == DataType::I8)
         && !matches!((actual, expected), (DataType::Pointer(_), DataType::Pointer(inner)) if *inner == DataType::Void)
+        && !matches!((normalize_generic_type(actual), normalize_generic_type(expected)), (DataType::Function(actual_params, actual_result), DataType::Pointer(expected_inner)) if matches!(*expected_inner, DataType::Function(expected_params, expected_result) if actual_params == expected_params && *actual_result == *expected_result))
         && !matches!((normalize_generic_type(actual), expected), (DataType::Struct(a), DataType::Enum(b)) | (DataType::Enum(a), DataType::Struct(b)) if a == b)
         && !(actual.is_integer() && expected.is_float())
     {
         return Err(error(format!("expected {expected}, found {actual}")));
+    }
+    Ok(())
+}
+
+fn ensure_c_callback_argument(
+    argument: &Expression,
+    expected: DataType,
+    scopes: &[HashMap<String, Symbol>],
+    functions: &HashMap<String, Function>,
+) -> Result<(), TypeError> {
+    let DataType::Pointer(inner) = expected else {
+        return Ok(());
+    };
+    let DataType::Function(expected_parameters, expected_result) = *inner else {
+        return Ok(());
+    };
+    let Expression::Identifier(name) = argument else {
+        return Err(error(
+            "C callbacks must be top-level non-capturing function names",
+        ));
+    };
+    if lookup(scopes, name).is_some() {
+        return Err(error(
+            "C callbacks must be top-level non-capturing function names",
+        ));
+    }
+    let function = functions
+        .get(name)
+        .ok_or_else(|| error("C callbacks must be top-level non-capturing function names"))?;
+    if function.parameters.as_slice() != expected_parameters
+        || function.return_type != *expected_result
+    {
+        return Err(error(format!(
+            "callback '{name}' has a signature that does not match the C function pointer"
+        )));
     }
     Ok(())
 }

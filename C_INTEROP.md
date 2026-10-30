@@ -34,7 +34,9 @@ and simple named struct and union fields are imported. Named records use Clang's
 target size, alignment, and field offsets. Union literals initialize one member.
 Complete struct and union values can be passed to and returned from C functions
 through small Clang-compiled ABI thunks. Function pointer parameters are still
-skipped.
+imported for scalar signatures. Top-level non-capturing Mimi functions can be
+passed as callbacks; captured closures and callback signatures with aggregate
+arguments or returns are not supported.
 Named C enum tags and typedefs are represented by their fixed integer type when
 Clang reports one, or by the target's default `int` representation otherwise.
 External scalar and pointer globals are available through the package namespace;
@@ -63,7 +65,7 @@ into the output. Use `-I`, `-L`, and `-l` for header and library search paths.
 The importer currently skips declarations it cannot represent. It does not
 provide a general C ABI for bitfields that cross their declared integer storage
 unit, opaque incomplete record field access, thread-local or const
-aggregate C globals, variadic functions, callbacks, arbitrary macros,
+aggregate C globals, variadic functions, captured callbacks, arbitrary macros,
 `long double`, or automatic conversion between Mimi slices and C strings.
 Aggregate thunks currently cover complete struct and union parameters and
 returns. Cross-target ABI runtime verification remains outstanding.
