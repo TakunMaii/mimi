@@ -397,6 +397,14 @@ impl Builder {
 
     fn expression(&mut self, expression: &Expression) -> Option<ValueId> {
         match expression {
+            Expression::Identifier(name) if name == "null" => {
+                let result = self.value();
+                self.emit(MirInstruction::ConstInt { result, value: 0 });
+                if let Some(data_type) = self.expected_type_hint.clone() {
+                    self.value_types.insert(result, data_type);
+                }
+                Some(result)
+            }
             Expression::Identifier(name) => match self.variables.get(name).copied() {
                 Some(Variable::Value(value)) => Some(value),
                 Some(Variable::Slot(slot)) => {
@@ -2393,6 +2401,7 @@ impl Builder {
 
     fn expression_type(&self, expression: &Expression) -> Option<HirType> {
         match expression {
+            Expression::Identifier(name) if name == "null" => self.expected_type_hint.clone(),
             Expression::Identifier(name) => self
                 .variable_types
                 .get(name)

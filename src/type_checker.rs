@@ -1832,6 +1832,11 @@ fn infer_expression(
 ) -> Result<DataType, TypeError> {
     match expression {
         Expression::Identifier(name) => {
+            if name == "null" {
+                return expected
+                    .filter(|data_type| matches!(data_type, DataType::Pointer(_)))
+                    .ok_or_else(|| error("null requires an expected pointer type"));
+            }
             let data_type = if let Some(symbol) = lookup(scopes, name) {
                 symbol.data_type
             } else if let Some(function) = functions.get(name) {

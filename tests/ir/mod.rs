@@ -610,6 +610,43 @@ fn passes_top_level_mimi_functions_as_c_callbacks() {
 }
 
 #[test]
+fn passes_null_pointer_literals_to_c() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_cimport_null_pointer_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("pointer.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("pointer.c");
+    let executable = directory.join("main");
+    std::fs::write(&header, "int is_null(void *value);\n").unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <pointer.h>\nint is_null(void *value) { return value == 0; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"pointer.h\") main :: fn () i32 { if c.is_null(null) == 1 {return 0} else {return 1} 0 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn rejects_c_callbacks_that_capture_local_values() {
     let directory = std::env::temp_dir().join(format!(
         "mimi_cimport_callback_capture_{}",
