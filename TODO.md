@@ -14,7 +14,7 @@ imports while preserving C types, layout, and target ABI rules.
 - [x] Expose scalar C typedef names as reusable Mimi types.
   - [x] Resolve scalar typedefs while importing function prototypes.
   - [x] Expose typedef aliases and target-sized integer widths to Mimi code.
-  - [ ] Expose pointer and record typedef aliases as first class types.
+  - [x] Expose pointer and record typedef aliases as first class types where their pointee types are supported.
   - [x] Import integer-valued C enum constants.
   - [ ] Preserve C enum types and their underlying representation.
 - [x] Parse ordinary C pointer and function-pointer spellings.
@@ -28,9 +28,9 @@ imports while preserving C types, layout, and target ABI rules.
 ## C Layout And ABI
 
 - [ ] Add an explicit C type representation that remains distinct from Mimi types.
-- [ ] Query target C record layouts from Clang, including size, alignment, and offsets.
+- [x] Query target C record layouts from Clang, including size, alignment, and offsets for supported named structs.
 - [x] Import simple named C struct fields with scalar and pointer members.
-  - [ ] Support nested records, unions, bitfields, and exact C layout metadata.
+  - [ ] Support nested records, unions, and bitfields.
 - [ ] Classify C aggregate arguments and returns for each supported target ABI.
 - [ ] Support C global variables and thread-local declarations.
 - [ ] Add cross-target ABI tests for scalar and aggregate C calls.

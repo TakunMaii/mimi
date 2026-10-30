@@ -691,7 +691,7 @@ impl Builder {
                     .1
                     .clone();
                 let base = self.expression(object)?;
-                let address = self.inline_field_address(base, field_offset);
+                let address = self.byte_offset_address(base, field_offset);
                 if self.is_inline_aggregate(&field_type) {
                     return Some(address);
                 }
@@ -702,7 +702,7 @@ impl Builder {
                     return self.load_function_descriptor(address, &field_type);
                 }
                 let result = self.value();
-                self.emit(MirInstruction::LoadIndirect { result, address });
+                self.emit_load_indirect(result, address, Some(&field_type));
                 self.value_types.insert(result, field_type);
                 Some(result)
             }
@@ -1589,12 +1589,12 @@ impl Builder {
                                     .1
                                     .clone();
                                 let base = self.expression(object)?;
-                                let address = self.inline_field_address(base, field_offset);
+                                let address = self.byte_offset_address(base, field_offset);
                                 if self.is_inline_storage_aggregate(&field_type) {
                                     self.lower_inline_value_into(&field_type, value, address)?;
                                 } else {
                                     let value = self.expression_expected(value, &field_type)?;
-                                    self.emit(MirInstruction::StoreIndirect { address, value });
+                                    self.emit_store_indirect(address, value, Some(&field_type));
                                 }
                             }
                             crate::parser::ASTNode::While { condition, body } => {
@@ -3209,9 +3209,9 @@ impl Builder {
             .aggregate_slot_count(&HirType::Named(struct_name.to_string()))
     }
 
-    fn struct_field_offset(&self, struct_name: &str, member: &str) -> Option<u32> {
+    fn struct_field_offset(&self, struct_name: &str, member: &str) -> Option<u64> {
         self.type_layouts
-            .struct_field_offset_slots(struct_name, member)
+            .struct_field_offset_bytes(struct_name, member)
     }
 
     fn is_inline_aggregate(&self, data_type: &HirType) -> bool {
@@ -3672,16 +3672,13 @@ impl Builder {
                 .1
                 .clone();
             let offset = self.struct_field_offset(struct_name, &field_name)?;
-            let target_address = self.inline_field_address(base_address, offset);
+            let target_address = self.byte_offset_address(base_address, offset);
             if self.is_inline_storage_aggregate(&field_type) {
                 self.lower_inline_value_into(&field_type, expression, target_address)?;
             } else {
                 let value = self.expression_expected(expression, &field_type)?;
-                self.value_types.insert(value, field_type);
-                self.emit(MirInstruction::StoreIndirect {
-                    address: target_address,
-                    value,
-                });
+                self.value_types.insert(value, field_type.clone());
+                self.emit_store_indirect(target_address, value, Some(&field_type));
             }
         }
         Some(())
@@ -4063,7 +4060,8 @@ pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout
             )
         })
         .collect::<std::collections::HashMap<_, _>>();
-    let type_layouts = TypeLayouts::new(layout, struct_field_types.clone(), enum_layouts);
+    let type_layouts = TypeLayouts::new(layout, struct_field_types.clone(), enum_layouts)
+        .with_c_records(module.c_record_layouts.clone());
     let function_slice_params = module
         .functions
         .iter()

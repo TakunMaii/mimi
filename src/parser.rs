@@ -225,6 +225,12 @@ pub(crate) enum ASTNode {
         name: String,
         data_type: DataType,
     },
+    CTypeRecordLayout {
+        name: String,
+        size_bytes: u64,
+        align_bytes: u64,
+        field_offsets: Vec<(String, u64)>,
+    },
     Public(Box<ASTNode>),
 }
 

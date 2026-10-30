@@ -1608,6 +1608,7 @@ fn check_statement(
         | ASTNode::CImport { .. }
         | ASTNode::CDefine { .. }
         | ASTNode::CTypeAlias { .. }
+        | ASTNode::CTypeRecordLayout { .. }
         | ASTNode::Public(_) => Ok(()),
         ASTNode::IfLet {
             variant,

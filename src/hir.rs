@@ -109,6 +109,13 @@ pub(crate) struct HirStruct {
     pub(crate) bound_methods: Vec<(String, String)>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HirCRecordLayout {
+    pub(crate) size_bytes: u64,
+    pub(crate) align_bytes: u64,
+    pub(crate) field_offsets: Vec<(String, u64)>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct HirModule {
     pub(crate) functions: Vec<HirFunction>,
@@ -116,10 +123,29 @@ pub(crate) struct HirModule {
     pub(crate) constants: Vec<HirConstant>,
     pub(crate) enums: Vec<HirEnum>,
     pub(crate) structs: Vec<HirStruct>,
+    pub(crate) c_record_layouts: std::collections::HashMap<String, HirCRecordLayout>,
 }
 
 pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
     let mut module = HirModule::default();
+    for node in nodes {
+        if let ASTNode::CTypeRecordLayout {
+            name,
+            size_bytes,
+            align_bytes,
+            field_offsets,
+        } = node
+        {
+            module.c_record_layouts.insert(
+                name.clone(),
+                HirCRecordLayout {
+                    size_bytes: *size_bytes,
+                    align_bytes: *align_bytes,
+                    field_offsets: field_offsets.clone(),
+                },
+            );
+        }
+    }
     let mut constant_types = std::collections::HashMap::new();
     let enum_variants = nodes
         .iter()
@@ -943,7 +969,8 @@ fn generic_applications(
                 | ASTNode::Import { .. }
                 | ASTNode::CImport { .. }
                 | ASTNode::CDefine { .. }
-                | ASTNode::CTypeAlias { .. } => {}
+                | ASTNode::CTypeAlias { .. }
+                | ASTNode::CTypeRecordLayout { .. } => {}
             }
         }
     }
@@ -1141,7 +1168,8 @@ fn collect_free_names(
             | ASTNode::Import { .. }
             | ASTNode::CImport { .. }
             | ASTNode::CDefine { .. }
-            | ASTNode::CTypeAlias { .. } => {}
+            | ASTNode::CTypeAlias { .. }
+            | ASTNode::CTypeRecordLayout { .. } => {}
             ASTNode::If {
                 condition,
                 then_branch,
@@ -1492,7 +1520,8 @@ fn lift_lambdas_in_node(
         | ASTNode::Import { .. }
         | ASTNode::CImport { .. }
         | ASTNode::CDefine { .. }
-        | ASTNode::CTypeAlias { .. } => {}
+        | ASTNode::CTypeAlias { .. }
+        | ASTNode::CTypeRecordLayout { .. } => {}
     }
 }
 

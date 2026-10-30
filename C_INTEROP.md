@@ -28,9 +28,10 @@ config :: @cDefine("PLATFORM", 1)
 c :: @cimport("platform.h")
 ```
 
-Scalar C functions, scalar typedef names (for example `c.size_t`), ordinary pointers,
-integer enum constants, simple numeric macros, and simple named struct fields
-are imported. Imported function calls use their C linker names. Prototypes
+Scalar C functions, scalar and supported pointer/record typedef names (for example
+`c.size_t`), ordinary pointers, integer enum constants, simple numeric macros,
+and simple named struct fields are imported. Named structs use Clang's target
+size, alignment, and field offsets. Imported function calls use their C linker names. Prototypes
 using by-value records or function pointer parameters are skipped because the
 current backends do not implement those C calling conventions.
 String literals passed to imported `char *` parameters are emitted as
@@ -49,8 +50,9 @@ into the output. Use `-I`, `-L`, and `-l` for header and library search paths.
 ## Current Limits
 
 The importer currently skips declarations it cannot represent. It does not
-provide a general C ABI for structs and unions, exact Clang record layouts,
-opaque incomplete record use, C globals, variadic functions, callbacks,
+provide a general C ABI for structs and unions passed by value, nested records,
+unions, bitfields, opaque incomplete record field access, C globals, variadic functions, callbacks,
 arbitrary macros, or automatic conversion between Mimi slices and C strings.
 Simple imported struct field access uses Mimi's current aggregate layout and
-must not be used to pass such structs by value to C functions.
+uses the Clang layout metadata; such structs must not be passed by value to C
+functions until target ABI classification is implemented.

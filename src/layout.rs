@@ -22,6 +22,7 @@ pub(crate) struct TypeLayouts {
     target: TargetDataLayout,
     structs: HashMap<String, Vec<(String, HirType)>>,
     enums: HashMap<String, Vec<Option<HirType>>>,
+    c_records: HashMap<String, crate::hir::HirCRecordLayout>,
 }
 
 impl TypeLayouts {
@@ -34,7 +35,16 @@ impl TypeLayouts {
             target,
             structs,
             enums,
+            c_records: HashMap::new(),
         }
+    }
+
+    pub(crate) fn with_c_records(
+        mut self,
+        records: HashMap<String, crate::hir::HirCRecordLayout>,
+    ) -> Self {
+        self.c_records = records;
+        self
     }
 
     pub(crate) fn layout(&self, data_type: &HirType) -> Option<TypeLayout> {
@@ -79,6 +89,18 @@ impl TypeLayouts {
     }
 
     pub(crate) fn struct_field_offset_slots(&self, name: &str, member: &str) -> Option<u32> {
+        let offset = self.struct_field_offset_bytes(name, member)?;
+        u32::try_from(offset / self.target.stack_slot_bytes()).ok()
+    }
+
+    pub(crate) fn struct_field_offset_bytes(&self, name: &str, member: &str) -> Option<u64> {
+        if let Some(record) = self.c_records.get(name) {
+            return record
+                .field_offsets
+                .iter()
+                .find(|(field, _)| field == member)
+                .map(|(_, offset)| *offset);
+        }
         let fields = self.structs.get(name)?;
         let slot_bytes = self.target.stack_slot_bytes();
         if slot_bytes == 0 {
@@ -87,7 +109,7 @@ impl TypeLayouts {
         let mut offset = 0u64;
         for (field_name, field_type) in fields {
             if field_name == member {
-                return u32::try_from(offset / slot_bytes).ok();
+                return Some(offset);
             }
             let field_size = self.layout(field_type)?.size_bytes;
             offset = offset.checked_add(self.round_to_slot(field_size)?)?;
@@ -171,6 +193,13 @@ impl TypeLayouts {
                 let key = format!("struct:{name}");
                 if !visiting.insert(key.clone()) {
                     return None;
+                }
+                if let Some(record) = self.c_records.get(name) {
+                    visiting.remove(&key);
+                    return Some(TypeLayout {
+                        size_bytes: record.size_bytes,
+                        align_bytes: record.align_bytes,
+                    });
                 }
                 let slot_bytes = self.target.stack_slot_bytes();
                 if slot_bytes == 0 {

@@ -299,6 +299,9 @@ pub(crate) fn expand(
                     *name = format!("{alias}.{name}");
                     *data_type = qualify_c_type(*data_type, &alias);
                 }
+                ASTNode::CTypeRecordLayout { name, .. } => {
+                    *name = format!("{alias}.{name}");
+                }
                 _ => {}
             }
             node
@@ -506,7 +509,9 @@ fn import_header(
         ));
     }
     let json = JsonParser::parse(&String::from_utf8_lossy(&result.stdout))?;
-    let mut declarations = declarations_from_ast(&json, path)?;
+    let record_layouts =
+        import_record_layouts(&clang, path, target, include_paths, defines, sysroot)?;
+    let mut declarations = declarations_from_ast(&json, path, &record_layouts)?;
     declarations.extend(import_numeric_macros(
         path,
         target,
@@ -663,7 +668,133 @@ fn import_numeric_macros(
     Ok(output)
 }
 
-fn declarations_from_ast(root: &Json, header: &str) -> Result<Vec<ASTNode>, String> {
+#[derive(Clone, Debug)]
+struct CRecordLayout {
+    size_bytes: u64,
+    align_bytes: u64,
+    field_offsets: Vec<(String, u64)>,
+}
+
+fn import_record_layouts(
+    clang: &std::ffi::OsStr,
+    path: &str,
+    target: TargetArch,
+    include_paths: &[std::path::PathBuf],
+    defines: &[String],
+    sysroot: Option<&std::path::Path>,
+) -> Result<HashMap<String, CRecordLayout>, String> {
+    let mut command = Command::new(clang);
+    command.args([
+        "-Xclang",
+        "-fdump-record-layouts-complete",
+        "-fsyntax-only",
+        "-x",
+        "c",
+    ]);
+    command.arg(match target {
+        TargetArch::Aarch64 => "--target=aarch64-apple-darwin",
+        TargetArch::X86_64 => "--target=x86_64-apple-darwin",
+    });
+    if let Some(sysroot) = sysroot {
+        command.arg("--sysroot").arg(sysroot);
+    }
+    command.arg("-include").arg(path);
+    for include in include_paths {
+        command.arg("-I").arg(include);
+    }
+    for define in defines {
+        command.arg(format!("-D{define}"));
+    }
+    command.arg("-").stdin(std::process::Stdio::piped());
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().map_err(|error| {
+        format!("cannot start clang layout pass for @cimport('{path}'): {error}")
+    })?;
+    use std::io::Write;
+    child
+        .stdin
+        .as_mut()
+        .ok_or("clang layout stdin unavailable")?
+        .write_all(b"\n")
+        .map_err(|error| format!("cannot provide clang layout input: {error}"))?;
+    let result = child
+        .wait_with_output()
+        .map_err(|error| format!("cannot read clang layout output: {error}"))?;
+    if !result.status.success() {
+        return Err(format!(
+            "clang failed while querying C layouts from '{path}': {}",
+            String::from_utf8_lossy(&result.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    let layouts = parse_record_layouts(&format!("{stdout}\n{stderr}"))?;
+    Ok(layouts)
+}
+
+fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, String> {
+    let mut layouts = HashMap::new();
+    let mut current: Option<(String, Vec<(String, u64)>)> = None;
+    for line in output.lines() {
+        let Some((offset, content)) = line.split_once('|') else {
+            continue;
+        };
+        let raw_content = content;
+        let content = raw_content.trim();
+        if let Some(record) = content
+            .strip_prefix("struct ")
+            .or_else(|| content.strip_prefix("union "))
+        {
+            current = Some((record.trim().to_string(), Vec::new()));
+            continue;
+        }
+        if let Some(metadata) = content.strip_prefix("[sizeof=") {
+            let Some((size, align)) = metadata
+                .strip_suffix(']')
+                .and_then(|metadata| metadata.split_once(", align="))
+            else {
+                continue;
+            };
+            if let (Some((name, fields)), Ok(size_bytes), Ok(align_bytes)) =
+                (current.take(), size.parse::<u64>(), align.parse::<u64>())
+            {
+                layouts.insert(
+                    name,
+                    CRecordLayout {
+                        size_bytes,
+                        align_bytes,
+                        field_offsets: fields,
+                    },
+                );
+            }
+            continue;
+        }
+        let Some((_, fields)) = current.as_mut() else {
+            continue;
+        };
+        let depth = raw_content.bytes().take_while(|byte| *byte == b' ').count();
+        if depth < 2 {
+            continue;
+        }
+        let Some(field_name) = content.split_whitespace().last() else {
+            continue;
+        };
+        if field_name.contains(':') || field_name.starts_with('[') {
+            continue;
+        }
+        if let Ok(offset) = offset.trim().parse::<u64>() {
+            fields.push((field_name.to_string(), offset));
+        }
+    }
+    Ok(layouts)
+}
+
+fn declarations_from_ast(
+    root: &Json,
+    header: &str,
+    record_layouts: &HashMap<String, CRecordLayout>,
+) -> Result<Vec<ASTNode>, String> {
     let mut output = Vec::new();
     let mut seen = HashSet::new();
     let mut alias_types = HashMap::new();
@@ -676,6 +807,7 @@ fn declarations_from_ast(root: &Json, header: &str) -> Result<Vec<ASTNode>, Stri
         .filter(|declaration| {
             declaration.get("kind").and_then(Json::string) == Some("RecordDecl")
                 && declaration.get("completeDefinition").and_then(Json::bool) == Some(true)
+                && declaration.get("tagUsed").and_then(Json::string) == Some("struct")
         })
         .filter_map(|declaration| declaration.get("name")?.string())
         .map(str::to_string)
@@ -683,6 +815,7 @@ fn declarations_from_ast(root: &Json, header: &str) -> Result<Vec<ASTNode>, Stri
     for declaration in inner {
         if declaration.get("kind").and_then(Json::string) != Some("RecordDecl")
             || declaration.get("completeDefinition").and_then(Json::bool) == Some(true)
+            || declaration.get("tagUsed").and_then(Json::string) != Some("struct")
         {
             continue;
         }
@@ -704,6 +837,7 @@ fn declarations_from_ast(root: &Json, header: &str) -> Result<Vec<ASTNode>, Stri
     for declaration in inner {
         if declaration.get("kind").and_then(Json::string) != Some("RecordDecl")
             || declaration.get("completeDefinition").and_then(Json::bool) != Some(true)
+            || declaration.get("tagUsed").and_then(Json::string) != Some("struct")
         {
             continue;
         }
@@ -737,11 +871,26 @@ fn declarations_from_ast(root: &Json, header: &str) -> Result<Vec<ASTNode>, Stri
             imported_fields.push((field_name.to_string(), data_type, None, true));
         }
         if !imported_fields.is_empty() {
+            let Some(layout) = record_layouts.get(record_name) else {
+                continue;
+            };
+            if imported_fields
+                .iter()
+                .any(|(field, _, _, _)| !layout.field_offsets.iter().any(|(name, _)| name == field))
+            {
+                continue;
+            }
             output.push(ASTNode::StructDefinition {
                 name: record_name,
                 parameters: Vec::new(),
                 fields: imported_fields,
                 methods: Vec::new(),
+            });
+            output.push(ASTNode::CTypeRecordLayout {
+                name: record_name.to_string(),
+                size_bytes: layout.size_bytes,
+                align_bytes: layout.align_bytes,
+                field_offsets: layout.field_offsets.clone(),
             });
         }
     }
@@ -1002,7 +1151,7 @@ fn is_supported_c_abi_type(data_type: DataType) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Json, JsonParser, c_type, declarations_from_ast};
+    use super::{Json, JsonParser, c_type, declarations_from_ast, parse_record_layouts};
     use crate::parser::{ASTNode, DataType, Expression};
     use std::collections::HashMap;
 
@@ -1034,12 +1183,27 @@ mod tests {
     }
 
     #[test]
+    fn parses_clang_record_layouts_with_mixed_field_widths() {
+        let layouts = parse_record_layouts(
+            "\n         0 | struct Point\n         0 |   char x\n         4 |   int y\n         8 |   double z\n           | [sizeof=16, align=8]\n",
+        )
+        .unwrap();
+        let point = layouts.get("Point").unwrap();
+        assert_eq!(point.size_bytes, 16);
+        assert_eq!(point.align_bytes, 8);
+        assert_eq!(
+            point.field_offsets,
+            [("x".into(), 0), ("y".into(), 4), ("z".into(), 8)]
+        );
+    }
+
+    #[test]
     fn extracts_only_supported_function_declarations() {
         let json = JsonParser::parse(
             r#"{"inner":[{"kind":"FunctionDecl","name":"abs","mangledName":"_abs","type":{"qualType":"int (int)"},"inner":[{"kind":"ParmVarDecl","name":"value","type":{"qualType":"int"}}]}]}"#,
         )
         .unwrap();
-        let declarations = declarations_from_ast(&json, "stdlib.h").unwrap();
+        let declarations = declarations_from_ast(&json, "stdlib.h", &HashMap::new()).unwrap();
         assert!(declarations.iter().any(|declaration| matches!(declaration,
             ASTNode::ExternalFunction { name, link_name: Some(link), parameters, return_type: DataType::I32 }
                 if name == "abs" && link == "abs" && parameters == &[("value".into(), DataType::I32)]
@@ -1052,7 +1216,7 @@ mod tests {
             r#"{"inner":[{"kind":"EnumDecl","inner":[{"kind":"EnumConstantDecl","name":"first"},{"kind":"EnumConstantDecl","name":"second","inner":[{"kind":"ConstantExpr","value":"7"}]},{"kind":"EnumConstantDecl","name":"third"}]}]}"#,
         )
         .unwrap();
-        let declarations = declarations_from_ast(&json, "test.h").unwrap();
+        let declarations = declarations_from_ast(&json, "test.h", &HashMap::new()).unwrap();
         assert!(matches!(
             &declarations[0],
             ASTNode::CompileTimeConstant { name, data_type: Some(DataType::I32), value: Expression::LiteralNumber(value) }
@@ -1076,7 +1240,7 @@ mod tests {
             r#"{"inner":[{"kind":"RecordDecl","name":"Opaque","tagUsed":"struct"},{"kind":"FunctionDecl","name":"use_opaque","type":{"qualType":"int (struct Opaque *)"},"inner":[{"kind":"ParmVarDecl","name":"value","type":{"qualType":"struct Opaque *"}}]}]}"#,
         )
         .unwrap();
-        let declarations = declarations_from_ast(&json, "opaque.h").unwrap();
+        let declarations = declarations_from_ast(&json, "opaque.h", &HashMap::new()).unwrap();
         assert!(declarations.iter().any(|declaration| matches!(declaration,
             ASTNode::StructDefinition { name, fields, .. } if *name == "Opaque" && fields.is_empty()
         )));
@@ -1093,6 +1257,10 @@ mod tests {
             r#"{"inner":[{"kind":"FunctionDecl","name":"take_record","type":{"qualType":"void (struct Record)"},"inner":[{"kind":"ParmVarDecl","name":"record","type":{"qualType":"struct Record"}}]},{"kind":"FunctionDecl","name":"take_callback","type":{"qualType":"void (int (*)(int))"},"inner":[{"kind":"ParmVarDecl","name":"callback","type":{"qualType":"int (*)(int)"}}]}]}"#,
         )
         .unwrap();
-        assert!(declarations_from_ast(&json, "abi.h").unwrap().is_empty());
+        assert!(
+            declarations_from_ast(&json, "abi.h", &HashMap::new())
+                .unwrap()
+                .is_empty()
+        );
     }
 }
