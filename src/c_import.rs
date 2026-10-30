@@ -295,8 +295,9 @@ pub(crate) fn expand(
                 ASTNode::CompileTimeConstant { name, .. } => {
                     *name = format!("{alias}.{name}");
                 }
-                ASTNode::CTypeAlias { name, .. } => {
+                ASTNode::CTypeAlias { name, data_type } => {
                     *name = format!("{alias}.{name}");
+                    *data_type = qualify_c_type(*data_type, &alias);
                 }
                 _ => {}
             }

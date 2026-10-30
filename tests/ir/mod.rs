@@ -454,6 +454,47 @@ fn uses_imported_scalar_typedef_as_a_source_type() {
 }
 
 #[test]
+fn uses_imported_pointer_typedef_in_function_calls() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_c_pointer_typedef_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("pointer.h");
+    let c_source = directory.join("pointer.c");
+    let source = directory.join("main.mi");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "typedef int *IntPtr; int read_int(IntPtr value);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include \"pointer.h\"\nint read_int(IntPtr value) { return *value; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"pointer.h\") main :: fn () i32 { value := 42 c.read_int(&value) - 42 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn imports_simple_c_struct_layout() {
     let directory =
         std::env::temp_dir().join(format!("mimi_cimport_struct_{}", std::process::id()));
