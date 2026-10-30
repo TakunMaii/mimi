@@ -917,6 +917,45 @@ fn imports_libc_malloc_and_free_void_pointer_signatures() {
 }
 
 #[test]
+fn passes_mutable_mimi_byte_buffers_to_c_char_pointers() {
+    let directory = std::env::temp_dir().join(format!(
+        "mimi_cimport_mutable_buffer_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("buffer.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("buffer.c");
+    let executable = directory.join("main");
+    std::fs::write(&header, "void fill_buffer(char *buffer);\n").unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <buffer.h>\nvoid fill_buffer(char *buffer) { buffer[0] = 'O'; buffer[1] = 'K'; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"buffer.h\") main :: fn () i32 { buffer : [2]u8 = [0, 0] c.fill_buffer(&buffer[0]) if buffer[0] == 79 && buffer[1] == 75 {return 0} else {return 1} 0 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn imports_byte_local_unsigned_c_bitfields() {
     let directory =
         std::env::temp_dir().join(format!("mimi_cimport_bitfield_{}", std::process::id()));

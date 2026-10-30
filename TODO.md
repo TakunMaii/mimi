@@ -24,7 +24,8 @@ imports while preserving C types, layout, and target ABI rules.
 - [x] Import forward declarations as opaque C types usable through pointers.
   - [x] Resolve pointers to complete imported C struct types.
 - [x] Pass string literals as NUL-terminated C `char *` arguments.
-  - [ ] Add explicit conversions for mutable buffers and general Mimi slices.
+- [x] Pass mutable Mimi byte-array buffers through explicit element pointers to C `char *` parameters.
+  - [ ] Add general Mimi slice-to-C pointer/length conversions.
 
 ## C Layout And ABI
 
