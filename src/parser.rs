@@ -573,7 +573,11 @@ where
     I: Iterator<Item = Token> + Clone,
 {
     ASTNode::Defer {
-        body: parse_block_expression(tokens),
+        body: if matches!(tokens.peek(), Some(Token::LeftBrace)) {
+            parse_block_expression(tokens)
+        } else {
+            parse_expression(tokens, 0)
+        },
     }
 }
 

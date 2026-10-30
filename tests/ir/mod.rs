@@ -4237,6 +4237,10 @@ fn builds_and_runs_external_print_with_string_literal() {
             "cba",
         ),
         (
+            r#"extern print : fn(str : []u8)void main :: fn () void { defer print("b") print("a") }"#,
+            "ab",
+        ),
+        (
             r#"extern print : fn(str : []u8)void main :: fn () void { defer { print("b") } print("a") return }"#,
             "ab",
         ),

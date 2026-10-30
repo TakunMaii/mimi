@@ -557,6 +557,26 @@ fn parses_break_and_continue_in_blocks() {
 }
 
 #[test]
+fn parses_defer_expression_and_block_forms() {
+    let nodes = parse(tokenize(
+        "main :: fn () void { defer cleanup() defer { cleanup() } }".chars(),
+    ));
+    assert!(matches!(
+        &nodes[0],
+        ASTNode::FunctionDefinition {
+            body: Expression::Block(items),
+            ..
+        } if matches!(
+            items.as_slice(),
+            [
+                ASTNode::Defer { body: Expression::Call { name, arguments } },
+                ASTNode::Defer { body: Expression::Block(_) },
+            ] if name == "cleanup" && arguments.is_empty()
+        )
+    ));
+}
+
+#[test]
 fn parses_do_while_statements() {
     let nodes = parse(tokenize("do { work := 1 } while done".chars()));
     assert!(matches!(nodes.as_slice(), [ASTNode::DoWhile { .. }]));
