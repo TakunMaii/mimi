@@ -280,6 +280,7 @@ fn parses_external_function_declarations_with_named_parameters() {
                 DataType::Slice(Box::leak(Box::new(DataType::U8))),
             )],
             return_type: DataType::Void,
+            variadic: false,
         }]
     );
 }

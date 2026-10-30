@@ -1119,9 +1119,7 @@ fn declarations_from_ast_with_shims(
         else {
             continue;
         };
-        if type_name.contains("...") {
-            continue;
-        }
+        let variadic = type_name.contains("...");
         let Some(return_name) = function_return_type(type_name) else {
             continue;
         };
@@ -1152,6 +1150,7 @@ fn declarations_from_ast_with_shims(
             link_name: Some(link_name),
             parameters,
             return_type,
+            variadic,
         });
     }
     for declaration in inner {
@@ -1635,7 +1634,7 @@ mod tests {
         .unwrap();
         let declarations = declarations_from_ast(&json, "stdlib.h", &HashMap::new()).unwrap();
         assert!(declarations.iter().any(|declaration| matches!(declaration,
-            ASTNode::ExternalFunction { name, link_name: Some(link), parameters, return_type: DataType::I32 }
+            ASTNode::ExternalFunction { name, link_name: Some(link), parameters, return_type: DataType::I32, .. }
                 if name == "abs" && link == "abs" && parameters == &[("value".into(), DataType::I32)]
         )));
     }
@@ -1728,7 +1727,7 @@ mod tests {
     }
 
     #[test]
-    fn imports_scalar_callbacks_and_skips_unsupported_c_abis() {
+    fn imports_scalar_callbacks_and_variadic_declarations() {
         let json = JsonParser::parse(
             r#"{"inner":[{"kind":"FunctionDecl","name":"take_record","type":{"qualType":"void (struct Record)"},"inner":[{"kind":"ParmVarDecl","name":"record","type":{"qualType":"struct Record"}}]},{"kind":"FunctionDecl","name":"take_callback","type":{"qualType":"void (int (*)(int))"},"inner":[{"kind":"ParmVarDecl","name":"callback","type":{"qualType":"int (*)(int)"}}]},{"kind":"FunctionDecl","name":"printf","type":{"qualType":"int (const char *, ...)"},"inner":[{"kind":"ParmVarDecl","name":"format","type":{"qualType":"const char *"}}]}]}"#,
         )
@@ -1744,7 +1743,11 @@ mod tests {
         )));
         assert!(!declarations.iter().any(|declaration| matches!(
             declaration,
-            ASTNode::ExternalFunction { name, .. } if name == "take_record" || name == "printf"
+            ASTNode::ExternalFunction { name, .. } if name == "take_record"
+        )));
+        assert!(declarations.iter().any(|declaration| matches!(
+            declaration,
+            ASTNode::ExternalFunction { name, variadic: true, .. } if name == "printf"
         )));
     }
 }

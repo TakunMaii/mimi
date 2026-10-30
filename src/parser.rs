@@ -163,6 +163,7 @@ pub(crate) enum ASTNode {
         link_name: Option<String>,
         parameters: Vec<(String, DataType)>,
         return_type: DataType,
+        variadic: bool,
     },
     ExternalGlobal {
         name: String,
@@ -347,6 +348,7 @@ where
         link_name: None,
         parameters,
         return_type,
+        variadic: false,
     }
 }
 

@@ -21,6 +21,7 @@ struct Symbol {
 struct Function {
     parameters: Vec<DataType>,
     return_type: DataType,
+    variadic: bool,
 }
 
 struct StructInfo {
@@ -611,6 +612,7 @@ fn imported_exports_inner(
                                     Function {
                                         parameters,
                                         return_type,
+                                        variadic: false,
                                     },
                                 )
                             })
@@ -1299,6 +1301,7 @@ pub(crate) fn check_with_import_paths(
                                             .map(|(_, ty)| resolve_self(*ty, *name))
                                             .collect(),
                                         return_type: resolve_self(method.return_type, *name),
+                                        variadic: false,
                                     },
                                 )
                             })
@@ -1323,6 +1326,7 @@ pub(crate) fn check_with_import_paths(
                     Function {
                         parameters: parameters.iter().map(|(_, ty)| *ty).collect(),
                         return_type: *return_type,
+                        variadic: false,
                     },
                 )
                 .is_some()
@@ -1334,6 +1338,7 @@ pub(crate) fn check_with_import_paths(
             name,
             parameters,
             return_type,
+            variadic,
             ..
         } = node
         {
@@ -1348,6 +1353,7 @@ pub(crate) fn check_with_import_paths(
                     Function {
                         parameters: parameters.iter().map(|(_, ty)| *ty).collect(),
                         return_type: *return_type,
+                        variadic: *variadic,
                     },
                 )
                 .is_some()
@@ -2136,18 +2142,30 @@ fn infer_expression(
             let function = functions
                 .get(name)
                 .ok_or_else(|| error(format!("call to undefined function '{name}'")))?;
-            if arguments.len() != function.parameters.len() {
+            if (!function.variadic && arguments.len() != function.parameters.len())
+                || (function.variadic && arguments.len() < function.parameters.len())
+            {
                 return Err(error(format!(
                     "function '{name}' expects {} arguments, got {}",
                     function.parameters.len(),
                     arguments.len()
                 )));
             }
-            for (argument, parameter_type) in arguments.iter().zip(&function.parameters) {
-                ensure_c_callback_argument(argument, *parameter_type, scopes, functions)?;
-                let actual =
-                    infer_expression(argument, scopes, functions, structs, Some(*parameter_type))?;
-                require_compatible(actual, Some(*parameter_type))?;
+            for (index, argument) in arguments.iter().enumerate() {
+                let parameter_type = function.parameters.get(index).copied();
+                if let Some(parameter_type) = parameter_type {
+                    ensure_c_callback_argument(argument, parameter_type, scopes, functions)?;
+                    let actual = infer_expression(
+                        argument,
+                        scopes,
+                        functions,
+                        structs,
+                        Some(parameter_type),
+                    )?;
+                    require_compatible(actual, Some(parameter_type))?;
+                } else {
+                    infer_expression(argument, scopes, functions, structs, None)?;
+                }
             }
             require_compatible(function.return_type, expected)?;
             Ok(function.return_type)
@@ -2292,6 +2310,36 @@ fn infer_expression(
                 && let Expression::Identifier(package) = object.as_ref()
             {
                 let qualified = format!("{package}.{member}");
+                if let Some(function) = functions.get(&qualified) {
+                    if (!function.variadic && arguments.len() != function.parameters.len())
+                        || (function.variadic && arguments.len() < function.parameters.len())
+                    {
+                        return Err(error(format!(
+                            "wrong number of arguments for '{qualified}'"
+                        )));
+                    }
+                    for (index, argument) in arguments.iter().enumerate() {
+                        if let Some(parameter_type) = function.parameters.get(index) {
+                            ensure_c_callback_argument(
+                                argument,
+                                *parameter_type,
+                                scopes,
+                                functions,
+                            )?;
+                            infer_expression(
+                                argument,
+                                scopes,
+                                functions,
+                                structs,
+                                Some(*parameter_type),
+                            )?;
+                        } else {
+                            infer_expression(argument, scopes, functions, structs, None)?;
+                        }
+                    }
+                    require_compatible(function.return_type, expected)?;
+                    return Ok(function.return_type);
+                }
                 if let Some(Symbol {
                     data_type: DataType::Function(parameters, return_type),
                     ..

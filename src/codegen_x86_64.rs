@@ -452,6 +452,10 @@ fn emit_call(
         load_value(assembly, function, args[*argument], "rax")?;
         load_float_abi_bits_to_xmm(assembly, "rax", index, *width)?;
     }
+    // SysV x86_64 variadic calls require the number of XMM arguments in %al.
+    // Setting it for ordinary calls is harmless and keeps the call instruction
+    // independent from declaration metadata at this stage.
+    assembly.push_str(&format!("    mov al, {}\n", float_args.len()));
     if let Some(name) = direct_name {
         assembly.push_str(&format!("    call {name}\n"));
     } else {

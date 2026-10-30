@@ -236,6 +236,7 @@ struct Builder {
     function_slice_params: std::collections::HashMap<String, Vec<bool>>,
     method_targets: std::collections::HashMap<(String, String), MethodTarget>,
     function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
+    variadic_functions: std::collections::HashSet<String>,
     external_symbols: std::collections::HashMap<String, String>,
     external_globals: std::collections::HashMap<String, crate::hir::HirExternalGlobal>,
     global_constants: std::collections::HashMap<String, crate::hir::HirConstant>,
@@ -1801,6 +1802,7 @@ impl Builder {
             .function_signatures
             .get(name)
             .map(|(parameters, _)| parameters.clone());
+        let variadic = self.variadic_functions.contains(name);
         let mut values = Vec::new();
         let mut float_args = Vec::new();
         for (index, argument) in arguments.iter().enumerate() {
@@ -1843,6 +1845,14 @@ impl Builder {
             };
             if let Some(width) = parameter_type.and_then(|ty| self.float_abi_width(ty)) {
                 float_args.push((values.len(), width));
+            } else if variadic && parameter_type.is_none() {
+                if let Some(data_type) = self.expression_type(argument) {
+                    if matches!(data_type, HirType::Float { bits: 64 }) {
+                        float_args.push((values.len(), 64));
+                    } else if matches!(data_type, HirType::Float { bits: 32 }) {
+                        return None;
+                    }
+                }
             }
             values.push(value);
         }
@@ -4063,6 +4073,7 @@ fn lower_function(
     function_slice_params: &std::collections::HashMap<String, Vec<bool>>,
     method_targets: &std::collections::HashMap<(String, String), MethodTarget>,
     function_signatures: &std::collections::HashMap<String, (Vec<HirType>, HirType)>,
+    variadic_functions: &std::collections::HashSet<String>,
     external_symbols: &std::collections::HashMap<String, String>,
     external_globals: &std::collections::HashMap<String, crate::hir::HirExternalGlobal>,
     global_constants: &std::collections::HashMap<String, crate::hir::HirConstant>,
@@ -4091,6 +4102,7 @@ fn lower_function(
         function_slice_params: function_slice_params.clone(),
         method_targets: method_targets.clone(),
         function_signatures: function_signatures.clone(),
+        variadic_functions: variadic_functions.clone(),
         external_symbols: external_symbols.clone(),
         external_globals: external_globals.clone(),
         global_constants: global_constants.clone(),
@@ -4496,6 +4508,12 @@ pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout
             )
         }))
         .collect::<std::collections::HashMap<_, _>>();
+    let variadic_functions = module
+        .extern_functions
+        .iter()
+        .filter(|function| function.variadic)
+        .map(|function| function.name.clone())
+        .collect::<std::collections::HashSet<_>>();
     let external_symbols = module
         .extern_functions
         .iter()
@@ -4534,6 +4552,7 @@ pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout
             &function_slice_params,
             &method_targets,
             &function_signatures,
+            &variadic_functions,
             &external_symbols,
             &external_globals,
             &global_constants,

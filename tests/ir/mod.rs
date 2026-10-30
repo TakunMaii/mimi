@@ -130,6 +130,33 @@ fn builds_and_runs_capture_free_lambdas() {
 }
 
 #[test]
+fn imports_and_calls_c_variadic_printf() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_variadic_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_variadic_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"stdio.h\") main :: fn () i32 { c.printf(\"%d %f\\n\", 7, 1.5) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(20));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_lambdas_that_capture_outer_values() {
     let source =
         std::env::temp_dir().join(format!("mimi_capture_source_{}.mi", std::process::id()));

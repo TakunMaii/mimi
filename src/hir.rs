@@ -86,6 +86,7 @@ pub(crate) struct HirExternalFunction {
     pub(crate) link_name: String,
     pub(crate) params: Vec<HirType>,
     pub(crate) result: HirType,
+    pub(crate) variadic: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -211,6 +212,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
             link_name,
             parameters,
             return_type,
+            variadic,
         } = node
         {
             module.extern_functions.push(HirExternalFunction {
@@ -218,6 +220,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                 link_name: link_name.clone().unwrap_or_else(|| name.clone()),
                 params: parameters.iter().map(|(_, ty)| (*ty).into()).collect(),
                 result: (*return_type).into(),
+                variadic: *variadic,
             });
         }
         if let ASTNode::ExternalGlobal {
