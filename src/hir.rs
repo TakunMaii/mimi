@@ -972,6 +972,7 @@ fn generic_applications(
                     }
                     visit_expr(value, output);
                 }
+                ASTNode::TupleDestructuring { value, .. } => visit_expr(value, output),
                 ASTNode::Assignment { value, .. } | ASTNode::Expression(value) => {
                     visit_expr(value, output)
                 }
@@ -1256,6 +1257,10 @@ fn collect_free_names(
             | ASTNode::CompileTimeConstant { name, value, .. } => {
                 collect_free_names(value, bound, captures);
                 bound.insert(name.clone());
+            }
+            ASTNode::TupleDestructuring { names, value } => {
+                collect_free_names(value, bound, captures);
+                bound.extend(names.iter().cloned());
             }
             ASTNode::Assignment { name, value } => {
                 add(name, bound, captures);
@@ -1577,6 +1582,7 @@ fn lift_lambdas_in_node(
         ASTNode::VariableDefinition { value, .. }
         | ASTNode::Assignment { value, .. }
         | ASTNode::CompileTimeConstant { value, .. }
+        | ASTNode::TupleDestructuring { value, .. }
         | ASTNode::Expression(value) => {
             lift_lambdas_in_expression(value, functions, used_names, next_lambda);
         }

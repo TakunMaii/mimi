@@ -441,6 +441,9 @@ fn qualify_imported_node(
         ASTNode::Assignment { value, .. } | ASTNode::Expression(value) => {
             qualify_imported_expression(value, package, local_type_names);
         }
+        ASTNode::TupleDestructuring { value, .. } => {
+            qualify_imported_expression(value, package, local_type_names);
+        }
         ASTNode::IndexAssignment {
             object,
             index,

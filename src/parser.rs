@@ -131,6 +131,10 @@ pub(crate) enum ASTNode {
         data_type: Option<DataType>,
         value: Expression,
     },
+    TupleDestructuring {
+        names: Vec<String>,
+        value: Expression,
+    },
     Assignment {
         name: String,
         value: Expression,
@@ -299,6 +303,9 @@ where
         }
         Token::Identifier(name) if matches!(tokens.peek(), Some(Token::Dot)) => {
             parse_member_assignment_or_expression(name, tokens)
+        }
+        Token::Identifier(name) if matches!(tokens.peek(), Some(Token::Comma)) => {
+            parse_tuple_destructuring(name, tokens)
         }
         Token::Star => parse_pointer_assignment_or_expression(tokens),
         Token::Identifier(name) => parse_statement_after_name(name, tokens),
@@ -667,6 +674,36 @@ where
             data_type,
             value,
         },
+    }
+}
+
+fn parse_tuple_destructuring<I>(first: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
+where
+    I: Iterator<Item = Token> + Clone,
+{
+    let mut names = vec![first];
+    while matches!(tokens.peek(), Some(Token::Comma)) {
+        tokens.next();
+        match tokens.next() {
+            Some(Token::Identifier(name)) => names.push(name),
+            _ => panic!("expected identifier in tuple destructuring"),
+        }
+    }
+    assert!(
+        names.len() >= 2,
+        "tuple destructuring requires at least two names"
+    );
+    assert!(
+        matches!(tokens.next(), Some(Token::Colon)),
+        "expected ':=' in tuple destructuring"
+    );
+    assert!(
+        matches!(tokens.next(), Some(Token::Equal)),
+        "expected ':=' in tuple destructuring"
+    );
+    ASTNode::TupleDestructuring {
+        names,
+        value: parse_expression(tokens, 0),
     }
 }
 
@@ -1906,6 +1943,9 @@ where
                 if matches!(tokens.peek(), Some(Token::Equal | Token::Colon)) =>
             {
                 parse_statement_after_name(name, tokens)
+            }
+            Token::Identifier(name) if matches!(tokens.peek(), Some(Token::Comma)) => {
+                parse_tuple_destructuring(name, tokens)
             }
             Token::Identifier(name) if matches!(tokens.peek(), Some(Token::LeftBracket)) => {
                 parse_index_assignment_or_expression(name, tokens)

@@ -1545,6 +1545,38 @@ fn check_statement(
                 Err(err) => Err(err),
             }
         }
+        ASTNode::TupleDestructuring { names, value } => {
+            let unique_names: std::collections::HashSet<_> = names.iter().collect();
+            if unique_names.len() != names.len() {
+                return Err(error("tuple destructuring contains duplicate names"));
+            }
+            for name in names {
+                if scopes.last().unwrap().contains_key(name) {
+                    return Err(error(format!("'{name}' is already defined")));
+                }
+            }
+            let inferred = infer_expression(value, scopes, functions, structs, None)?;
+            let DataType::Tuple(elements) = inferred else {
+                return Err(error("tuple destructuring requires a tuple value"));
+            };
+            if names.len() != elements.len() {
+                return Err(error(format!(
+                    "tuple destructuring has {} names, but tuple has {} elements",
+                    names.len(),
+                    elements.len()
+                )));
+            }
+            for (name, data_type) in names.iter().zip(elements.iter()) {
+                scopes.last_mut().unwrap().insert(
+                    name.clone(),
+                    Symbol {
+                        data_type: *data_type,
+                        mutable: true,
+                    },
+                );
+            }
+            Ok(())
+        }
         ASTNode::CompileTimeConstant {
             name,
             data_type,

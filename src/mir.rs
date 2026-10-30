@@ -1558,6 +1558,42 @@ impl Builder {
                                     self.variable_structs.remove(name);
                                 }
                             }
+                            crate::parser::ASTNode::TupleDestructuring { names, value } => {
+                                let tuple_type = self.expression_type(value)?;
+                                let HirType::Tuple(elements) = tuple_type else {
+                                    return None;
+                                };
+                                let tuple_value = self.expression_expected(
+                                    value,
+                                    &HirType::Tuple(elements.clone()),
+                                )?;
+                                let tuple_slot = self.slot();
+                                self.emit(MirInstruction::StoreSlot {
+                                    slot: tuple_slot,
+                                    value: tuple_value,
+                                });
+                                let mut temporary = format!("__mimi_tuple_temp_{}", tuple_slot.0);
+                                while self.variables.contains_key(&temporary) {
+                                    temporary.push('_');
+                                }
+                                self.variables
+                                    .insert(temporary.clone(), Variable::Slot(tuple_slot));
+                                self.variable_types
+                                    .insert(temporary.clone(), HirType::Tuple(elements.clone()));
+                                for (index, (name, data_type)) in
+                                    names.iter().zip(elements.iter()).enumerate()
+                                {
+                                    let member = Expression::MemberAccess {
+                                        object: Box::new(Expression::Identifier(temporary.clone())),
+                                        member: index.to_string(),
+                                    };
+                                    let element_value =
+                                        self.expression_expected(&member, data_type)?;
+                                    self.bind_slot_value(name, data_type, element_value);
+                                }
+                                self.variables.remove(&temporary);
+                                self.variable_types.remove(&temporary);
+                            }
                             crate::parser::ASTNode::CompileTimeConstant { name, value, .. } => {
                                 let struct_name = self.expression_struct_name(value);
                                 let function_signature =

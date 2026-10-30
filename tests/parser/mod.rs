@@ -233,6 +233,21 @@ fn parses_pointer_addressing_and_assignment() {
 }
 
 #[test]
+fn parses_tuple_destructuring_bindings() {
+    let nodes = parse(tokenize(
+        "main :: fn () i32 { first, second := (1, true) first }".chars(),
+    ));
+    assert!(matches!(
+        &nodes[0],
+        ASTNode::FunctionDefinition {
+            body: Expression::Block(items),
+            ..
+        } if matches!(items.first(), Some(ASTNode::TupleDestructuring { names, value: Expression::TupleLiteral(values) })
+            if names == &["first", "second"] && values.len() == 2)
+    ));
+}
+
+#[test]
 fn tokenizes_boolean_literals() {
     assert_eq!(
         tokenize("true false".chars()),

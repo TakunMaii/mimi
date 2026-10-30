@@ -80,6 +80,33 @@ fn builds_and_runs_tuples_through_functions_and_member_assignment() {
 }
 
 #[test]
+fn builds_and_runs_tuple_destructuring_once() {
+    let source =
+        std::env::temp_dir().join(format!("mimi_destructure_source_{}.mi", std::process::id()));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_destructure_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "make :: fn (counter : *i32) (i32, bool) { *counter = *counter + 1 pair := (*counter, true) pair } main :: fn () i32 { counter := 0 first, flag := make(&counter) inner, nested_flag := ((4, 5), true) result := if counter == 1 && first == 1 && flag && inner.1 == 5 && nested_flag { 0 } else { 1 } result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
 fn lowers_capture_free_lambdas_to_indirectly_callable_functions() {
     let ast = parse(tokenize(
         "apply :: fn (function : fn(i32)i32, value : i32) i32 { function(value) } main :: fn () i32 { square := fn (value : i32) i32 { value * value } apply(square, 7) + apply(fn (value : i32) i32 { value + 1 }, 2) }".chars(),

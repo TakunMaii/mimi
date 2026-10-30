@@ -67,6 +67,35 @@ fn checks_tuple_inference_signatures_and_member_bounds() {
 }
 
 #[test]
+fn checks_tuple_destructuring_types_and_arity() {
+    let valid = parse(tokenize(
+        "main :: fn () i32 { first, second := (7, true) result := if second { first } else { 0 } result }".chars(),
+    ));
+    check(&valid).unwrap();
+
+    for (program, expected) in [
+        (
+            "main :: fn () i32 { first, second := (7,) 0 }",
+            "has 2 names, but tuple has 1 elements",
+        ),
+        (
+            "main :: fn () i32 { first, second := 7 0 }",
+            "requires a tuple value",
+        ),
+        (
+            "main :: fn () i32 { first, first := (1, 2) 0 }",
+            "duplicate names",
+        ),
+    ] {
+        let errors = check(&parse(tokenize(program.chars()))).unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.message.contains(expected)),
+            "{errors:?}"
+        );
+    }
+}
+
+#[test]
 fn specializes_compile_time_generic_defaults_and_checks_argument_kind() {
     let valid = parse(tokenize(
         "fixed :: struct <dx> { x : f32 = dx } value : fixed<3.5> = fixed<3.5> {}".chars(),
