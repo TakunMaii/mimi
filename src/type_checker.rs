@@ -2784,6 +2784,7 @@ fn require_compatible(actual: DataType, expected: Option<DataType>) -> Result<()
         && normalize_generic_type(actual) != expected
         && !(matches!(actual, DataType::Slice(inner) if *inner == DataType::U8)
             && matches!(expected, DataType::Pointer(inner) if *inner == DataType::I8))
+        && !matches!((actual, expected), (DataType::Pointer(_), DataType::Pointer(inner)) if *inner == DataType::Void)
         && !matches!((normalize_generic_type(actual), expected), (DataType::Struct(a), DataType::Enum(b)) | (DataType::Enum(a), DataType::Struct(b)) if a == b)
         && !(actual.is_integer() && expected.is_float())
     {

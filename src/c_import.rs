@@ -1190,7 +1190,7 @@ fn is_supported_c_abi_type(data_type: DataType) -> bool {
     match data_type {
         DataType::Pointer(inner) => !matches!(
             *inner,
-            DataType::Void | DataType::Function(_, _) | DataType::Array(_, _) | DataType::Slice(_)
+            DataType::Function(_, _) | DataType::Array(_, _) | DataType::Slice(_)
         ),
         DataType::U8
         | DataType::U16

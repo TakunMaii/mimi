@@ -752,6 +752,31 @@ fn imports_c_unions_with_single_member_initializers() {
 }
 
 #[test]
+fn passes_object_pointers_to_libc_void_pointer_parameters() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_cimport_memcpy_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("main.mi");
+    let executable = directory.join("main");
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"string.h\") main :: fn () i32 { source := 42 destination := 0 c.memcpy(&destination, &source, 4) destination - 42 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn compiles_and_links_c_source_with_mimi_program() {
     let directory = std::env::temp_dir().join(format!("mimi_c_source_link_{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
