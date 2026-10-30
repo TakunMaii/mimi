@@ -642,7 +642,7 @@ fn imports_and_calls_sdl3_when_installed() {
     let executable = directory.join("main");
     std::fs::write(
         &source,
-        "sdl :: @cimport(\"SDL3/SDL.h\") main :: fn () i32 { if false {window := sdl.SDL_CreateWindow(\"mimi\", 64, 64, 0) if window != null {sdl.SDL_DestroyWindow(window)}} if sdl.SDL_Init(0) {sdl.SDL_Quit()} else {} 0 }",
+        "sdl :: @cimport(\"SDL3/SDL.h\") main :: fn () i32 { if false {window := sdl.SDL_CreateWindow(\"mimi\", 64, 64, 0) if window != null {sdl.SDL_DestroyWindow(window)}} if sdl.SDL_Init(0) {sdl.SDL_Quit()} else {} event := sdl.SDL_Event {type=0} sdl.SDL_PollEvent(&event) if event.type == 0 {return 0} else {return 1} 0 }",
     )
     .unwrap();
     build_file_for_target_with_c_options(

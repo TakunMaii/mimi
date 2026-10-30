@@ -1358,6 +1358,14 @@ fn c_type(type_name: &str, aliases: &HashMap<String, DataType>) -> Option<DataTy
             type_name = prefix.trim_end();
         }
     }
+    if let Some(open) = type_name.rfind('[')
+        && let Some(length) = type_name[open + 1..]
+            .strip_suffix(']')
+            .and_then(|length| length.trim().parse::<u64>().ok())
+    {
+        let element = c_type(type_name[..open].trim(), aliases)?;
+        return Some(DataType::Array(length, Box::leak(Box::new(element))));
+    }
     if let Some(pointer) = type_name.find("(*") {
         let return_type = c_type(type_name[..pointer].trim(), aliases)?;
         let declarator = &type_name[pointer + 2..];
@@ -1497,6 +1505,10 @@ mod tests {
     fn maps_c_scalars_and_pointer_types() {
         assert_eq!(c_type("int", &HashMap::new()), Some(DataType::I32));
         assert_eq!(c_type("long double", &HashMap::new()), None);
+        assert!(matches!(
+            c_type("unsigned char[16]", &HashMap::new()),
+            Some(DataType::Array(16, element)) if *element == DataType::U8
+        ));
         assert_eq!(
             c_type("const char *", &HashMap::new()),
             Some(DataType::Pointer(Box::leak(Box::new(DataType::I8))))
@@ -1672,7 +1684,7 @@ mod tests {
     #[test]
     fn keeps_unsupported_complete_records_opaque_for_pointer_apis() {
         let json = JsonParser::parse(
-            r#"{"inner":[{"kind":"RecordDecl","name":"Event","tagUsed":"struct","completeDefinition":true,"inner":[{"kind":"FieldDecl","name":"data","type":{"qualType":"int[2]"}}]},{"kind":"FunctionDecl","name":"poll_event","type":{"qualType":"int (struct Event *)"},"inner":[{"kind":"ParmVarDecl","name":"event","type":{"qualType":"struct Event *"}}]}]}"#,
+            r#"{"inner":[{"kind":"RecordDecl","name":"Event","tagUsed":"struct","completeDefinition":true,"inner":[{"kind":"FieldDecl","name":"data","type":{"qualType":"long double"}}]},{"kind":"FunctionDecl","name":"poll_event","type":{"qualType":"int (struct Event *)"},"inner":[{"kind":"ParmVarDecl","name":"event","type":{"qualType":"struct Event *"}}]}]}"#,
         )
         .unwrap();
         let layouts = HashMap::from([(
