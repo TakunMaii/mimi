@@ -595,7 +595,7 @@ fn imports_and_calls_raylib_when_installed() {
     let executable = directory.join("main");
     std::fs::write(
         &source,
-        "ray :: @cimport(\"raylib.h\") main :: fn () i32 { if ray.CheckCollisionPointRec(ray.Vector2 {x=5.0, y=5.0}, ray.Rectangle {x=0.0, y=0.0, width=10.0, height=10.0}) {return 0} else {return 1} 0 }",
+        "ray :: @cimport(\"raylib.h\") main :: fn () i32 { if ray.GetRandomValue(0, 0) == 1 {ray.InitWindow(64, 64, \"test\") ray.DrawCircleV(ray.Vector2 {x=8.0, y=8.0}, 4.0, ray.Color {r=255, g=0, b=0, a=255}) ray.CloseWindow()} if ray.CheckCollisionPointRec(ray.Vector2 {x=5.0, y=5.0}, ray.Rectangle {x=0.0, y=0.0, width=10.0, height=10.0}) {return 0} else {return 1} 0 }",
     )
     .unwrap();
     build_file_for_target_with_c_options(
