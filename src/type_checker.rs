@@ -24,6 +24,7 @@ struct Function {
 }
 
 struct StructInfo {
+    is_union: bool,
     parameters: Vec<String>,
     parameter_types: Vec<bool>,
     fields: HashMap<String, FieldInfo>,
@@ -169,6 +170,7 @@ fn specialize_struct_info(
         }
     }
     let specialized = StructInfo {
+        is_union: template.is_union,
         parameters: Vec::new(),
         parameter_types: Vec::new(),
         fields: template
@@ -550,6 +552,7 @@ fn imported_exports_inner(
                 types.insert(
                     qualified_name,
                     StructInfo {
+                        is_union: false,
                         parameters: parameters.clone(),
                         parameter_types: infer_generic_parameter_types(
                             &parameters,
@@ -626,6 +629,7 @@ fn imported_exports_inner(
                 types.insert(
                     qualified_name,
                     StructInfo {
+                        is_union: false,
                         parameters: parameters.clone(),
                         parameter_types: infer_generic_enum_parameter_types(
                             &parameters,
@@ -1117,6 +1121,17 @@ pub(crate) fn check_with_import_paths(
         }
     }
     let nodes = expanded_nodes.as_slice();
+    let c_union_types = nodes
+        .iter()
+        .filter_map(|node| match node {
+            ASTNode::CTypeRecordLayout {
+                name,
+                is_union: true,
+                ..
+            } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
 
     for node in nodes {
         if let ASTNode::Import { alias, path } = node {
@@ -1203,6 +1218,7 @@ pub(crate) fn check_with_import_paths(
             structs.insert(
                 *name,
                 StructInfo {
+                    is_union: false,
                     parameters: parameters.clone(),
                     parameter_types: infer_generic_enum_parameter_types(parameters, variants),
                     fields: HashMap::new(),
@@ -1231,6 +1247,7 @@ pub(crate) fn check_with_import_paths(
                 .insert(
                     *name,
                     StructInfo {
+                        is_union: c_union_types.contains(*name),
                         parameters: parameters.clone(),
                         parameter_types: infer_generic_parameter_types(
                             parameters,
@@ -2151,6 +2168,11 @@ fn infer_expression(
                     Some(field_type.data_type),
                 )?;
             }
+            if info.is_union && provided.len() != 1 {
+                return Err(error(format!(
+                    "union literal '{struct_name}' must initialize exactly one field"
+                )));
+            }
             for (field_name, field) in &info.fields {
                 if let Some(default) = &field.default {
                     if !field.mutable && !is_constant_expression(default) {
@@ -2162,6 +2184,9 @@ fn infer_expression(
                 }
             }
             for (field_name, field) in &info.fields {
+                if info.is_union {
+                    break;
+                }
                 if !provided.contains(field_name) {
                     if field.default.is_none() {
                         return Err(error(format!(

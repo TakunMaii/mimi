@@ -672,6 +672,7 @@ fn import_numeric_macros(
 struct CRecordLayout {
     size_bytes: u64,
     align_bytes: u64,
+    is_union: bool,
     field_offsets: Vec<(String, u64)>,
 }
 
@@ -735,7 +736,7 @@ fn import_record_layouts(
 
 fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, String> {
     let mut layouts = HashMap::new();
-    let mut current: Option<(String, Vec<(String, u64)>)> = None;
+    let mut current: Option<(String, bool, Vec<(String, u64)>)> = None;
     for line in output.lines() {
         let Some((offset, content)) = line.split_once('|') else {
             continue;
@@ -743,13 +744,15 @@ fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, 
         let raw_content = content;
         let content = raw_content.trim();
         let depth = raw_content.bytes().take_while(|byte| *byte == b' ').count();
-        if depth <= 1
-            && let Some(record) = content
+        if depth <= 1 {
+            let record = content
                 .strip_prefix("struct ")
-                .or_else(|| content.strip_prefix("union "))
-        {
-            current = Some((record.trim().to_string(), Vec::new()));
-            continue;
+                .map(|record| (record, false))
+                .or_else(|| content.strip_prefix("union ").map(|record| (record, true)));
+            if let Some((record, is_union)) = record {
+                current = Some((record.trim().to_string(), is_union, Vec::new()));
+                continue;
+            }
         }
         if let Some(metadata) = content.strip_prefix("[sizeof=") {
             let Some((size, align)) = metadata
@@ -758,7 +761,7 @@ fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, 
             else {
                 continue;
             };
-            if let (Some((name, fields)), Ok(size_bytes), Ok(align_bytes)) =
+            if let (Some((name, is_union, fields)), Ok(size_bytes), Ok(align_bytes)) =
                 (current.take(), size.parse::<u64>(), align.parse::<u64>())
             {
                 layouts.insert(
@@ -766,13 +769,14 @@ fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, 
                     CRecordLayout {
                         size_bytes,
                         align_bytes,
+                        is_union,
                         field_offsets: fields,
                     },
                 );
             }
             continue;
         }
-        let Some((_, fields)) = current.as_mut() else {
+        let Some((_, _, fields)) = current.as_mut() else {
             continue;
         };
         if depth < 2 {
@@ -808,7 +812,10 @@ fn declarations_from_ast(
         .filter(|declaration| {
             declaration.get("kind").and_then(Json::string) == Some("RecordDecl")
                 && declaration.get("completeDefinition").and_then(Json::bool) == Some(true)
-                && declaration.get("tagUsed").and_then(Json::string) == Some("struct")
+                && matches!(
+                    declaration.get("tagUsed").and_then(Json::string),
+                    Some("struct" | "union")
+                )
         })
         .filter_map(|declaration| declaration.get("name")?.string())
         .map(str::to_string)
@@ -826,7 +833,10 @@ fn declarations_from_ast(
     for declaration in inner {
         if declaration.get("kind").and_then(Json::string) != Some("RecordDecl")
             || declaration.get("completeDefinition").and_then(Json::bool) == Some(true)
-            || declaration.get("tagUsed").and_then(Json::string) != Some("struct")
+            || !matches!(
+                declaration.get("tagUsed").and_then(Json::string),
+                Some("struct" | "union")
+            )
         {
             continue;
         }
@@ -882,7 +892,10 @@ fn declarations_from_ast(
     for declaration in inner {
         if declaration.get("kind").and_then(Json::string) != Some("RecordDecl")
             || declaration.get("completeDefinition").and_then(Json::bool) != Some(true)
-            || declaration.get("tagUsed").and_then(Json::string) != Some("struct")
+            || !matches!(
+                declaration.get("tagUsed").and_then(Json::string),
+                Some("struct" | "union")
+            )
         {
             continue;
         }
@@ -935,6 +948,7 @@ fn declarations_from_ast(
                 name: record_name.to_string(),
                 size_bytes: layout.size_bytes,
                 align_bytes: layout.align_bytes,
+                is_union: layout.is_union,
                 field_offsets: layout.field_offsets.clone(),
             });
         }

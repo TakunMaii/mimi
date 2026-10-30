@@ -113,6 +113,7 @@ pub(crate) struct HirStruct {
 pub(crate) struct HirCRecordLayout {
     pub(crate) size_bytes: u64,
     pub(crate) align_bytes: u64,
+    pub(crate) is_union: bool,
     pub(crate) field_offsets: Vec<(String, u64)>,
 }
 
@@ -133,6 +134,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
             name,
             size_bytes,
             align_bytes,
+            is_union,
             field_offsets,
         } = node
         {
@@ -141,6 +143,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                 HirCRecordLayout {
                     size_bytes: *size_bytes,
                     align_bytes: *align_bytes,
+                    is_union: *is_union,
                     field_offsets: field_offsets.clone(),
                 },
             );

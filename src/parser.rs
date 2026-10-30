@@ -229,6 +229,7 @@ pub(crate) enum ASTNode {
         name: String,
         size_bytes: u64,
         align_bytes: u64,
+        is_union: bool,
         field_offsets: Vec<(String, u64)>,
     },
     Public(Box<ASTNode>),

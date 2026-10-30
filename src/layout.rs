@@ -47,6 +47,12 @@ impl TypeLayouts {
         self
     }
 
+    pub(crate) fn is_c_union(&self, name: &str) -> bool {
+        self.c_records
+            .get(name)
+            .is_some_and(|record| record.is_union)
+    }
+
     pub(crate) fn layout(&self, data_type: &HirType) -> Option<TypeLayout> {
         if self.target.pointer_bytes() == 0 || self.target.stack_slot_bytes() == 0 {
             return None;

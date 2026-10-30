@@ -712,6 +712,46 @@ fn imports_libc_timespec_layout_and_function() {
 }
 
 #[test]
+fn imports_c_unions_with_single_member_initializers() {
+    let directory = std::env::temp_dir().join(format!("mimi_cimport_union_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("value.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("value.c");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "union Value { int integer; double real; }; int verify_value(union Value *value);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <value.h>\nint verify_value(union Value *value) { return value->integer == 42 && sizeof(*value) == 8 ? 0 : 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"value.h\") main :: fn () i32 { value := c.Value {integer=42} c.verify_value(&value) }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn compiles_and_links_c_source_with_mimi_program() {
     let directory = std::env::temp_dir().join(format!("mimi_c_source_link_{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();

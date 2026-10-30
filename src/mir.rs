@@ -3658,6 +3658,26 @@ impl Builder {
         base_address: ValueId,
     ) -> Option<()> {
         let fields = self.struct_fields.get(struct_name)?.clone();
+        if self.type_layouts.is_c_union(struct_name) {
+            let (field_name, expression) = provided.first()?;
+            let field_type = self
+                .struct_field_types
+                .get(struct_name)?
+                .iter()
+                .find(|(name, _)| name == field_name)?
+                .1
+                .clone();
+            let offset = self.struct_field_offset(struct_name, field_name)?;
+            let target_address = self.byte_offset_address(base_address, offset);
+            if self.is_inline_storage_aggregate(&field_type) {
+                self.lower_inline_value_into(&field_type, expression, target_address)?;
+            } else {
+                let value = self.expression_expected(expression, &field_type)?;
+                self.value_types.insert(value, field_type.clone());
+                self.emit_store_indirect(target_address, value, Some(&field_type));
+            }
+            return Some(());
+        }
         for (field_name, default) in fields {
             let expression = provided
                 .iter()
