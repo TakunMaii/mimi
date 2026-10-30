@@ -2262,6 +2262,13 @@ fn infer_expression(
             {
                 return Ok(DataType::U64);
             }
+            if member == "ptr" {
+                let element = match object_type {
+                    DataType::Array(_, element) | DataType::Slice(element) => *element,
+                    _ => return Err(error("ptr member requires an array or slice")),
+                };
+                return Ok(DataType::Pointer(Box::leak(Box::new(element))));
+            }
             let struct_name = match object_type {
                 DataType::Struct(name) => name,
                 DataType::GenericStruct(name, arguments) => {

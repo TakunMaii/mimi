@@ -27,7 +27,7 @@ imports while preserving C types, layout, and target ABI rules.
   - [x] Resolve pointers to complete imported C struct types.
 - [x] Pass string literals as NUL-terminated C `char *` arguments.
 - [x] Pass mutable Mimi byte-array buffers through explicit element pointers to C `char *` parameters.
-  - [ ] Add general Mimi slice-to-C pointer/length conversions.
+  - [x] Expose general slice/array `.ptr` and `.len` for explicit C pointer/length arguments.
 
 ## C Layout And ABI
 

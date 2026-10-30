@@ -240,6 +240,49 @@ fn imports_and_accesses_c_thread_local_globals() {
 }
 
 #[test]
+fn passes_general_slice_pointer_and_length_to_c() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let directory = std::env::temp_dir().join(format!("mimi_c_slice_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("slice.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("slice.c");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "#include <stddef.h>\nint first_and_len(const unsigned char *data, size_t length);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include \"slice.h\"\nint first_and_len(const unsigned char *data, size_t length) { return (int)data[0] + (int)length; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"slice.h\") main :: fn () i32 { bytes : []u8 = [1, 2] c.first_and_len(bytes.ptr, bytes.len) - 3 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn promotes_narrow_integer_c_variadic_arguments() {
     if !cfg!(target_os = "macos") {
         return;

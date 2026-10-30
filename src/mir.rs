@@ -663,6 +663,14 @@ impl Builder {
                 self.lower_struct_literal((*type_name)?, fields)
             }
             Expression::MemberAccess { object, member } => {
+                if member == "ptr"
+                    && matches!(
+                        self.expression_type(object),
+                        Some(HirType::Array { .. } | HirType::Slice(_))
+                    )
+                {
+                    return self.lower_array_view(object).map(|(pointer, _, _)| pointer);
+                }
                 if member == "len"
                     && matches!(
                         self.expression_type(object),

@@ -48,10 +48,9 @@ field writes, and taking the address of the global aggregate.
 Integer and floating-point scalar calls are compiled and linked against C on
 both supported Apple targets.
 String literals passed to imported `char *` parameters are emitted as
-NUL-terminated static byte arrays. Mutable buffers and arbitrary Mimi slices
-can be passed as explicit element pointers (for example `&buffer[0]`) to C
-pointer parameters. Mimi slice descriptors still require an explicit pointer
-and length conversion before passing to C APIs.
+NUL-terminated static byte arrays. Slices and arrays expose `.ptr` and `.len`,
+so APIs that take a pointer and length can be called as
+`c.write(buffer.ptr, buffer.len)`.
 
 ## Linking Libraries And C Sources
 
