@@ -675,6 +675,7 @@ struct CRecordLayout {
     is_union: bool,
     field_offsets: Vec<(String, u64)>,
     bit_fields: Vec<(String, u8, u8)>,
+    fields_supported: bool,
 }
 
 fn import_record_layouts(
@@ -737,7 +738,13 @@ fn import_record_layouts(
 
 fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, String> {
     let mut layouts = HashMap::new();
-    let mut current: Option<(String, bool, Vec<(String, u64)>, Vec<(String, u8, u8)>)> = None;
+    let mut current: Option<(
+        String,
+        bool,
+        Vec<(String, u64)>,
+        Vec<(String, u8, u8)>,
+        bool,
+    )> = None;
     for line in output.lines() {
         let Some((offset, content)) = line.split_once('|') else {
             continue;
@@ -751,7 +758,13 @@ fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, 
                 .map(|record| (record, false))
                 .or_else(|| content.strip_prefix("union ").map(|record| (record, true)));
             if let Some((record, is_union)) = record {
-                current = Some((record.trim().to_string(), is_union, Vec::new(), Vec::new()));
+                current = Some((
+                    record.trim().to_string(),
+                    is_union,
+                    Vec::new(),
+                    Vec::new(),
+                    true,
+                ));
                 continue;
             }
         }
@@ -762,8 +775,11 @@ fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, 
             else {
                 continue;
             };
-            if let (Some((name, is_union, fields, bit_fields)), Ok(size_bytes), Ok(align_bytes)) =
-                (current.take(), size.parse::<u64>(), align.parse::<u64>())
+            if let (
+                Some((name, is_union, fields, bit_fields, fields_supported)),
+                Ok(size_bytes),
+                Ok(align_bytes),
+            ) = (current.take(), size.parse::<u64>(), align.parse::<u64>())
             {
                 layouts.insert(
                     name,
@@ -773,23 +789,22 @@ fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, 
                         is_union,
                         field_offsets: fields,
                         bit_fields,
+                        fields_supported,
                     },
                 );
             }
             continue;
         }
-        let Some((_, _, fields, bit_fields)) = current.as_mut() else {
+        let Some((_, _, fields, bit_fields, fields_supported)) = current.as_mut() else {
             continue;
         };
-        if depth < 2 {
+        if depth != 3 {
             continue;
         }
         let Some(field_name) = content.split_whitespace().last() else {
+            *fields_supported = false;
             continue;
         };
-        if field_name.contains(':') || field_name.starts_with('[') {
-            continue;
-        }
         if let Some((byte_offset, range)) = offset.trim().split_once(':') {
             if let (Ok(byte_offset), Some((start, end))) =
                 (byte_offset.parse::<u64>(), range.split_once('-'))
@@ -801,10 +816,16 @@ fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, 
                     .and_then(|width| width.checked_add(1))
                 {
                     bit_fields.push((field_name.to_string(), start, width));
+                } else {
+                    *fields_supported = false;
                 }
+            } else {
+                *fields_supported = false;
             }
         } else if let Ok(offset) = offset.trim().parse::<u64>() {
             fields.push((field_name.to_string(), offset));
+        } else {
+            *fields_supported = false;
         }
     }
     Ok(layouts)
@@ -935,7 +956,8 @@ fn declarations_from_ast(
                     .and_then(|ty| ty.get("qualType"))
                     .and_then(Json::string),
             ) else {
-                continue;
+                imported_fields.clear();
+                break;
             };
             let Some(data_type) = c_type(type_name, &alias_types) else {
                 imported_fields.clear();
@@ -947,6 +969,9 @@ fn declarations_from_ast(
             let Some(layout) = record_layouts.get(record_name) else {
                 continue;
             };
+            if !layout.fields_supported || layout.field_offsets.len() != imported_fields.len() {
+                continue;
+            }
             let unsupported_bit_field = layout.bit_fields.iter().any(|(field, offset, width)| {
                 *width == 0
                     || offset.saturating_add(*width) > 8
@@ -1305,6 +1330,7 @@ mod tests {
         .unwrap();
         let outer = layouts.get("Outer").unwrap();
         assert_eq!(outer.size_bytes, 12);
+        assert!(outer.fields_supported);
         assert_eq!(
             outer.field_offsets,
             [("inner".into(), 0), ("tail".into(), 8)]
@@ -1323,6 +1349,15 @@ mod tests {
             flags.bit_fields,
             [("low".into(), 0, 3), ("high".into(), 3, 5)]
         );
+    }
+
+    #[test]
+    fn marks_zero_width_bitfields_as_unsupported() {
+        let layouts = parse_record_layouts(
+            "         0 | struct Bad\n     0:0-2 |   unsigned int a\n       4:- |   unsigned int\n     4:0-2 |   unsigned int b\n           | [sizeof=8, align=4]\n",
+        )
+        .unwrap();
+        assert!(!layouts.get("Bad").unwrap().fields_supported);
     }
 
     #[test]
