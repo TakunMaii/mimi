@@ -53,8 +53,8 @@ into the output. Use `-I`, `-L`, and `-l` for header and library search paths.
 ## Current Limits
 
 The importer currently skips declarations it cannot represent. It does not
-provide a general C ABI for structs and unions passed by value, bitfields,
-opaque incomplete record field access, C globals, variadic functions, callbacks,
+provide a general C ABI for structs and unions passed by value, signed or
+multi-byte bitfields, opaque incomplete record field access, C globals, variadic functions, callbacks,
 arbitrary macros, `long double`, or automatic conversion between Mimi slices
 and C strings.
 Simple imported struct field access uses Mimi's current aggregate layout and

@@ -53,6 +53,15 @@ impl TypeLayouts {
             .is_some_and(|record| record.is_union)
     }
 
+    pub(crate) fn struct_bit_field(&self, name: &str, member: &str) -> Option<(u8, u8)> {
+        self.c_records
+            .get(name)?
+            .bit_fields
+            .iter()
+            .find(|(field, _, _)| field == member)
+            .map(|(_, offset, width)| (*offset, *width))
+    }
+
     pub(crate) fn layout(&self, data_type: &HirType) -> Option<TypeLayout> {
         if self.target.pointer_bytes() == 0 || self.target.stack_slot_bytes() == 0 {
             return None;

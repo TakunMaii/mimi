@@ -802,6 +802,47 @@ fn imports_libc_malloc_and_free_void_pointer_signatures() {
 }
 
 #[test]
+fn imports_byte_local_unsigned_c_bitfields() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_cimport_bitfield_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("flags.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("flags.c");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "struct Flags { unsigned int low:3; unsigned int high:5; unsigned int tail; }; int verify_flags(struct Flags *value);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <flags.h>\nint verify_flags(struct Flags *value) { return value->low == 2 && value->high == 17 && value->tail == 42 && sizeof(*value) == 8 ? 0 : 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"flags.h\") main :: fn () i32 { flags := c.Flags {low=5, high=17, tail=42} flags.low = 2 c.verify_flags(&flags) }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn compiles_and_links_c_source_with_mimi_program() {
     let directory = std::env::temp_dir().join(format!("mimi_c_source_link_{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
