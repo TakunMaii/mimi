@@ -956,7 +956,14 @@ fn declarations_from_ast(
                         .is_none_or(|(_, data_type, _, _)| {
                             !matches!(
                                 data_type,
-                                DataType::U8 | DataType::U16 | DataType::U32 | DataType::U64
+                                DataType::U8
+                                    | DataType::U16
+                                    | DataType::U32
+                                    | DataType::U64
+                                    | DataType::I8
+                                    | DataType::I16
+                                    | DataType::I32
+                                    | DataType::I64
                             )
                         })
             });

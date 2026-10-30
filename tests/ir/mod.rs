@@ -843,6 +843,49 @@ fn imports_byte_local_unsigned_c_bitfields() {
 }
 
 #[test]
+fn imports_signed_byte_local_c_bitfields() {
+    let directory = std::env::temp_dir().join(format!(
+        "mimi_cimport_signed_bitfield_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("signed.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("signed.c");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "struct SignedBits { signed int value:5; unsigned int tail:3; }; int verify_signed(struct SignedBits *value);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <signed.h>\nint verify_signed(struct SignedBits *value) { return value->value == -3 && value->tail == 5 ? 0 : 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"signed.h\") main :: fn () i32 { bits := c.SignedBits {value=-3, tail=5} c.verify_signed(&bits) }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn compiles_and_links_c_source_with_mimi_program() {
     let directory = std::env::temp_dir().join(format!("mimi_c_source_link_{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();

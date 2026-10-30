@@ -702,12 +702,12 @@ impl Builder {
                     return self.load_function_descriptor(address, &field_type);
                 }
                 if let Some((bit_offset, bit_width)) = self.struct_bit_field(&struct_name, member) {
-                    return Some(self.load_unsigned_bit_field(
-                        address,
-                        bit_offset,
-                        bit_width,
-                        &field_type,
-                    ));
+                    let value =
+                        self.load_unsigned_bit_field(address, bit_offset, bit_width, &field_type);
+                    if matches!(field_type, HirType::Integer { signed: true, .. }) {
+                        return Some(self.sign_extend_bit_field(value, bit_width, &field_type));
+                    }
+                    return Some(value);
                 }
                 let result = self.value();
                 self.emit_load_indirect(result, address, Some(&field_type));
@@ -2112,10 +2112,24 @@ impl Builder {
         self.value_types.insert(raw, byte_type.clone());
         let old_field = self.load_unsigned_bit_field(address, bit_offset, bit_width, &byte_type);
         let modulus = self.bit_field_constant(1i128 << bit_width, &byte_type);
+        let remainder = self.value();
+        self.emit(MirInstruction::Rem {
+            result: remainder,
+            lhs: new_value,
+            rhs: modulus,
+        });
+        self.value_types.insert(remainder, byte_type.clone());
+        let normalized = self.value();
+        self.emit(MirInstruction::Add {
+            result: normalized,
+            lhs: remainder,
+            rhs: modulus,
+        });
+        self.value_types.insert(normalized, byte_type.clone());
         let bounded = self.value();
         self.emit(MirInstruction::Rem {
             result: bounded,
-            lhs: new_value,
+            lhs: normalized,
             rhs: modulus,
         });
         self.value_types.insert(bounded, byte_type.clone());
@@ -2155,6 +2169,57 @@ impl Builder {
         let result = self.value();
         self.emit(MirInstruction::ConstInt { result, value });
         self.value_types.insert(result, data_type.clone());
+        result
+    }
+
+    fn sign_extend_bit_field(
+        &mut self,
+        value: ValueId,
+        bit_width: u8,
+        result_type: &HirType,
+    ) -> ValueId {
+        let byte_type = HirType::Integer {
+            bits: 8,
+            signed: false,
+        };
+        let sign = self.bit_field_constant(1i128 << (bit_width - 1), &byte_type);
+        let condition = self.value();
+        self.emit(MirInstruction::Compare {
+            result: condition,
+            lhs: value,
+            rhs: sign,
+            kind: CompareKind::GreaterEqual,
+        });
+        self.value_types.insert(condition, HirType::Bool);
+        let negative_block = self.new_block();
+        let positive_block = self.new_block();
+        let merge_block = self.new_block();
+        self.terminate(MirTerminator::Branch {
+            condition,
+            then_block: negative_block,
+            else_block: positive_block,
+        });
+        self.current = negative_block;
+        let modulus = self.bit_field_constant(1i128 << bit_width, result_type);
+        let negative = self.value();
+        self.emit(MirInstruction::Sub {
+            result: negative,
+            lhs: value,
+            rhs: modulus,
+        });
+        self.value_types.insert(negative, result_type.clone());
+        self.terminate(MirTerminator::Jump(merge_block));
+        let negative_end = self.current;
+        self.current = positive_block;
+        self.terminate(MirTerminator::Jump(merge_block));
+        let positive_end = self.current;
+        self.current = merge_block;
+        let result = self.value();
+        self.emit(MirInstruction::Phi {
+            result,
+            incoming: vec![(negative_end, negative), (positive_end, value)],
+        });
+        self.value_types.insert(result, result_type.clone());
         result
     }
 
