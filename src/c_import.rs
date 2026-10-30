@@ -1360,8 +1360,11 @@ fn c_type(type_name: &str, aliases: &HashMap<String, DataType>) -> Option<DataTy
     }
     if let Some(pointer) = type_name.find("(*") {
         let return_type = c_type(type_name[..pointer].trim(), aliases)?;
-        let parameters = type_name[pointer + 2..]
-            .strip_prefix(")(")?
+        let declarator = &type_name[pointer + 2..];
+        let close = declarator.find(')')?;
+        let parameters = declarator[close + 1..]
+            .trim()
+            .strip_prefix('(')?
             .strip_suffix(')')?;
         let parameters = if parameters.trim().is_empty() || parameters.trim() == "void" {
             Vec::new()
@@ -1504,6 +1507,12 @@ mod tests {
                 if matches!(*function, DataType::Function(parameters, return_type)
                     if parameters == &[DataType::I32, DataType::Pointer(Box::leak(Box::new(DataType::I8)))]
                         && *return_type == DataType::I32)
+        ));
+        assert!(matches!(
+            c_type("void (* _Nonnull)(void)", &HashMap::new()),
+            Some(DataType::Pointer(function))
+                if matches!(*function, DataType::Function(parameters, return_type)
+                    if parameters.is_empty() && *return_type == DataType::Void)
         ));
     }
 

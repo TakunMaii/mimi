@@ -673,7 +673,7 @@ fn passes_top_level_mimi_functions_as_c_callbacks() {
     let executable = directory.join("main");
     std::fs::write(
         &header,
-        "int apply_callback(int (*callback)(int), int value);\n",
+        "int apply_callback(int (* _Nonnull callback)(int), int value);\n",
     )
     .unwrap();
     std::fs::write(
