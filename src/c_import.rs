@@ -1173,8 +1173,7 @@ fn declarations_from_ast_with_shims(
             continue;
         };
         let complete_aggregate = matches!(data_type, DataType::Struct(name)
-            if record_layouts.contains_key(name)
-                && !c_object_is_const(type_name));
+            if record_layouts.contains_key(name));
         if (!is_supported_c_abi_type(data_type) && !complete_aggregate)
             || data_type == DataType::Void
         {

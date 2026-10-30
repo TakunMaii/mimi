@@ -66,10 +66,10 @@ into the output. Use `-I`, `-L`, and `-l` for header and library search paths.
 
 The importer currently skips declarations it cannot represent. It does not
 provide a general C ABI for bitfields that cross their declared integer storage
-unit, opaque incomplete record field access, thread-local or const
-aggregate C globals, captured callbacks, arbitrary macros, `long double`, or
-automatic conversion between Mimi slices and C strings. Variadic imports support
-integer values and `f64` arguments; `f32` variadic arguments are rejected until
-numeric promotion conversion is available.
+unit, opaque incomplete record field access, thread-local C globals, captured
+callbacks, arbitrary macros, `long double`, or
+automatic conversion between Mimi slices and C strings. Variadic imports
+currently support integer arguments and `f64`; `f32` arguments are rejected with
+an explicit diagnostic until numeric promotion conversion is available.
 Aggregate thunks currently cover complete struct and union parameters and
 returns. Cross-target ABI runtime verification remains outstanding.

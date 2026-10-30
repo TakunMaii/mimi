@@ -157,6 +157,75 @@ fn imports_and_calls_c_variadic_printf() {
 }
 
 #[test]
+fn imports_const_c_aggregate_globals_as_read_only() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_const_c_global_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("constants.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("constants.c");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "typedef struct Point { int x; int y; } Point; extern const Point origin;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include \"constants.h\"\nconst Point origin = { 19, 23 };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"constants.h\") main :: fn () i32 { c.origin.x - 19 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn promotes_narrow_integer_c_variadic_arguments() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let source =
+        std::env::temp_dir().join(format!("mimi_variadic_narrow_{}.mi", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("mimi_variadic_narrow_bin_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"stdio.h\") main :: fn () i32 { small : i8 = -2 c.printf(\"%d\\n\", small) }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let output = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(output.code(), Some(3));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_lambdas_that_capture_outer_values() {
     let source =
         std::env::temp_dir().join(format!("mimi_capture_source_{}.mi", std::process::id()));

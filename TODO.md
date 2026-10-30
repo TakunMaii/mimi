@@ -41,14 +41,17 @@ imports while preserving C types, layout, and target ABI rules.
   - [x] Compile and link aggregate calls for x86_64 and AArch64; execute on the host target.
 - [x] Import and access scalar and pointer C global variables, including const write protection.
   - [x] Import mutable globals of complete structs and unions.
-  - [ ] Support thread-local declarations and const aggregate globals.
+  - [ ] Support thread-local declarations.
+  - [x] Support const aggregate globals as read-only values.
 - [x] Compile and link integer and floating-point scalar C calls for x86_64 and AArch64.
 
 ## Advanced C Declarations
 
 - [x] Import simple numeric macro constants through Clang's preprocessor output.
   - [x] Provide source level `@cDefine` configuration.
-- [x] Support variadic C functions and default argument promotions for imported calls.
+- [ ] Support variadic C functions and default argument promotions.
+  - [x] Import declarations and call with integer variadic arguments and `f64`.
+  - [ ] Promote `f32` and narrow integers according to C's default promotions.
 - [x] Pass top-level non-capturing Mimi callbacks to C with static code lifetime.
   - [ ] Support capturing closures through explicit callback context/trampolines.
 - [x] Build and link C source files alongside Mimi modules with `--c-source`.
