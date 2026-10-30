@@ -644,6 +644,49 @@ fn imports_nested_c_struct_fields() {
 }
 
 #[test]
+fn imports_record_typedefs_for_pointer_parameters() {
+    let directory = std::env::temp_dir().join(format!(
+        "mimi_cimport_record_typedef_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("record.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("record.c");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "typedef struct Point { int x; int y; } Point; int sum_point(Point *value);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <record.h>\nint sum_point(Point *value) { return value->x + value->y; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"record.h\") main :: fn () i32 { point := c.Point {x=7, y=5} c.sum_point(&point) - 12 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn compiles_and_links_c_source_with_mimi_program() {
     let directory = std::env::temp_dir().join(format!("mimi_c_source_link_{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
