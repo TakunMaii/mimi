@@ -1054,6 +1054,49 @@ fn rejects_c_callbacks_that_capture_local_values() {
 }
 
 #[test]
+fn passes_capturing_closures_through_explicit_c_callback_context() {
+    let directory = std::env::temp_dir().join(format!(
+        "mimi_cimport_callback_context_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("callback.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("callback.c");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "int apply_callback(int (*callback)(int, void *), void *context, int value);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <callback.h>\nint apply_callback(int (*callback)(int, void *), void *context, int value) { return callback(value, context); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"callback.h\") main :: fn () i32 { offset := 1 c.apply_callback(fn (value : i32) i32 { value + offset }, 41) - 42 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn imports_c_struct_with_mixed_field_widths() {
     let directory =
         std::env::temp_dir().join(format!("mimi_cimport_mixed_struct_{}", std::process::id()));

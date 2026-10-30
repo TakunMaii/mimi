@@ -38,7 +38,10 @@ scalar signatures and complete struct or union arguments and returns. The
 compiler generates a C adapter for aggregate callback signatures so C's native
 by-value convention is translated to Mimi's internal aggregate convention.
 Top-level non-capturing Mimi functions can be passed as callbacks. Captured
-closures are not yet accepted as C callbacks. Parameter and return qualifiers
+closures can be passed when the C callback's final parameter is `void *` and
+the C API takes an adjacent `void *` context parameter after the callback;
+Mimi passes the closure environment as that context automatically. Other
+capturing callback signatures are rejected. Parameter and return qualifiers
 are retained in imported metadata. Declarations using non-default calling
 conventions are skipped because the native backends currently implement the
 platform C convention.
@@ -71,7 +74,8 @@ into the output. Use `-I`, `-L`, and `-l` for header and library search paths.
 
 The importer currently skips declarations it cannot represent. It does not
 provide a general C ABI for bitfields that cross their declared integer storage
-unit, opaque incomplete record field access, captured callbacks, arbitrary
+unit, opaque incomplete record field access, callbacks without a compatible
+context parameter, arbitrary
 macros, `long double`, or automatic conversion between Mimi slices and C
 strings. C strings can be passed from literals or explicit byte pointers.
 Variadic imports apply

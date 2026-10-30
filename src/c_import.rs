@@ -1511,12 +1511,15 @@ fn declarations_from_ast_with_shims(
         let mut parameter_c_types = Vec::new();
         let mut parameter_qualifiers = Vec::new();
         let mut has_aggregate_parameter = false;
+        let mut has_context_callback = false;
         let mut supported = true;
-        for (index, child) in children
+        let parameter_children = children
             .iter()
             .filter(|child| child.get("kind").and_then(Json::string) == Some("ParmVarDecl"))
-            .enumerate()
-        {
+            .collect::<Vec<_>>();
+        let mut index = 0;
+        while index < parameter_children.len() {
+            let child = parameter_children[index];
             let Some(type_name) = child
                 .get("type")
                 .and_then(|ty| ty.get("qualType"))
@@ -1525,15 +1528,38 @@ fn declarations_from_ast_with_shims(
                 supported = false;
                 break;
             };
-            let Some(data_type) = c_type(type_name, &alias_types) else {
+            let Some(mut data_type) = c_type(type_name, &alias_types) else {
                 supported = false;
                 break;
             };
+            let mut consumes_context = false;
+            if let DataType::Pointer(function) = data_type
+                && let DataType::Function(callback_parameters, result) = *function
+                && callback_parameters.last().is_some_and(|parameter| {
+                    matches!(parameter, DataType::Pointer(inner) if **inner == DataType::Void)
+                })
+                && parameter_children.get(index + 1).is_some_and(|context| {
+                    context
+                        .get("type")
+                        .and_then(|ty| ty.get("qualType"))
+                        .and_then(Json::string)
+                        .and_then(|name| c_type(name, &alias_types))
+                        .is_some_and(|ty| matches!(ty, DataType::Pointer(inner) if *inner == DataType::Void))
+                })
+            {
+                data_type = DataType::Function(
+                    Box::leak(callback_parameters[..callback_parameters.len() - 1].to_vec().into_boxed_slice()),
+                    result,
+                );
+                consumes_context = true;
+                has_context_callback = true;
+            }
             let abi_type = c_abi_type(data_type, &enum_underlying_types);
             let is_aggregate = is_complete_c_aggregate(abi_type, record_layouts);
             has_aggregate_parameter |= is_aggregate;
             if !is_supported_c_abi_type(abi_type)
                 && !is_supported_c_callback_abi_type(abi_type, record_layouts)
+                && !matches!(data_type, DataType::Function(_, _))
                 && !is_aggregate
             {
                 supported = false;
@@ -1547,6 +1573,17 @@ fn declarations_from_ast_with_shims(
             parameters.push((parameter_name, data_type));
             parameter_c_types.push(type_name.to_string());
             parameter_qualifiers.push(c_qualifiers(type_name));
+            if consumes_context {
+                let context = parameter_children[index + 1];
+                let context_type = context
+                    .get("type")
+                    .and_then(|ty| ty.get("qualType"))
+                    .and_then(Json::string)
+                    .expect("validated callback context parameter type");
+                parameter_c_types.push(context_type.to_string());
+                index += 1;
+            }
+            index += 1;
         }
         let Some(type_name) = declaration
             .get("type")
@@ -1573,7 +1610,10 @@ fn declarations_from_ast_with_shims(
         let return_qualifiers = c_qualifiers(return_name);
         let abi_return_type = c_abi_type(return_type, &enum_underlying_types);
         let aggregate_return = is_complete_c_aggregate(abi_return_type, record_layouts);
-        if !supported || (!is_supported_c_abi_type(abi_return_type) && !aggregate_return) {
+        if !supported
+            || (has_context_callback && (has_aggregate_parameter || aggregate_return))
+            || (!is_supported_c_abi_type(abi_return_type) && !aggregate_return)
+        {
             continue;
         }
         let mut link_name = name.to_string();

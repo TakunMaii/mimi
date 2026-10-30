@@ -58,6 +58,6 @@ imports while preserving C types, layout, and target ABI rules.
   - [x] Pass narrow integer values with C default-promotion semantics.
   - [x] Promote `f32` arguments to `f64` on x86_64 and AArch64.
 - [x] Pass top-level non-capturing Mimi callbacks to C with static code lifetime.
-  - [ ] Support capturing closures through explicit callback context/trampolines.
+  - [x] Pass capturing closures through adjacent C callback and `void *` context parameters.
 - [x] Build and link C source files alongside Mimi modules with `--c-source`.
 - [x] Document Clang discovery, target/sysroot setup, linking, and unsupported constructs.
