@@ -22,7 +22,7 @@ imports while preserving C types, layout, and target ABI rules.
     - [x] Apply C enum/integer compatibility during type checking without weakening Mimi enums.
 - [x] Parse ordinary C pointer and function-pointer spellings.
 - [x] Pass top-level non-capturing Mimi functions as scalar C callbacks.
-  - [ ] Support callback parameters with aggregate C ABI arguments or returns.
+  - [x] Support callback parameters with aggregate C ABI arguments or returns.
 - [x] Preserve C qualifiers and calling convention metadata.
   - [x] Retain parameter/return qualifiers and calling convention in AST/HIR.
   - [x] Skip declarations using non-default calling conventions not supported by the native backends.

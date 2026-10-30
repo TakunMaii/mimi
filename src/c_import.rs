@@ -272,9 +272,9 @@ pub(crate) fn expand_with_shims(
     }
     let mut defines = defines.to_vec();
     defines.extend(source_defines);
-    for (alias, path) in imports {
+    for (alias, path) in &imports {
         let (declarations, shims) =
-            import_header_with_shims(&path, target, include_paths, &defines, sysroot)?;
+            import_header_with_shims(path, target, include_paths, &defines, sysroot)?;
         generated_sources.extend(
             shims
                 .into_iter()
@@ -349,7 +349,396 @@ pub(crate) fn expand_with_shims(
         );
     }
     rewrite_c_aliases(&mut output, &aliases);
+    prepare_aggregate_callback_adapters(&mut output, &mut generated_sources, &imports)?;
     Ok((output, generated_sources))
+}
+
+fn prepare_aggregate_callback_adapters(
+    nodes: &mut Vec<ASTNode>,
+    generated_sources: &mut Vec<String>,
+    imports: &[(String, String)],
+) -> Result<(), String> {
+    let records = nodes
+        .iter()
+        .filter_map(|node| match node {
+            ASTNode::CTypeRecordLayout { name, is_union, .. } => Some((name.as_str(), *is_union)),
+            _ => None,
+        })
+        .collect::<HashMap<_, _>>();
+    let callbacks = nodes
+        .iter()
+        .filter_map(|node| match node {
+            ASTNode::ExternalFunction {
+                name, parameters, ..
+            } => Some((
+                name.clone(),
+                parameters
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, (_, data_type))| {
+                        let DataType::Pointer(inner) = data_type else {
+                            return None;
+                        };
+                        let DataType::Function(callback_parameters, result) = **inner else {
+                            return None;
+                        };
+                        has_aggregate_callback_abi(callback_parameters, *result, &records)
+                            .then(|| (index, callback_parameters.to_vec(), *result))
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+            _ => None,
+        })
+        .filter(|(_, callbacks)| !callbacks.is_empty())
+        .collect::<Vec<_>>();
+    if callbacks.is_empty() {
+        return Ok(());
+    }
+    let functions = nodes
+        .iter()
+        .filter_map(|node| match node {
+            ASTNode::FunctionDefinition {
+                name,
+                parameters,
+                return_type,
+                ..
+            } => Some((
+                name.clone(),
+                parameters.iter().map(|(_, ty)| *ty).collect::<Vec<_>>(),
+                *return_type,
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut adapters = HashMap::new();
+    let mut declarations = Vec::new();
+    for (external_name, signatures) in callbacks {
+        let alias = external_name
+            .split_once('.')
+            .map(|(alias, _)| alias)
+            .unwrap_or_default();
+        let Some((_, header)) = imports.iter().find(|(candidate, _)| candidate == alias) else {
+            continue;
+        };
+        for (argument_index, parameters, result) in signatures {
+            if !parameters
+                .iter()
+                .all(|ty| is_supported_callback_c_type(*ty, &records))
+                || !is_supported_callback_c_type(result, &records)
+            {
+                continue;
+            }
+            for (target, target_parameters, target_result) in &functions {
+                if *target_parameters != parameters || *target_result != result {
+                    continue;
+                }
+                let adapter = format!("__mimi_c_aggregate_callback_{}", adapters.len());
+                generated_sources.push(generate_aggregate_callback_adapter(
+                    header,
+                    &adapter,
+                    target,
+                    &parameters,
+                    result,
+                    &records,
+                )?);
+                adapters.insert(
+                    (external_name.clone(), argument_index, target.clone()),
+                    adapter.clone(),
+                );
+                declarations.push(ASTNode::ExternalFunction {
+                    name: adapter,
+                    link_name: None,
+                    parameters: parameters
+                        .iter()
+                        .enumerate()
+                        .map(|(index, ty)| (format!("arg{index}"), *ty))
+                        .collect(),
+                    return_type: result,
+                    variadic: false,
+                    calling_convention: "cdecl".into(),
+                    parameter_qualifiers: vec![Vec::new(); parameters.len()],
+                    return_qualifiers: Vec::new(),
+                });
+            }
+        }
+    }
+    if adapters.is_empty() {
+        return Ok(());
+    }
+    for node in nodes.iter_mut() {
+        rewrite_callback_expression_in_node(node, &adapters);
+    }
+    nodes.extend(declarations);
+    Ok(())
+}
+
+fn has_aggregate_callback_abi(
+    parameters: &[DataType],
+    result: DataType,
+    records: &HashMap<&str, bool>,
+) -> bool {
+    parameters
+        .iter()
+        .any(|ty| matches!(ty, DataType::Struct(name) if records.contains_key(name)))
+        || matches!(result, DataType::Struct(name) if records.contains_key(name))
+}
+
+fn is_supported_callback_c_type(data_type: DataType, records: &HashMap<&str, bool>) -> bool {
+    matches!(
+        data_type,
+        DataType::Void
+            | DataType::U8
+            | DataType::U16
+            | DataType::U32
+            | DataType::U64
+            | DataType::I8
+            | DataType::I16
+            | DataType::I32
+            | DataType::I64
+            | DataType::F32
+            | DataType::F64
+            | DataType::Bool
+            | DataType::CEnum(_)
+    ) || matches!(data_type, DataType::Struct(name) if records.contains_key(name))
+        || matches!(data_type, DataType::Pointer(inner) if is_supported_callback_c_type(*inner, records) && !matches!(*inner, DataType::Struct(_)))
+}
+
+fn callback_c_type(data_type: DataType, records: &HashMap<&str, bool>) -> Result<String, String> {
+    Ok(match data_type {
+        DataType::Void => "void".into(),
+        DataType::U8 => "unsigned char".into(),
+        DataType::U16 => "unsigned short".into(),
+        DataType::U32 => "unsigned int".into(),
+        DataType::U64 => "unsigned long long".into(),
+        DataType::I8 => "signed char".into(),
+        DataType::I16 => "short".into(),
+        DataType::I32 => "int".into(),
+        DataType::I64 => "long long".into(),
+        DataType::F32 => "float".into(),
+        DataType::F64 => "double".into(),
+        DataType::Bool => "_Bool".into(),
+        DataType::CEnum(name) => format!("enum {}", name.rsplit('.').next().unwrap_or(name)),
+        DataType::Struct(name) => {
+            let tag = name.rsplit('.').next().unwrap_or(name);
+            if records.get(name).copied().unwrap_or(false) {
+                format!("union {tag}")
+            } else {
+                format!("struct {tag}")
+            }
+        }
+        DataType::Pointer(inner) => format!("{} *", callback_c_type(*inner, records)?),
+        _ => return Err(format!("unsupported C callback type {data_type:?}")),
+    })
+}
+
+fn generate_aggregate_callback_adapter(
+    header: &str,
+    adapter: &str,
+    target: &str,
+    parameters: &[DataType],
+    result: DataType,
+    records: &HashMap<&str, bool>,
+) -> Result<String, String> {
+    let include = header.replace('\\', "\\\\").replace('"', "\\\"");
+    let result_type = callback_c_type(result, records)?;
+    let aggregate_result = matches!(result, DataType::Struct(_));
+    let mut target_parameters = Vec::new();
+    if aggregate_result {
+        target_parameters.push(format!("{result_type} *result"));
+    }
+    for (index, parameter) in parameters.iter().enumerate() {
+        let parameter_type = callback_c_type(*parameter, records)?;
+        target_parameters.push(if matches!(parameter, DataType::Struct(_)) {
+            format!("{parameter_type} *arg{index}")
+        } else {
+            format!("{parameter_type} arg{index}")
+        });
+    }
+    let target_result = if aggregate_result {
+        "void"
+    } else {
+        &result_type
+    };
+    let target_symbol = format!("_{}", target.replace('\\', "\\\\").replace('"', "\\\""));
+    let mut source = format!(
+        "#include \"{include}\"\nextern {target_result} __mimi_callback_target({}) __asm__(\"{target_symbol}\");\n",
+        if target_parameters.is_empty() {
+            "void".into()
+        } else {
+            target_parameters.join(", ")
+        }
+    );
+    let wrapper_parameters = parameters
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| format!("{} arg{index}", callback_c_type(*ty, records).unwrap()))
+        .collect::<Vec<_>>();
+    source.push_str(&format!(
+        "{result_type} {adapter}({}) {{\n",
+        if wrapper_parameters.is_empty() {
+            "void".into()
+        } else {
+            wrapper_parameters.join(", ")
+        }
+    ));
+    let mut arguments = Vec::new();
+    if aggregate_result {
+        source.push_str(&format!("    {result_type} result;\n"));
+        arguments.push("&result".to_string());
+    }
+    arguments.extend(parameters.iter().enumerate().map(|(index, ty)| {
+        if matches!(ty, DataType::Struct(_)) {
+            format!("&arg{index}")
+        } else {
+            format!("arg{index}")
+        }
+    }));
+    if aggregate_result {
+        source.push_str(&format!(
+            "    __mimi_callback_target({});\n    return result;\n}}\n",
+            arguments.join(", ")
+        ));
+    } else if result == DataType::Void {
+        source.push_str(&format!(
+            "    __mimi_callback_target({});\n}}\n",
+            arguments.join(", ")
+        ));
+    } else {
+        source.push_str(&format!(
+            "    return __mimi_callback_target({});\n}}\n",
+            arguments.join(", ")
+        ));
+    }
+    Ok(source)
+}
+
+fn rewrite_callback_expression_in_node(
+    node: &mut ASTNode,
+    adapters: &HashMap<(String, usize, String), String>,
+) {
+    match node {
+        ASTNode::VariableDefinition { value, .. }
+        | ASTNode::CompileTimeConstant { value, .. }
+        | ASTNode::Expression(value) => rewrite_callback_expression(value, adapters),
+        ASTNode::FunctionDefinition { body, .. } => rewrite_callback_expression(body, adapters),
+        ASTNode::Public(inner) => rewrite_callback_expression_in_node(inner, adapters),
+        _ => {}
+    }
+}
+
+fn rewrite_callback_expression(
+    expression: &mut Expression,
+    adapters: &HashMap<(String, usize, String), String>,
+) {
+    match expression {
+        Expression::Block(nodes) => {
+            for node in nodes {
+                rewrite_callback_expression_in_node(node, adapters);
+            }
+        }
+        Expression::Call { name, arguments } => {
+            for argument in arguments.iter_mut() {
+                rewrite_callback_expression(argument, adapters);
+            }
+            for (index, argument) in arguments.iter_mut().enumerate() {
+                if let Expression::Identifier(target) = argument
+                    && let Some(adapter) = adapters.get(&(name.clone(), index, target.clone()))
+                {
+                    *target = adapter.clone();
+                }
+            }
+        }
+        Expression::CallValue { callee, arguments } => {
+            let qualified_name = expression_path(callee);
+            rewrite_callback_expression(callee, adapters);
+            for argument in arguments.iter_mut() {
+                rewrite_callback_expression(argument, adapters);
+            }
+            if let Some(name) = qualified_name {
+                for (index, argument) in arguments.iter_mut().enumerate() {
+                    if let Expression::Identifier(target) = argument
+                        && let Some(adapter) = adapters.get(&(name.clone(), index, target.clone()))
+                    {
+                        *target = adapter.clone();
+                    }
+                }
+            }
+        }
+        Expression::Negate(inner)
+        | Expression::Not(inner)
+        | Expression::AddressOf(inner)
+        | Expression::Dereference(inner)
+        | Expression::MemberAccess { object: inner, .. } => {
+            rewrite_callback_expression(inner, adapters)
+        }
+        Expression::Add(left, right)
+        | Expression::Subtract(left, right)
+        | Expression::Multiply(left, right)
+        | Expression::Divide(left, right)
+        | Expression::Remainder(left, right)
+        | Expression::Equal(left, right)
+        | Expression::NotEqual(left, right)
+        | Expression::LessThan(left, right)
+        | Expression::LessThanOrEqual(left, right)
+        | Expression::GreaterThan(left, right)
+        | Expression::GreaterThanOrEqual(left, right)
+        | Expression::And(left, right)
+        | Expression::Or(left, right)
+        | Expression::Index {
+            object: left,
+            index: right,
+        } => {
+            rewrite_callback_expression(left, adapters);
+            rewrite_callback_expression(right, adapters);
+        }
+        Expression::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            rewrite_callback_expression(condition, adapters);
+            rewrite_callback_expression(then_branch, adapters);
+            rewrite_callback_expression(else_branch, adapters);
+        }
+        Expression::StructLiteral { fields, .. } => {
+            for (_, value) in fields {
+                rewrite_callback_expression(value, adapters);
+            }
+        }
+        Expression::ArrayLiteral(values) => {
+            for value in values {
+                rewrite_callback_expression(value, adapters);
+            }
+        }
+        Expression::Slice { object, start, end } => {
+            rewrite_callback_expression(object, adapters);
+            for bound in start.iter_mut().chain(end.iter_mut()) {
+                rewrite_callback_expression(bound, adapters);
+            }
+        }
+        Expression::Match { value, arms } => {
+            rewrite_callback_expression(value, adapters);
+            for (_, arm) in arms {
+                rewrite_callback_expression(arm, adapters);
+            }
+        }
+        Expression::Lambda { body, .. } => rewrite_callback_expression(body, adapters),
+        Expression::Identifier(_)
+        | Expression::LiteralNumber(_)
+        | Expression::LiteralString(_)
+        | Expression::LiteralBool(_)
+        | Expression::StaticAccess { .. } => {}
+    }
+}
+
+fn expression_path(expression: &Expression) -> Option<String> {
+    match expression {
+        Expression::Identifier(name) => Some(name.clone()),
+        Expression::MemberAccess { object, member } => {
+            Some(format!("{}.{}", expression_path(object)?, member))
+        }
+        _ => None,
+    }
 }
 
 fn rewrite_c_aliases(nodes: &mut [ASTNode], aliases: &HashMap<String, DataType>) {
@@ -1143,7 +1532,10 @@ fn declarations_from_ast_with_shims(
             let abi_type = c_abi_type(data_type, &enum_underlying_types);
             let is_aggregate = is_complete_c_aggregate(abi_type, record_layouts);
             has_aggregate_parameter |= is_aggregate;
-            if !is_supported_c_abi_type(abi_type) && !is_aggregate {
+            if !is_supported_c_abi_type(abi_type)
+                && !is_supported_c_callback_abi_type(abi_type, record_layouts)
+                && !is_aggregate
+            {
                 supported = false;
                 break;
             }
@@ -1551,6 +1943,28 @@ fn is_supported_c_abi_type(data_type: DataType) -> bool {
         | DataType::Void => true,
         _ => false,
     }
+}
+
+fn is_supported_c_callback_abi_type(
+    data_type: DataType,
+    record_layouts: &HashMap<String, CRecordLayout>,
+) -> bool {
+    let DataType::Pointer(inner) = data_type else {
+        return false;
+    };
+    let DataType::Function(parameters, result) = *inner else {
+        return false;
+    };
+    let has_aggregate = parameters
+        .iter()
+        .any(|ty| is_complete_c_aggregate(*ty, record_layouts))
+        || is_complete_c_aggregate(*result, record_layouts);
+    has_aggregate
+        && parameters.iter().all(|ty| {
+            is_supported_c_scalar_abi_type(*ty) || is_complete_c_aggregate(*ty, record_layouts)
+        })
+        && (is_supported_c_scalar_abi_type(*result)
+            || is_complete_c_aggregate(*result, record_layouts))
 }
 
 fn is_supported_c_scalar_abi_type(data_type: DataType) -> bool {

@@ -942,6 +942,49 @@ fn passes_top_level_mimi_functions_as_c_callbacks() {
 }
 
 #[test]
+fn passes_aggregate_arguments_through_c_callbacks() {
+    let directory = std::env::temp_dir().join(format!(
+        "mimi_cimport_aggregate_callback_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("callback.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("callback.c");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "typedef struct Pair { int left; int right; } Pair; int apply_pair(int (*callback)(struct Pair), struct Pair value); int apply_pair_return(struct Pair (*callback)(struct Pair), struct Pair value);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <callback.h>\nint apply_pair(int (*callback)(struct Pair), struct Pair value) { return callback(value); }\nint apply_pair_return(struct Pair (*callback)(struct Pair), struct Pair value) { struct Pair result = callback(value); return result.left == 20 && result.right == 24 ? 0 : 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"callback.h\") sum_pair :: fn (value : c.Pair) i32 { value.left + value.right } bump_pair :: fn (value : c.Pair) c.Pair { c.Pair {left=value.left + 1, right=value.right + 1} } main :: fn () i32 { value := c.Pair {left=19, right=23} c.apply_pair(sum_pair, value) - 42 + c.apply_pair_return(bump_pair, value) }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn passes_null_pointer_literals_to_c() {
     let directory =
         std::env::temp_dir().join(format!("mimi_cimport_null_pointer_{}", std::process::id()));
