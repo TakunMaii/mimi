@@ -35,7 +35,7 @@ imports while preserving C types, layout, and target ABI rules.
 
 ## C Layout And ABI
 
-- [ ] Add an explicit C type representation that remains distinct from Mimi types.
+- [x] Retain an explicit C type representation distinct from Mimi types through HIR.
 - [x] Query target C record layouts from Clang, including size, alignment, and offsets for supported named structs.
 - [x] Import simple named C struct and union fields with scalar, pointer, and nested record members.
 - [x] Import signed and unsigned bitfields contained within their declared storage unit.

@@ -249,6 +249,10 @@ pub(crate) enum ASTNode {
         field_offsets: Vec<(String, u64)>,
         bit_fields: Vec<(String, u8, u8)>,
     },
+    CTypeInfo {
+        name: String,
+        c_type: crate::c_type::CType,
+    },
     Public(Box<ASTNode>),
 }
 

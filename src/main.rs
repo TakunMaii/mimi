@@ -1,4 +1,5 @@
 mod c_import;
+mod c_type;
 mod codegen;
 mod codegen_x86_64;
 mod float8;
@@ -549,6 +550,9 @@ fn qualify_imported_node(
                 qualify_imported_node((**declaration).clone(), package, local_type_names);
         }
         ASTNode::CTypeEnumRepresentation { name, .. } => {
+            *name = format!("{package}.{name}");
+        }
+        ASTNode::CTypeInfo { name, .. } => {
             *name = format!("{package}.{name}");
         }
         ASTNode::Break

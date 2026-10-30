@@ -1767,6 +1767,7 @@ fn check_statement(
             infer_expression(body, scopes, functions, structs, None)?;
             Ok(())
         }
+        ASTNode::CTypeInfo { .. } => Ok(()),
     }
 }
 

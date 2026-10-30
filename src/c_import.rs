@@ -324,6 +324,9 @@ pub(crate) fn expand_with_shims(
                 ASTNode::CTypeEnumRepresentation { name, .. } => {
                     *name = format!("{alias}.{name}");
                 }
+                ASTNode::CTypeInfo { name, .. } => {
+                    *name = format!("{alias}.{name}");
+                }
                 ASTNode::CTypeRecordLayout { name, .. } => {
                     *name = format!("{alias}.{name}");
                 }
@@ -1355,6 +1358,10 @@ fn declarations_from_ast_with_shims(
             .unwrap_or(DataType::I32);
         let enum_name = Box::leak(name.to_string().into_boxed_str());
         let enum_type = DataType::CEnum(enum_name);
+        output.push(ASTNode::CTypeInfo {
+            name: name.to_string(),
+            c_type: crate::c_type::from_clang_spelling(&format!("enum {name}")),
+        });
         alias_types.insert(name.to_string(), enum_type);
         enum_underlying_types.insert(name.to_string(), data_type);
         let variants = declaration
@@ -1417,6 +1424,10 @@ fn declarations_from_ast_with_shims(
                 imported_fields.clear();
                 break;
             };
+            output.push(ASTNode::CTypeInfo {
+                name: format!("{record_name}.{field_name}"),
+                c_type: crate::c_type::from_clang_spelling(type_name),
+            });
             imported_fields.push((field_name.to_string(), data_type, None, true));
         }
         let layout = record_layouts.get(record_name);
@@ -1485,6 +1496,10 @@ fn declarations_from_ast_with_shims(
         ) && let Some(data_type) = c_type(ty, &alias_types)
         {
             alias_types.insert(name.to_string(), data_type);
+            output.push(ASTNode::CTypeInfo {
+                name: name.to_string(),
+                c_type: crate::c_type::from_clang_spelling(ty),
+            });
             output.push(ASTNode::CTypeAlias {
                 name: name.to_string(),
                 data_type,
@@ -1592,6 +1607,10 @@ fn declarations_from_ast_with_shims(
         else {
             continue;
         };
+        output.push(ASTNode::CTypeInfo {
+            name: name.to_string(),
+            c_type: crate::c_type::from_clang_spelling(type_name),
+        });
         let variadic = type_name.contains("...");
         let calling_convention = declaration
             .get("callingConv")
@@ -1657,6 +1676,10 @@ fn declarations_from_ast_with_shims(
         ) else {
             continue;
         };
+        output.push(ASTNode::CTypeInfo {
+            name: name.to_string(),
+            c_type: crate::c_type::from_clang_spelling(type_name),
+        });
         let Some(data_type) = c_type(type_name, &alias_types) else {
             continue;
         };
@@ -2171,6 +2194,12 @@ mod tests {
         assert!(declarations.iter().any(|declaration| matches!(declaration,
             ASTNode::CTypeEnumRepresentation { name, underlying_type: DataType::I32 }
                 if name == "Color"
+        )));
+        assert!(declarations.iter().any(|declaration| matches!(declaration,
+            ASTNode::CTypeInfo { name, c_type: crate::c_type::CType::Function { parameters, result, .. } }
+                if name == "echo_color"
+                    && parameters == &[crate::c_type::CType::Enum("Color".into())]
+                    && **result == crate::c_type::CType::Enum("Color".into())
         )));
         assert!(declarations.iter().any(|declaration| matches!(declaration,
             ASTNode::ExternalFunction { name, parameters, return_type: DataType::CEnum("Color"), .. }

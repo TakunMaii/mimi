@@ -148,11 +148,15 @@ pub(crate) struct HirModule {
     pub(crate) structs: Vec<HirStruct>,
     pub(crate) c_record_layouts: std::collections::HashMap<String, HirCRecordLayout>,
     pub(crate) c_enum_representations: std::collections::HashMap<String, HirCEnumRepresentation>,
+    pub(crate) c_types: std::collections::HashMap<String, crate::c_type::CType>,
 }
 
 pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
     let mut module = HirModule::default();
     for node in nodes {
+        if let ASTNode::CTypeInfo { name, c_type } = node {
+            module.c_types.insert(name.clone(), c_type.clone());
+        }
         if let ASTNode::CTypeEnumRepresentation {
             name,
             underlying_type,
@@ -1035,6 +1039,7 @@ fn generic_applications(
                 | ASTNode::CDefine { .. }
                 | ASTNode::CTypeAlias { .. }
                 | ASTNode::CTypeEnumRepresentation { .. }
+                | ASTNode::CTypeInfo { .. }
                 | ASTNode::ExternalGlobal { .. }
                 | ASTNode::CTypeRecordLayout { .. } => {}
             }
@@ -1284,6 +1289,7 @@ fn collect_free_names(
                 }
             }
             ASTNode::Public(inner) => node(inner, bound, captures),
+            ASTNode::CTypeInfo { .. } => {}
         }
     }
     match expression {
@@ -1590,6 +1596,7 @@ fn lift_lambdas_in_node(
         | ASTNode::CDefine { .. }
         | ASTNode::CTypeAlias { .. }
         | ASTNode::CTypeEnumRepresentation { .. }
+        | ASTNode::CTypeInfo { .. }
         | ASTNode::ExternalGlobal { .. }
         | ASTNode::CTypeRecordLayout { .. } => {}
     }

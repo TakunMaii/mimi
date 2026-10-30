@@ -44,7 +44,9 @@ Mimi passes the closure environment as that context automatically. Other
 capturing callback signatures are rejected. Parameter and return qualifiers
 are retained in imported metadata. Declarations using non-default calling
 conventions are skipped because the native backends currently implement the
-platform C convention.
+platform C convention. Imported declarations also retain a separate C type
+tree in HIR for pointers, functions, records, enums, scalar widths, and
+qualifiers.
 Records with unsupported field types remain opaque, so APIs that only pass
 pointers to those records can still be imported and called.
 Named C enum tags are retained as imported enum types, with Clang's underlying
