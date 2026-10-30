@@ -2,6 +2,7 @@ mod c_import;
 mod c_type;
 mod codegen;
 mod codegen_x86_64;
+mod diagnostic;
 mod float8;
 mod hir;
 mod layout;
@@ -13,10 +14,62 @@ mod regalloc;
 mod type_checker;
 
 fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        let is_reported_compiler_failure = COMPILER_DIAGNOSTIC_PANIC.with(std::cell::Cell::get);
+        if !is_reported_compiler_failure {
+            eprintln!("internal compiler error: {info}");
+        }
+    }));
     if let Err(error) = run_cli() {
         eprintln!("{error}");
         std::process::exit(1);
     }
+}
+
+thread_local! {
+    static COMPILER_DIAGNOSTIC_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn catch_compiler_failure<T>(
+    source_name: &str,
+    source: &str,
+    phase: &str,
+    operation: impl FnOnce() -> T,
+) -> Result<T, String> {
+    let previous = COMPILER_DIAGNOSTIC_PANIC.with(|flag| flag.replace(true));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation));
+    COMPILER_DIAGNOSTIC_PANIC.with(|flag| flag.set(previous));
+    result.map_err(|payload| {
+        let message = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|message| (*message).to_string())
+            })
+            .unwrap_or_else(|| "compiler operation failed unexpectedly".to_string());
+        diagnostic::render(source_name, source, phase, &message)
+    })
+}
+
+fn parse_source(source_name: &str, source: &str) -> Result<Vec<parser::ASTNode>, String> {
+    let tokens = catch_compiler_failure(source_name, source, "lex", || {
+        lexer::tokenize(source.chars())
+    })?;
+    catch_compiler_failure(source_name, source, "parse", || parser::parse(tokens))
+}
+
+fn render_type_errors(
+    source_name: &str,
+    source: &str,
+    errors: Vec<type_checker::TypeError>,
+) -> String {
+    errors
+        .into_iter()
+        .map(|error| diagnostic::render(source_name, source, "type", &error.message))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn run_cli() -> Result<(), String> {
@@ -168,41 +221,49 @@ fn build_file_for_target_with_c_options(
     {
         import_paths.push(parent.to_path_buf());
     }
-    let ast = parser::parse(lexer::tokenize(source.chars()));
-    let (ast, generated_c_sources) =
-        c_import::expand_with_shims(&ast, target, &import_paths, defines, sysroot)?;
-    type_checker::check_with_import_paths(&ast, &import_paths).map_err(|errors| {
-        errors
-            .into_iter()
-            .map(|error| error.message)
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
+    let ast = parse_source(input, &source)?;
+    let (ast, generated_c_sources) = catch_compiler_failure(input, &source, "C import", || {
+        c_import::expand_with_shims(&ast, target, &import_paths, defines, sysroot)
+    })??;
+    catch_compiler_failure(input, &source, "type check", || {
+        type_checker::check_with_import_paths(&ast, &import_paths)
+    })?
+    .map_err(|errors| render_type_errors(input, &source, errors))?;
     let mut compilation_ast = ast.clone();
-    collect_imported_functions(
-        &ast,
-        &import_paths,
-        "",
-        &mut std::collections::HashSet::new(),
-        &mut compilation_ast,
-    )?;
-    let hir = hir::lower_ast(&compilation_ast);
+    catch_compiler_failure(input, &source, "import resolution", || {
+        collect_imported_functions(
+            &ast,
+            &import_paths,
+            "",
+            &mut std::collections::HashSet::new(),
+            &mut compilation_ast,
+        )
+    })??;
+    let hir = catch_compiler_failure(input, &source, "HIR lowering", || {
+        hir::lower_ast(&compilation_ast)
+    })?;
     let layout = <lir::TargetArch as lir::Target>::data_layout(&target);
-    let mir = mir::lower_hir_with_layout(&hir, layout);
-    let lir = lir::lower_mir(&mir, &target);
-    codegen::compile_executable_with_options(
-        &lir,
-        std::path::Path::new(output),
-        &codegen::LinkOptions {
-            library_paths: library_paths.to_vec(),
-            libraries: libraries.to_vec(),
-            c_sources: c_sources.to_vec(),
-            generated_c_sources,
-            include_paths: import_paths.clone(),
-            defines: defines.to_vec(),
-            sysroot: sysroot.map(std::path::Path::to_path_buf),
-        },
-    )
+    let mir = catch_compiler_failure(input, &source, "MIR lowering", || {
+        mir::lower_hir_with_layout(&hir, layout)
+    })?;
+    let lir = catch_compiler_failure(input, &source, "LIR lowering", || {
+        lir::lower_mir(&mir, &target)
+    })?;
+    catch_compiler_failure(input, &source, "code generation", || {
+        codegen::compile_executable_with_options(
+            &lir,
+            std::path::Path::new(output),
+            &codegen::LinkOptions {
+                library_paths: library_paths.to_vec(),
+                libraries: libraries.to_vec(),
+                c_sources: c_sources.to_vec(),
+                generated_c_sources,
+                include_paths: import_paths.clone(),
+                defines: defines.to_vec(),
+                sysroot: sysroot.map(std::path::Path::to_path_buf),
+            },
+        )
+    })?
 }
 
 fn collect_imported_functions(
@@ -225,7 +286,7 @@ fn collect_imported_functions(
         }
         let source = std::fs::read_to_string(&source_path)
             .map_err(|error| format!("cannot read '{}': {error}", source_path.display()))?;
-        let module_nodes = parser::parse(lexer::tokenize(source.chars()));
+        let module_nodes = parse_source(&source_path.display().to_string(), &source)?;
         let local_type_names = module_nodes
             .iter()
             .map(|node| match node {
@@ -244,13 +305,11 @@ fn collect_imported_functions(
         {
             module_paths.push(parent.to_path_buf());
         }
-        type_checker::check_with_import_paths(&module_nodes, &module_paths).map_err(|errors| {
-            errors
-                .into_iter()
-                .map(|error| error.message)
-                .collect::<Vec<_>>()
-                .join("\n")
-        })?;
+        let module_name = source_path.display().to_string();
+        catch_compiler_failure(&module_name, &source, "type check", || {
+            type_checker::check_with_import_paths(&module_nodes, &module_paths)
+        })?
+        .map_err(|errors| render_type_errors(&module_name, &source, errors))?;
 
         let package = if namespace.is_empty() {
             alias.clone()
