@@ -33,13 +33,15 @@ Scalar C functions, scalar and supported pointer/record typedef names (for examp
 and simple named struct and union fields are imported. Named records use Clang's
 target size, alignment, and field offsets. Union literals initialize one member.
 Complete struct and union values can be passed to and returned from C functions
-through small Clang-compiled ABI thunks. Function pointer parameters are still
-imported for scalar signatures. Parameter and return qualifiers are retained in
-imported metadata. Declarations using non-default calling conventions are
-skipped because the native backends currently implement the platform C
-convention. Top-level non-capturing Mimi functions can be
-passed as callbacks; captured closures and callback signatures with aggregate
-arguments or returns are not supported.
+through small Clang-compiled ABI thunks. Function pointer parameters support
+scalar signatures and complete struct or union arguments and returns. The
+compiler generates a C adapter for aggregate callback signatures so C's native
+by-value convention is translated to Mimi's internal aggregate convention.
+Top-level non-capturing Mimi functions can be passed as callbacks. Captured
+closures are not yet accepted as C callbacks. Parameter and return qualifiers
+are retained in imported metadata. Declarations using non-default calling
+conventions are skipped because the native backends currently implement the
+platform C convention.
 Records with unsupported field types remain opaque, so APIs that only pass
 pointers to those records can still be imported and called.
 Named C enum tags are retained as imported enum types, with Clang's underlying
@@ -70,8 +72,9 @@ into the output. Use `-I`, `-L`, and `-l` for header and library search paths.
 The importer currently skips declarations it cannot represent. It does not
 provide a general C ABI for bitfields that cross their declared integer storage
 unit, opaque incomplete record field access, captured callbacks, arbitrary
-macros, `long double`, or
-automatic conversion between Mimi slices and C strings. Variadic imports apply
+macros, `long double`, or automatic conversion between Mimi slices and C
+strings. C strings can be passed from literals or explicit byte pointers.
+Variadic imports apply
 the default promotions for integer and floating-point arguments on x86_64 and
 AArch64.
 Aggregate thunks currently cover complete struct and union parameters and
