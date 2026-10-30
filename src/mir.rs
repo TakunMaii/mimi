@@ -670,6 +670,10 @@ impl Builder {
                     }
                     if let Some(global) = self.external_globals.get(&name).cloned() {
                         let address = self.external_global_address(&global);
+                        if matches!(global.data_type, HirType::Named(_)) {
+                            self.value_types.insert(address, global.data_type.clone());
+                            return Some(address);
+                        }
                         let result = self.value();
                         self.emit_load_indirect(result, address, Some(&global.data_type));
                         self.value_types.insert(result, global.data_type);

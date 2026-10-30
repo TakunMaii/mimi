@@ -1132,7 +1132,12 @@ fn declarations_from_ast(
         let Some(data_type) = c_type(type_name, &alias_types) else {
             continue;
         };
-        if !is_supported_c_abi_type(data_type) || data_type == DataType::Void {
+        let complete_aggregate = matches!(data_type, DataType::Struct(name)
+            if record_layouts.contains_key(name)
+                && !type_name.trim_start().starts_with("const "));
+        if (!is_supported_c_abi_type(data_type) && !complete_aggregate)
+            || data_type == DataType::Void
+        {
             continue;
         }
         output.push(ASTNode::ExternalGlobal {

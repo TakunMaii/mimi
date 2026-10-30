@@ -802,6 +802,49 @@ fn imports_mutable_c_global_variables() {
 }
 
 #[test]
+fn imports_mutable_c_aggregate_globals() {
+    let directory = std::env::temp_dir().join(format!(
+        "mimi_cimport_aggregate_global_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("globals.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("globals.c");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "struct Point { int x; int y; }; extern struct Point shared_point; int verify_point(struct Point *point);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <globals.h>\nstruct Point shared_point = {3, 4};\nint verify_point(struct Point *point) { return point->x == 9 && point->y == 4 ? 0 : 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"globals.h\") main :: fn () i32 { before := c.shared_point.x + c.shared_point.y c.shared_point.x = 9 c.verify_point(&c.shared_point) + if before == 7 && c.shared_point.x == 9 {return 0} else {return 1} 0 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn rejects_writes_to_const_c_globals() {
     let directory =
         std::env::temp_dir().join(format!("mimi_cimport_const_global_{}", std::process::id()));

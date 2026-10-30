@@ -39,6 +39,8 @@ Named C enum tags and typedefs are represented by their fixed integer type when
 Clang reports one, or by the target's default `int` representation otherwise.
 External scalar and pointer globals are available through the package namespace;
 top-level `const` globals are read-only in Mimi.
+Mutable globals of complete imported structs and unions support field reads,
+field writes, and taking the address of the global aggregate.
 Integer and floating-point scalar calls are compiled and linked against C on
 both supported Apple targets.
 String literals passed to imported `char *` parameters are emitted as
@@ -60,10 +62,9 @@ into the output. Use `-I`, `-L`, and `-l` for header and library search paths.
 
 The importer currently skips declarations it cannot represent. It does not
 provide a general C ABI for structs and unions passed by value, multi-byte
-bitfields, opaque incomplete record field access, thread-local or aggregate C
-globals, variadic functions, callbacks,
-arbitrary macros, `long double`, or automatic conversion between Mimi slices
-and C strings.
+bitfields, opaque incomplete record field access, thread-local or const
+aggregate C globals, variadic functions, callbacks, arbitrary macros,
+`long double`, or automatic conversion between Mimi slices and C strings.
 Simple imported struct field access uses Mimi's current aggregate layout and
 uses the Clang layout metadata; such structs must not be passed by value to C
 functions until target ABI classification is implemented.
