@@ -31,7 +31,7 @@ imports while preserving C types, layout, and target ABI rules.
 - [ ] Add an explicit C type representation that remains distinct from Mimi types.
 - [x] Query target C record layouts from Clang, including size, alignment, and offsets for supported named structs.
 - [x] Import simple named C struct fields with scalar and pointer members.
-  - [ ] Support nested records, unions, and bitfields.
+  - [ ] Support unions and bitfields.
 - [ ] Classify C aggregate arguments and returns for each supported target ABI.
 - [ ] Support C global variables and thread-local declarations.
 - [ ] Add cross-target ABI tests for scalar and aggregate C calls.

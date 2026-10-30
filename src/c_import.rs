@@ -742,9 +742,11 @@ fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, 
         };
         let raw_content = content;
         let content = raw_content.trim();
-        if let Some(record) = content
-            .strip_prefix("struct ")
-            .or_else(|| content.strip_prefix("union "))
+        let depth = raw_content.bytes().take_while(|byte| *byte == b' ').count();
+        if depth <= 1
+            && let Some(record) = content
+                .strip_prefix("struct ")
+                .or_else(|| content.strip_prefix("union "))
         {
             current = Some((record.trim().to_string(), Vec::new()));
             continue;
@@ -773,7 +775,6 @@ fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, 
         let Some((_, fields)) = current.as_mut() else {
             continue;
         };
-        let depth = raw_content.bytes().take_while(|byte| *byte == b' ').count();
         if depth < 2 {
             continue;
         }
@@ -1214,6 +1215,20 @@ mod tests {
         assert_eq!(
             point.field_offsets,
             [("x".into(), 0), ("y".into(), 4), ("z".into(), 8)]
+        );
+    }
+
+    #[test]
+    fn parses_nested_record_fields_without_restarting_the_outer_record() {
+        let layouts = parse_record_layouts(
+            "         0 | struct Outer\n         0 |   struct Inner inner\n         8 |   int tail\n           | [sizeof=12, align=4]\n",
+        )
+        .unwrap();
+        let outer = layouts.get("Outer").unwrap();
+        assert_eq!(outer.size_bytes, 12);
+        assert_eq!(
+            outer.field_offsets,
+            [("inner".into(), 0), ("tail".into(), 8)]
         );
     }
 

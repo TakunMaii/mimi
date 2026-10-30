@@ -603,6 +603,47 @@ fn imports_c_enum_function_signatures() {
 }
 
 #[test]
+fn imports_nested_c_struct_fields() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_cimport_nested_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("nested.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("nested.c");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "struct Inner { char tag; int count; }; struct Outer { struct Inner inner; int tail; }; int verify_outer(struct Outer *value);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <nested.h>\nint verify_outer(struct Outer *value) { return value->inner.tag == 7 && value->inner.count == 5 && value->tail == 3 && sizeof(*value) == 12 ? 0 : 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"nested.h\") main :: fn () i32 { value := c.Outer {inner=c.Inner {tag=7, count=5}, tail=3} c.verify_outer(&value) }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn compiles_and_links_c_source_with_mimi_program() {
     let directory = std::env::temp_dir().join(format!("mimi_c_source_link_{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
