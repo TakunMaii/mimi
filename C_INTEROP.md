@@ -75,9 +75,9 @@ into the output. Use `-I`, `-L`, and `-l` for header and library search paths.
 ## Current Limits
 
 The importer currently skips declarations it cannot represent. It does not
-provide a general C ABI for bitfields that cross their declared integer storage
-unit, opaque incomplete record field access, callbacks without a compatible
-context parameter, arbitrary
+provide bitfield access when a field is wider than its declared integer type,
+opaque incomplete record field access, callbacks without a compatible context
+parameter, arbitrary
 macros, `long double`, or automatic conversion between Mimi slices and C
 strings. C strings can be passed from literals or explicit byte pointers.
 Variadic imports apply

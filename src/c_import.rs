@@ -1101,7 +1101,7 @@ struct CRecordLayout {
     align_bytes: u64,
     is_union: bool,
     field_offsets: Vec<(String, u64)>,
-    bit_fields: Vec<(String, u8, u8)>,
+    bit_fields: Vec<(String, u64, u16)>,
     fields_supported: bool,
 }
 
@@ -1169,7 +1169,7 @@ fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, 
         String,
         bool,
         Vec<(String, u64)>,
-        Vec<(String, u8, u8)>,
+        Vec<(String, u64, u16)>,
         bool,
     )> = None;
     for line in output.lines() {
@@ -1235,14 +1235,22 @@ fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, 
         if let Some((byte_offset, range)) = offset.trim().split_once(':') {
             if let (Ok(byte_offset), Some((start, end))) =
                 (byte_offset.parse::<u64>(), range.split_once('-'))
-                && let (Ok(start), Ok(end)) = (start.parse::<u8>(), end.parse::<u8>())
+                && let (Ok(start), Ok(end)) = (start.parse::<u16>(), end.parse::<u16>())
             {
                 fields.push((field_name.to_string(), byte_offset));
                 if let Some(width) = end
                     .checked_sub(start)
                     .and_then(|width| width.checked_add(1))
+                    .and_then(|width| u16::try_from(width).ok())
                 {
-                    bit_fields.push((field_name.to_string(), start, width));
+                    let bit_offset = byte_offset
+                        .checked_mul(8)
+                        .and_then(|offset| offset.checked_add(u64::from(start)));
+                    if let Some(bit_offset) = bit_offset {
+                        bit_fields.push((field_name.to_string(), bit_offset, width));
+                    } else {
+                        *fields_supported = false;
+                    }
                 } else {
                     *fields_supported = false;
                 }
@@ -1444,7 +1452,10 @@ fn declarations_from_ast_with_shims(
                             DataType::U64 | DataType::I64 => 64,
                             _ => 0,
                         };
-                        capacity == 0 || *width == 0 || *offset as u16 + *width as u16 > capacity
+                        capacity == 0
+                            || *width == 0
+                            || *width > capacity
+                            || *offset + u64::from(*width) > layout.size_bytes * 8
                     })
             })
         });
@@ -2169,6 +2180,17 @@ mod tests {
             flags.bit_fields,
             [("low".into(), 0, 3), ("high".into(), 3, 5)]
         );
+    }
+
+    #[test]
+    fn parses_bit_fields_crossing_storage_unit_boundaries() {
+        let layouts = parse_record_layouts(
+            "         0 | struct Crossing\n     0:28-35 |   unsigned int value\n           | [sizeof=8, align=4]\n",
+        )
+        .unwrap();
+        let crossing = layouts.get("Crossing").unwrap();
+        assert_eq!(crossing.bit_fields, [("value".into(), 28, 8)]);
+        assert!(crossing.fields_supported);
     }
 
     #[test]

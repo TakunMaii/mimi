@@ -40,7 +40,7 @@ imports while preserving C types, layout, and target ABI rules.
 - [x] Import simple named C struct and union fields with scalar, pointer, and nested record members.
 - [x] Import signed and unsigned bitfields contained within their declared storage unit.
   - [x] Support fields contained within 8/16/32/64-bit integer storage units.
-  - [ ] Support fields that cross or do not match their declared storage unit.
+  - [x] Support fields crossing allocation-unit boundaries when their width fits the declared integer type.
 - [x] Pass complete C struct and union arguments and returns through Clang-generated ABI thunks.
   - [x] Compile and link aggregate calls for x86_64 and AArch64; execute on the host target.
 - [x] Import and access scalar and pointer C global variables, including const write protection.

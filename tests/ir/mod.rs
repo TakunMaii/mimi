@@ -1682,7 +1682,50 @@ fn imports_multi_byte_c_bitfields() {
     .unwrap();
     std::fs::write(
         &source,
-        "c :: @cimport(\"wide.h\") main :: fn () i32 { bits := c.WideBits {low=-123, high=344865, tail=42} if bits.low == -123 {bits.low = 291} else {return 1} c.verify_wide(&bits) + if bits.high == 344865 {return 0} else {return 1} 0 }",
+        "c :: @cimport(\"wide.h\") main :: fn () i32 { bits := c.WideBits {low=-123, high=344865, tail=42} if bits.low == -123 {bits.low = 291} else {return 1} if bits.high != 344865 {return 2} if bits.low != 291 {return 3} if bits.tail != 42 {return 4} c.verify_wide(&bits) }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn imports_c_bitfields_crossing_storage_unit_boundaries() {
+    let directory = std::env::temp_dir().join(format!(
+        "mimi_cimport_crossing_bitfield_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("crossing.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("crossing.c");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "struct Crossing { unsigned int prefix : 28; unsigned int value : 8; unsigned int tail; }; int verify_crossing(struct Crossing *value);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <crossing.h>\nint verify_crossing(struct Crossing *value) { return value->prefix == 17 && value->value == 0xa5 && value->tail == 42 ? 0 : 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"crossing.h\") main :: fn () i32 { bits := c.Crossing {prefix=17, value=90, tail=42} if bits.value != 90 {return 1} bits.value = 165 c.verify_crossing(&bits) }",
     )
     .unwrap();
     build_file_for_target_with_c_options(

@@ -37,6 +37,7 @@ struct FieldInfo {
     data_type: DataType,
     default: Option<Expression>,
     mutable: bool,
+    bit_field: bool,
 }
 
 fn generic_type_contains(data_type: DataType, parameter: &str) -> bool {
@@ -187,6 +188,7 @@ fn specialize_struct_info(
                             .as_ref()
                             .map(|value| substitute_generic_value(value, &value_arguments)),
                         mutable: field.mutable,
+                        bit_field: field.bit_field,
                     },
                 )
             })
@@ -577,6 +579,7 @@ fn imported_exports_inner(
                                         ),
                                         default,
                                         mutable,
+                                        bit_field: false,
                                     },
                                 )
                             })
@@ -1263,6 +1266,22 @@ pub(crate) fn check_with_import_paths(
                     )));
                 }
             }
+            let bit_field_names = nodes
+                .iter()
+                .find_map(|layout| match layout {
+                    ASTNode::CTypeRecordLayout {
+                        name: layout_name,
+                        bit_fields,
+                        ..
+                    } if layout_name == *name => Some(
+                        bit_fields
+                            .iter()
+                            .map(|(field, _, _)| field.as_str())
+                            .collect::<HashSet<_>>(),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or_default();
             if structs
                 .insert(
                     *name,
@@ -1284,6 +1303,7 @@ pub(crate) fn check_with_import_paths(
                                         data_type: *data_type,
                                         default: default.clone(),
                                         mutable: *mutable,
+                                        bit_field: bit_field_names.contains(name.as_str()),
                                     },
                                 )
                             })

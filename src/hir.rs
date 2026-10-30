@@ -130,7 +130,7 @@ pub(crate) struct HirCRecordLayout {
     pub(crate) align_bytes: u64,
     pub(crate) is_union: bool,
     pub(crate) field_offsets: Vec<(String, u64)>,
-    pub(crate) bit_fields: Vec<(String, u8, u8)>,
+    pub(crate) bit_fields: Vec<(String, u64, u16)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

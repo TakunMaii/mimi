@@ -63,7 +63,7 @@ impl TypeLayouts {
             .is_some_and(|record| record.is_union)
     }
 
-    pub(crate) fn struct_bit_field(&self, name: &str, member: &str) -> Option<(u8, u8)> {
+    pub(crate) fn struct_bit_field(&self, name: &str, member: &str) -> Option<(u64, u16)> {
         self.c_records
             .get(name)?
             .bit_fields
