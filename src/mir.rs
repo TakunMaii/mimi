@@ -237,6 +237,7 @@ struct Builder {
     method_targets: std::collections::HashMap<(String, String), MethodTarget>,
     function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
     external_symbols: std::collections::HashMap<String, String>,
+    external_globals: std::collections::HashMap<String, crate::hir::HirExternalGlobal>,
     global_constants: std::collections::HashMap<String, crate::hir::HirConstant>,
     function_namespace: Option<String>,
     variable_function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
@@ -603,6 +604,13 @@ impl Builder {
                         });
                         address
                     }
+                    Expression::MemberAccess { object, member }
+                        if let Expression::Identifier(package) = object.as_ref() =>
+                    {
+                        let name = self.resolve_package_member_name(package, member);
+                        let global = self.external_globals.get(&name)?.clone();
+                        self.external_global_address(&global)
+                    }
                     Expression::Index { object, index } => {
                         let (base, scale) = self.lower_index_base(object)?;
                         let index = self.expression_unhinted(index)?;
@@ -643,6 +651,13 @@ impl Builder {
                     let name = self.resolve_package_member_name(package, member);
                     if self.global_constants.contains_key(&name) {
                         return self.lower_global_constant(&name);
+                    }
+                    if let Some(global) = self.external_globals.get(&name).cloned() {
+                        let address = self.external_global_address(&global);
+                        let result = self.value();
+                        self.emit_load_indirect(result, address, Some(&global.data_type));
+                        self.value_types.insert(result, global.data_type);
+                        return Some(result);
                     }
                     if let Some((parameters, result_type)) =
                         self.function_signatures.get(&name).cloned()
@@ -1586,6 +1601,25 @@ impl Builder {
                                 member,
                                 value,
                             } => {
+                                if let Expression::Identifier(package) = object
+                                    && let Some(global) = self
+                                        .external_globals
+                                        .get(&self.resolve_package_member_name(package, member))
+                                        .cloned()
+                                {
+                                    if !global.mutable {
+                                        return None;
+                                    }
+                                    let address = self.external_global_address(&global);
+                                    let value =
+                                        self.expression_expected(value, &global.data_type)?;
+                                    self.emit_store_indirect(
+                                        address,
+                                        value,
+                                        Some(&global.data_type),
+                                    );
+                                    continue;
+                                }
                                 let struct_name = self.expression_struct_name(object)?;
                                 let field_offset =
                                     self.struct_field_offset(&struct_name, member)?;
@@ -2172,6 +2206,16 @@ impl Builder {
         result
     }
 
+    fn external_global_address(&mut self, global: &crate::hir::HirExternalGlobal) -> ValueId {
+        let result = self.value();
+        self.emit(MirInstruction::LoadFunctionAddress {
+            result,
+            symbol: format!("_{}", global.link_name),
+            external: true,
+        });
+        result
+    }
+
     fn sign_extend_bit_field(
         &mut self,
         value: ValueId,
@@ -2382,6 +2426,9 @@ impl Builder {
                     let name = self.resolve_package_member_name(package, member);
                     if let Some(constant) = self.global_constants.get(&name) {
                         return Some(constant.data_type.clone());
+                    }
+                    if let Some(global) = self.external_globals.get(&name) {
+                        return Some(global.data_type.clone());
                     }
                     if let Some((params, result)) = self.function_signatures.get(&name) {
                         return Some(HirType::Function {
@@ -3947,6 +3994,7 @@ fn lower_function(
     method_targets: &std::collections::HashMap<(String, String), MethodTarget>,
     function_signatures: &std::collections::HashMap<String, (Vec<HirType>, HirType)>,
     external_symbols: &std::collections::HashMap<String, String>,
+    external_globals: &std::collections::HashMap<String, crate::hir::HirExternalGlobal>,
     global_constants: &std::collections::HashMap<String, crate::hir::HirConstant>,
     type_layouts: &TypeLayouts,
     layout: TargetDataLayout,
@@ -3974,6 +4022,7 @@ fn lower_function(
         method_targets: method_targets.clone(),
         function_signatures: function_signatures.clone(),
         external_symbols: external_symbols.clone(),
+        external_globals: external_globals.clone(),
         global_constants: global_constants.clone(),
         function_namespace: function
             .name
@@ -4382,6 +4431,11 @@ pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout
         .iter()
         .map(|function| (function.name.clone(), function.link_name.clone()))
         .collect::<std::collections::HashMap<_, _>>();
+    let external_globals = module
+        .extern_globals
+        .iter()
+        .map(|global| (global.name.clone(), global.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
     let global_constants = module
         .constants
         .iter()
@@ -4411,6 +4465,7 @@ pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout
             &method_targets,
             &function_signatures,
             &external_symbols,
+            &external_globals,
             &global_constants,
             &type_layouts,
             layout,

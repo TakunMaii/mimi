@@ -164,6 +164,12 @@ pub(crate) enum ASTNode {
         parameters: Vec<(String, DataType)>,
         return_type: DataType,
     },
+    ExternalGlobal {
+        name: String,
+        link_name: Option<String>,
+        data_type: DataType,
+        mutable: bool,
+    },
     Return(Option<Expression>),
     Break,
     Continue,

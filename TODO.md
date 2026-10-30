@@ -34,7 +34,8 @@ imports while preserving C types, layout, and target ABI rules.
 - [x] Import signed and unsigned bitfields that fit within one byte.
   - [ ] Support multi-byte bitfields.
 - [ ] Classify C aggregate arguments and returns for each supported target ABI.
-- [ ] Support C global variables and thread-local declarations.
+- [x] Import and access scalar and pointer C global variables, including const write protection.
+  - [ ] Support thread-local declarations and aggregate globals.
 - [ ] Add cross-target ABI tests for scalar and aggregate C calls.
 
 ## Advanced C Declarations

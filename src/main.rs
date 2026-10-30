@@ -469,6 +469,12 @@ fn qualify_imported_node(
             }
             *return_type = qualify_imported_type(*return_type, package, local_type_names);
         }
+        ASTNode::ExternalGlobal {
+            name, data_type, ..
+        } => {
+            *name = format!("{package}.{name}");
+            *data_type = qualify_imported_type(*data_type, package, local_type_names);
+        }
         ASTNode::Return(value) => {
             if let Some(value) = value {
                 qualify_imported_expression(value, package, local_type_names);

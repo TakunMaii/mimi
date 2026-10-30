@@ -1182,6 +1182,24 @@ pub(crate) fn check_with_import_paths(
         }
     }
     for node in nodes {
+        if let ASTNode::ExternalGlobal {
+            name,
+            data_type,
+            mutable,
+            ..
+        } = node
+            && name.contains('.')
+        {
+            scopes[0].insert(
+                name.clone(),
+                Symbol {
+                    data_type: *data_type,
+                    mutable: *mutable,
+                },
+            );
+        }
+    }
+    for node in nodes {
         if let ASTNode::CompileTimeConstant {
             name,
             data_type,
@@ -1559,6 +1577,17 @@ fn check_statement(
             member,
             value,
         } => {
+            if let Expression::Identifier(package) = object
+                && let Some(symbol) = lookup(scopes, &format!("{package}.{member}"))
+            {
+                if !symbol.mutable {
+                    return Err(error(format!(
+                        "cannot assign to read-only C global '{member}'"
+                    )));
+                }
+                infer_expression(value, scopes, functions, structs, Some(symbol.data_type))?;
+                return Ok(());
+            }
             let object_type = infer_expression(object, scopes, functions, structs, None)?;
             let struct_name = match object_type {
                 DataType::Struct(name) => name,
@@ -1608,7 +1637,7 @@ fn check_statement(
         ASTNode::FunctionDefinition { .. } => {
             Err(error("nested function definitions are unsupported"))
         }
-        ASTNode::ExternalFunction { .. } => Ok(()),
+        ASTNode::ExternalFunction { .. } | ASTNode::ExternalGlobal { .. } => Ok(()),
         ASTNode::Return(_) => Err(error("return is only valid inside a function")),
         ASTNode::Break | ASTNode::Continue => {
             if scopes.iter().any(|scope| scope.contains_key(LOOP_CONTEXT)) {
@@ -2523,6 +2552,13 @@ fn infer_expression(
 fn is_addressable(expression: &Expression, scopes: &[HashMap<String, Symbol>]) -> bool {
     match expression {
         Expression::Identifier(name) => lookup(scopes, name).is_some_and(|symbol| symbol.mutable),
+        Expression::MemberAccess { object, member } => {
+            if let Expression::Identifier(package) = object.as_ref() {
+                return lookup(scopes, &format!("{package}.{member}"))
+                    .is_some_and(|symbol| symbol.mutable);
+            }
+            false
+        }
         Expression::Index { object, .. } => {
             matches!(object.as_ref(), Expression::Identifier(name) if lookup(scopes, name).is_some_and(|symbol| symbol.mutable))
         }

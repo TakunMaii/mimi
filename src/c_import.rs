@@ -286,6 +286,12 @@ pub(crate) fn expand(
                     }
                     *return_type = qualify_c_type(*return_type, &alias);
                 }
+                ASTNode::ExternalGlobal {
+                    name, data_type, ..
+                } => {
+                    *name = format!("{alias}.{name}");
+                    *data_type = qualify_c_type(*data_type, &alias);
+                }
                 ASTNode::StructDefinition { name, fields, .. } => {
                     *name = Box::leak(format!("{alias}.{}", *name).into_boxed_str());
                     for (_, data_type, _, _) in fields {
@@ -1105,6 +1111,35 @@ fn declarations_from_ast(
             link_name: Some(name.to_string()),
             parameters,
             return_type,
+        });
+    }
+    for declaration in inner {
+        if declaration.get("kind").and_then(Json::string) != Some("VarDecl")
+            || declaration.get("storageClass").and_then(Json::string) != Some("extern")
+            || declaration.get("tls").is_some()
+        {
+            continue;
+        }
+        let (Some(name), Some(type_name)) = (
+            declaration.get("name").and_then(Json::string),
+            declaration
+                .get("type")
+                .and_then(|ty| ty.get("qualType"))
+                .and_then(Json::string),
+        ) else {
+            continue;
+        };
+        let Some(data_type) = c_type(type_name, &alias_types) else {
+            continue;
+        };
+        if !is_supported_c_abi_type(data_type) || data_type == DataType::Void {
+            continue;
+        }
+        output.push(ASTNode::ExternalGlobal {
+            name: name.to_string(),
+            link_name: Some(name.to_string()),
+            data_type,
+            mutable: !type_name.trim_start().starts_with("const "),
         });
     }
     let _ = header;

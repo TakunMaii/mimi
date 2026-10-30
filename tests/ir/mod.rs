@@ -712,6 +712,72 @@ fn imports_libc_timespec_layout_and_function() {
 }
 
 #[test]
+fn imports_mutable_c_global_variables() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_cimport_global_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("globals.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("globals.c");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "extern int shared_counter; int verify(int *value);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <globals.h>\nint shared_counter = 9;\nint verify(int *value) { return *value == 33 ? 0 : 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"globals.h\") main :: fn () i32 { before := c.shared_counter c.shared_counter = 33 c.verify(&c.shared_counter) + if before == 9 && c.shared_counter == 33 {return 0} else {return 1} 0 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn rejects_writes_to_const_c_globals() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_cimport_const_global_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("globals.h");
+    let source = directory.join("main.mi");
+    let executable = directory.join("main");
+    std::fs::write(&header, "extern const int fixed_value;\n").unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"globals.h\") main :: fn () i32 { c.fixed_value = 3 0 }",
+    )
+    .unwrap();
+    let result = build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+    );
+    assert!(result.is_err());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn imports_c_unions_with_single_member_initializers() {
     let directory = std::env::temp_dir().join(format!("mimi_cimport_union_{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();

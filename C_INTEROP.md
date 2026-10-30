@@ -37,6 +37,8 @@ using by-value records or function pointer parameters are skipped because the
 current backends do not implement those C calling conventions.
 Named C enum tags and typedefs are represented by their fixed integer type when
 Clang reports one, or by the target's default `int` representation otherwise.
+External scalar and pointer globals are available through the package namespace;
+top-level `const` globals are read-only in Mimi.
 String literals passed to imported `char *` parameters are emitted as
 NUL-terminated static byte arrays. Mutable buffers and arbitrary Mimi slices
 still require explicit conversion support.
@@ -54,7 +56,8 @@ into the output. Use `-I`, `-L`, and `-l` for header and library search paths.
 
 The importer currently skips declarations it cannot represent. It does not
 provide a general C ABI for structs and unions passed by value, multi-byte
-bitfields, opaque incomplete record field access, C globals, variadic functions, callbacks,
+bitfields, opaque incomplete record field access, thread-local or aggregate C
+globals, variadic functions, callbacks,
 arbitrary macros, `long double`, or automatic conversion between Mimi slices
 and C strings.
 Simple imported struct field access uses Mimi's current aggregate layout and

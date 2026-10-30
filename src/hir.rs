@@ -89,6 +89,14 @@ pub(crate) struct HirExternalFunction {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HirExternalGlobal {
+    pub(crate) name: String,
+    pub(crate) link_name: String,
+    pub(crate) data_type: HirType,
+    pub(crate) mutable: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct HirConstant {
     pub(crate) name: String,
     pub(crate) data_type: HirType,
@@ -122,6 +130,7 @@ pub(crate) struct HirCRecordLayout {
 pub(crate) struct HirModule {
     pub(crate) functions: Vec<HirFunction>,
     pub(crate) extern_functions: Vec<HirExternalFunction>,
+    pub(crate) extern_globals: Vec<HirExternalGlobal>,
     pub(crate) constants: Vec<HirConstant>,
     pub(crate) enums: Vec<HirEnum>,
     pub(crate) structs: Vec<HirStruct>,
@@ -209,6 +218,20 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                 link_name: link_name.clone().unwrap_or_else(|| name.clone()),
                 params: parameters.iter().map(|(_, ty)| (*ty).into()).collect(),
                 result: (*return_type).into(),
+            });
+        }
+        if let ASTNode::ExternalGlobal {
+            name,
+            link_name,
+            data_type,
+            mutable,
+        } = node
+        {
+            module.extern_globals.push(HirExternalGlobal {
+                name: name.clone(),
+                link_name: link_name.clone().unwrap_or_else(|| name.clone()),
+                data_type: (*data_type).into(),
+                mutable: *mutable,
             });
         }
         if let ASTNode::CompileTimeConstant {
@@ -976,6 +999,7 @@ fn generic_applications(
                 | ASTNode::CImport { .. }
                 | ASTNode::CDefine { .. }
                 | ASTNode::CTypeAlias { .. }
+                | ASTNode::ExternalGlobal { .. }
                 | ASTNode::CTypeRecordLayout { .. } => {}
             }
         }
@@ -1175,6 +1199,7 @@ fn collect_free_names(
             | ASTNode::CImport { .. }
             | ASTNode::CDefine { .. }
             | ASTNode::CTypeAlias { .. }
+            | ASTNode::ExternalGlobal { .. }
             | ASTNode::CTypeRecordLayout { .. } => {}
             ASTNode::If {
                 condition,
@@ -1527,6 +1552,7 @@ fn lift_lambdas_in_node(
         | ASTNode::CImport { .. }
         | ASTNode::CDefine { .. }
         | ASTNode::CTypeAlias { .. }
+        | ASTNode::ExternalGlobal { .. }
         | ASTNode::CTypeRecordLayout { .. } => {}
     }
 }
