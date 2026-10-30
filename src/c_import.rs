@@ -1310,7 +1310,11 @@ fn is_supported_c_abi_type(data_type: DataType) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Json, JsonParser, c_type, declarations_from_ast, parse_record_layouts};
+    use super::{
+        Json, JsonParser, c_type, declarations_from_ast, import_record_layouts,
+        parse_record_layouts,
+    };
+    use crate::lir::TargetArch;
     use crate::parser::{ASTNode, DataType, Expression};
     use std::collections::HashMap;
 
@@ -1355,6 +1359,36 @@ mod tests {
             point.field_offsets,
             [("x".into(), 0), ("y".into(), 4), ("z".into(), 8)]
         );
+    }
+
+    #[test]
+    fn queries_record_layouts_for_each_supported_target() {
+        let directory =
+            std::env::temp_dir().join(format!("mimi_c_layout_targets_{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let header = directory.join("layout.h");
+        std::fs::write(
+            &header,
+            "struct TargetLayout { char tag; long double value; };\n",
+        )
+        .unwrap();
+        let clang = std::env::var_os("MIMI_CLANG").unwrap_or("clang".into());
+        for (target, expected_size, expected_align, expected_offset) in [
+            (TargetArch::X86_64, 32, 16, 16),
+            (TargetArch::Aarch64, 16, 8, 8),
+        ] {
+            let layouts =
+                import_record_layouts(&clang, header.to_str().unwrap(), target, &[], &[], None)
+                    .unwrap();
+            let record = layouts.get("TargetLayout").unwrap();
+            assert_eq!(record.size_bytes, expected_size);
+            assert_eq!(record.align_bytes, expected_align);
+            assert_eq!(
+                record.field_offsets,
+                [("tag".into(), 0), ("value".into(), expected_offset)]
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

@@ -36,7 +36,8 @@ imports while preserving C types, layout, and target ABI rules.
 - [ ] Classify C aggregate arguments and returns for each supported target ABI.
 - [x] Import and access scalar and pointer C global variables, including const write protection.
   - [ ] Support thread-local declarations and aggregate globals.
-- [ ] Add cross-target ABI tests for scalar and aggregate C calls.
+- [x] Compile and link integer and floating-point scalar C calls for x86_64 and AArch64.
+  - [ ] Run cross-target aggregate C calls once aggregate ABI classification exists.
 
 ## Advanced C Declarations
 

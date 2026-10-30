@@ -603,6 +603,55 @@ fn imports_c_enum_function_signatures() {
 }
 
 #[test]
+fn links_scalar_c_calls_for_each_supported_target() {
+    let directory = std::env::temp_dir().join(format!(
+        "mimi_cimport_scalar_targets_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("scalar.h");
+    let c_source = directory.join("scalar.c");
+    let source = directory.join("main.mi");
+    std::fs::write(
+        &header,
+        "int c_add(int lhs, int rhs); double c_add_float(double lhs, double rhs);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <scalar.h>\nint c_add(int lhs, int rhs) { return lhs + rhs; }\ndouble c_add_float(double lhs, double rhs) { return lhs + rhs; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"scalar.h\") main :: fn () i32 { if c.c_add(19, 23) == 42 && c.c_add_float(1.5, 2.25) == 3.75 {return 0} else {return 1} 0 }",
+    )
+    .unwrap();
+    let host = <lir::HostTarget as lir::Target>::arch(&lir::HostTarget);
+    for target in [lir::TargetArch::X86_64, lir::TargetArch::Aarch64] {
+        let executable = directory.join(format!("main-{target:?}"));
+        build_file_for_target_with_c_options(
+            source.to_str().unwrap(),
+            executable.to_str().unwrap(),
+            std::slice::from_ref(&directory),
+            &[],
+            &[],
+            target,
+            &[],
+            None,
+            std::slice::from_ref(&c_source),
+        )
+        .unwrap();
+        if target == host {
+            let status = std::process::Command::new(&executable).status().unwrap();
+            assert_eq!(status.code(), Some(0));
+        }
+        std::fs::remove_file(executable).unwrap();
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn imports_nested_c_struct_fields() {
     let directory =
         std::env::temp_dir().join(format!("mimi_cimport_nested_{}", std::process::id()));

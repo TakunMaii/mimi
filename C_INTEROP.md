@@ -39,6 +39,8 @@ Named C enum tags and typedefs are represented by their fixed integer type when
 Clang reports one, or by the target's default `int` representation otherwise.
 External scalar and pointer globals are available through the package namespace;
 top-level `const` globals are read-only in Mimi.
+Integer and floating-point scalar calls are compiled and linked against C on
+both supported Apple targets.
 String literals passed to imported `char *` parameters are emitted as
 NUL-terminated static byte arrays. Mutable buffers and arbitrary Mimi slices
 still require explicit conversion support.
