@@ -33,7 +33,8 @@ imports while preserving C types, layout, and target ABI rules.
 - [x] Query target C record layouts from Clang, including size, alignment, and offsets for supported named structs.
 - [x] Import simple named C struct and union fields with scalar, pointer, and nested record members.
 - [x] Import signed and unsigned bitfields that fit within one byte.
-  - [ ] Support multi-byte bitfields.
+  - [x] Support fields contained within 8/16/32/64-bit integer storage units.
+  - [ ] Support fields that cross or do not match their declared storage unit.
 - [ ] Classify C aggregate arguments and returns for each supported target ABI.
 - [x] Import and access scalar and pointer C global variables, including const write protection.
   - [x] Import mutable globals of complete structs and unions.

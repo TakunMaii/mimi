@@ -979,24 +979,19 @@ fn declarations_from_ast(
                 continue;
             }
             let unsupported_bit_field = layout.bit_fields.iter().any(|(field, offset, width)| {
-                *width == 0
-                    || offset.saturating_add(*width) > 8
-                    || imported_fields
-                        .iter()
-                        .find(|(name, _, _, _)| name == field)
-                        .is_none_or(|(_, data_type, _, _)| {
-                            !matches!(
-                                data_type,
-                                DataType::U8
-                                    | DataType::U16
-                                    | DataType::U32
-                                    | DataType::U64
-                                    | DataType::I8
-                                    | DataType::I16
-                                    | DataType::I32
-                                    | DataType::I64
-                            )
-                        })
+                imported_fields
+                    .iter()
+                    .find(|(name, _, _, _)| name == field)
+                    .is_none_or(|(_, data_type, _, _)| {
+                        let capacity = match data_type {
+                            DataType::U8 | DataType::I8 => 8,
+                            DataType::U16 | DataType::I16 => 16,
+                            DataType::U32 | DataType::I32 => 32,
+                            DataType::U64 | DataType::I64 => 64,
+                            _ => 0,
+                        };
+                        capacity == 0 || *width == 0 || *offset as u16 + *width as u16 > capacity
+                    })
             });
             if unsupported_bit_field {
                 continue;

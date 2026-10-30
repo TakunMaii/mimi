@@ -738,7 +738,7 @@ impl Builder {
                 }
                 if let Some((bit_offset, bit_width)) = self.struct_bit_field(&struct_name, member) {
                     let value =
-                        self.load_unsigned_bit_field(address, bit_offset, bit_width, &field_type);
+                        self.load_unsigned_bit_field(address, bit_offset, bit_width, &field_type)?;
                     if matches!(field_type, HirType::Integer { signed: true, .. }) {
                         return Some(self.sign_extend_bit_field(value, bit_width, &field_type));
                     }
@@ -1657,8 +1657,12 @@ impl Builder {
                                 {
                                     let value = self.expression_expected(value, &field_type)?;
                                     self.store_unsigned_bit_field(
-                                        address, value, bit_offset, bit_width,
-                                    );
+                                        address,
+                                        value,
+                                        bit_offset,
+                                        bit_width,
+                                        &field_type,
+                                    )?;
                                     continue;
                                 }
                                 if self.is_inline_storage_aggregate(&field_type) {
@@ -2112,42 +2116,43 @@ impl Builder {
         bit_offset: u8,
         bit_width: u8,
         result_type: &HirType,
-    ) -> ValueId {
-        let byte_type = HirType::Integer {
-            bits: 8,
-            signed: false,
-        };
+    ) -> Option<ValueId> {
+        let storage_type = unsigned_bit_field_storage_type(result_type)?;
         let raw = self.value();
-        self.emit_load_indirect(raw, address, Some(&byte_type));
-        self.value_types.insert(raw, byte_type.clone());
+        self.emit_load_indirect(raw, address, Some(&storage_type));
+        self.value_types.insert(raw, storage_type.clone());
         let shifted = if bit_offset == 0 {
             raw
         } else {
-            let divisor = self.bit_field_constant(1i128 << bit_offset, &byte_type);
+            let divisor = self.bit_field_constant(1i128 << bit_offset, &storage_type);
             let value = self.value();
             self.emit(MirInstruction::Div {
                 result: value,
                 lhs: raw,
                 rhs: divisor,
             });
-            self.value_types.insert(value, byte_type.clone());
+            self.value_types.insert(value, storage_type.clone());
             value
         };
-        let extracted = if bit_width == 8 {
+        let storage_bits = match &storage_type {
+            HirType::Integer { bits, .. } => *bits,
+            _ => unreachable!(),
+        };
+        let extracted = if bit_width as u16 == storage_bits {
             shifted
         } else {
-            let modulus = self.bit_field_constant(1i128 << bit_width, &byte_type);
+            let modulus = self.bit_field_constant(1i128 << bit_width, &storage_type);
             let value = self.value();
             self.emit(MirInstruction::Rem {
                 result: value,
                 lhs: shifted,
                 rhs: modulus,
             });
-            self.value_types.insert(value, result_type.clone());
+            self.value_types.insert(value, storage_type.clone());
             value
         };
         self.value_types.insert(extracted, result_type.clone());
-        extracted
+        Some(extracted)
     }
 
     fn store_unsigned_bit_field(
@@ -2156,67 +2161,67 @@ impl Builder {
         new_value: ValueId,
         bit_offset: u8,
         bit_width: u8,
-    ) {
-        let byte_type = HirType::Integer {
-            bits: 8,
-            signed: false,
-        };
+        field_type: &HirType,
+    ) -> Option<()> {
+        let storage_type = unsigned_bit_field_storage_type(field_type)?;
         let raw = self.value();
-        self.emit_load_indirect(raw, address, Some(&byte_type));
-        self.value_types.insert(raw, byte_type.clone());
-        let old_field = self.load_unsigned_bit_field(address, bit_offset, bit_width, &byte_type);
-        let modulus = self.bit_field_constant(1i128 << bit_width, &byte_type);
+        self.emit_load_indirect(raw, address, Some(&storage_type));
+        self.value_types.insert(raw, storage_type.clone());
+        let old_field =
+            self.load_unsigned_bit_field(address, bit_offset, bit_width, &storage_type)?;
+        let modulus = self.bit_field_constant(1i128 << bit_width, &storage_type);
         let remainder = self.value();
         self.emit(MirInstruction::Rem {
             result: remainder,
             lhs: new_value,
             rhs: modulus,
         });
-        self.value_types.insert(remainder, byte_type.clone());
+        self.value_types.insert(remainder, storage_type.clone());
         let normalized = self.value();
         self.emit(MirInstruction::Add {
             result: normalized,
             lhs: remainder,
             rhs: modulus,
         });
-        self.value_types.insert(normalized, byte_type.clone());
+        self.value_types.insert(normalized, storage_type.clone());
         let bounded = self.value();
         self.emit(MirInstruction::Rem {
             result: bounded,
             lhs: normalized,
             rhs: modulus,
         });
-        self.value_types.insert(bounded, byte_type.clone());
-        let scale = self.bit_field_constant(1i128 << bit_offset, &byte_type);
+        self.value_types.insert(bounded, storage_type.clone());
+        let scale = self.bit_field_constant(1i128 << bit_offset, &storage_type);
         let old_scaled = self.value();
         self.emit(MirInstruction::Mul {
             result: old_scaled,
             lhs: old_field,
             rhs: scale,
         });
-        self.value_types.insert(old_scaled, byte_type.clone());
+        self.value_types.insert(old_scaled, storage_type.clone());
         let new_scaled = self.value();
         self.emit(MirInstruction::Mul {
             result: new_scaled,
             lhs: bounded,
             rhs: scale,
         });
-        self.value_types.insert(new_scaled, byte_type.clone());
+        self.value_types.insert(new_scaled, storage_type.clone());
         let cleared = self.value();
         self.emit(MirInstruction::Sub {
             result: cleared,
             lhs: raw,
             rhs: old_scaled,
         });
-        self.value_types.insert(cleared, byte_type.clone());
+        self.value_types.insert(cleared, storage_type.clone());
         let combined = self.value();
         self.emit(MirInstruction::Add {
             result: combined,
             lhs: cleared,
             rhs: new_scaled,
         });
-        self.value_types.insert(combined, byte_type.clone());
-        self.emit_store_indirect(address, combined, Some(&byte_type));
+        self.value_types.insert(combined, storage_type.clone());
+        self.emit_store_indirect(address, combined, Some(&storage_type));
+        Some(())
     }
 
     fn bit_field_constant(&mut self, value: i128, data_type: &HirType) -> ValueId {
@@ -2287,13 +2292,11 @@ impl Builder {
         result
     }
 
-    fn clear_bit_field_storage_byte(&mut self, address: ValueId) {
-        let byte_type = HirType::Integer {
-            bits: 8,
-            signed: false,
-        };
-        let zero = self.bit_field_constant(0, &byte_type);
-        self.emit_store_indirect(address, zero, Some(&byte_type));
+    fn clear_bit_field_storage(&mut self, address: ValueId, field_type: &HirType) -> Option<()> {
+        let storage_type = unsigned_bit_field_storage_type(field_type)?;
+        let zero = self.bit_field_constant(0, &storage_type);
+        self.emit_store_indirect(address, zero, Some(&storage_type));
+        Some(())
     }
 
     fn load_slice_descriptor(&mut self, address: ValueId, data_type: &HirType) -> Option<ValueId> {
@@ -3949,9 +3952,15 @@ impl Builder {
             let offset = self.struct_field_offset(struct_name, field_name)?;
             let target_address = self.byte_offset_address(base_address, offset);
             if let Some((bit_offset, bit_width)) = self.struct_bit_field(struct_name, field_name) {
-                self.clear_bit_field_storage_byte(target_address);
+                self.clear_bit_field_storage(target_address, &field_type)?;
                 let value = self.expression_expected(expression, &field_type)?;
-                self.store_unsigned_bit_field(target_address, value, bit_offset, bit_width);
+                self.store_unsigned_bit_field(
+                    target_address,
+                    value,
+                    bit_offset,
+                    bit_width,
+                    &field_type,
+                )?;
                 return Some(());
             }
             if self.is_inline_storage_aggregate(&field_type) {
@@ -3967,7 +3976,14 @@ impl Builder {
             if self.struct_bit_field(struct_name, field_name).is_some() {
                 let offset = self.struct_field_offset(struct_name, field_name)?;
                 let address = self.byte_offset_address(base_address, offset);
-                self.clear_bit_field_storage_byte(address);
+                let field_type = self
+                    .struct_field_types
+                    .get(struct_name)?
+                    .iter()
+                    .find(|(name, _)| name == field_name)?
+                    .1
+                    .clone();
+                self.clear_bit_field_storage(address, &field_type)?;
             }
         }
         for (field_name, default) in fields {
@@ -3987,7 +4003,13 @@ impl Builder {
             let target_address = self.byte_offset_address(base_address, offset);
             if let Some((bit_offset, bit_width)) = self.struct_bit_field(struct_name, &field_name) {
                 let value = self.expression_expected(expression, &field_type)?;
-                self.store_unsigned_bit_field(target_address, value, bit_offset, bit_width);
+                self.store_unsigned_bit_field(
+                    target_address,
+                    value,
+                    bit_offset,
+                    bit_width,
+                    &field_type,
+                )?;
                 continue;
             }
             if self.is_inline_storage_aggregate(&field_type) {
@@ -4000,6 +4022,14 @@ impl Builder {
         }
         Some(())
     }
+}
+
+fn unsigned_bit_field_storage_type(data_type: &HirType) -> Option<HirType> {
+    let bits = scalar_storage_size(data_type)?.checked_mul(8)? as u16;
+    Some(HirType::Integer {
+        bits,
+        signed: false,
+    })
 }
 
 fn restore_binding<T>(

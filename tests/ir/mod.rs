@@ -1087,6 +1087,47 @@ fn imports_signed_byte_local_c_bitfields() {
 }
 
 #[test]
+fn imports_multi_byte_c_bitfields() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_cimport_wide_bitfield_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("wide.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("wide.c");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "struct WideBits { signed int low : 12; unsigned int high : 20; unsigned int tail; }; int verify_wide(struct WideBits *bits);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <wide.h>\nint verify_wide(struct WideBits *bits) { return bits->low == 291 && bits->high == 344865 && bits->tail == 42 ? 0 : 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"wide.h\") main :: fn () i32 { bits := c.WideBits {low=-123, high=344865, tail=42} if bits.low == -123 {bits.low = 291} else {return 1} c.verify_wide(&bits) + if bits.high == 344865 {return 0} else {return 1} 0 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn compiles_and_links_c_source_with_mimi_program() {
     let directory = std::env::temp_dir().join(format!("mimi_c_source_link_{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
