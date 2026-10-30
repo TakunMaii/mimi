@@ -548,6 +548,9 @@ fn qualify_imported_node(
             **declaration =
                 qualify_imported_node((**declaration).clone(), package, local_type_names);
         }
+        ASTNode::CTypeEnumRepresentation { name, .. } => {
+            *name = format!("{package}.{name}");
+        }
         ASTNode::Break
         | ASTNode::Continue
         | ASTNode::Import { .. }

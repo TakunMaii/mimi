@@ -313,6 +313,9 @@ pub(crate) fn expand_with_shims(
                     *name = format!("{alias}.{name}");
                     *data_type = qualify_c_type(*data_type, &alias);
                 }
+                ASTNode::CTypeEnumRepresentation { name, .. } => {
+                    *name = format!("{alias}.{name}");
+                }
                 ASTNode::CTypeRecordLayout { name, .. } => {
                     *name = format!("{alias}.{name}");
                 }
@@ -863,6 +866,7 @@ fn declarations_from_ast_with_shims(
     let mut generated_sources = Vec::new();
     let mut seen = HashSet::new();
     let mut alias_types = HashMap::new();
+    let mut enum_underlying_types = HashMap::new();
     let Some(inner) = root.get("inner").and_then(Json::array) else {
         return Err("clang AST has no translation unit declarations".into());
     };
@@ -943,10 +947,30 @@ fn declarations_from_ast_with_shims(
             .and_then(Json::string)
             .and_then(|name| c_scalar_type(name.trim()))
             .unwrap_or(DataType::I32);
-        alias_types.insert(name.to_string(), data_type);
-        output.push(ASTNode::CTypeAlias {
+        let enum_name = Box::leak(name.to_string().into_boxed_str());
+        let enum_type = DataType::Enum(enum_name);
+        alias_types.insert(name.to_string(), enum_type);
+        enum_underlying_types.insert(name.to_string(), data_type);
+        let variants = declaration
+            .get("inner")
+            .and_then(Json::array)
+            .into_iter()
+            .flatten()
+            .filter(|node| node.get("kind").and_then(Json::string) == Some("EnumConstantDecl"))
+            .filter_map(|node| {
+                node.get("name")?
+                    .string()
+                    .map(|name| (name.to_string(), None))
+            })
+            .collect();
+        output.push(ASTNode::EnumDefinition {
+            name: enum_name,
+            parameters: Vec::new(),
+            variants,
+        });
+        output.push(ASTNode::CTypeEnumRepresentation {
             name: name.to_string(),
-            data_type,
+            underlying_type: data_type,
         });
     }
     for declaration in inner {
@@ -987,6 +1011,7 @@ fn declarations_from_ast_with_shims(
                 imported_fields.clear();
                 break;
             };
+            let data_type = c_abi_type(data_type, &enum_underlying_types);
             imported_fields.push((field_name.to_string(), data_type, None, true));
         }
         let layout = record_layouts.get(record_name);
@@ -1098,6 +1123,7 @@ fn declarations_from_ast_with_shims(
                 supported = false;
                 break;
             };
+            let data_type = c_abi_type(data_type, &enum_underlying_types);
             let is_aggregate = is_complete_c_aggregate(data_type, record_layouts);
             has_aggregate_parameter |= is_aggregate;
             if !is_supported_c_abi_type(data_type) && !is_aggregate {
@@ -1126,6 +1152,7 @@ fn declarations_from_ast_with_shims(
         let Some(return_type) = c_type(return_name, &alias_types) else {
             continue;
         };
+        let return_type = c_abi_type(return_type, &enum_underlying_types);
         let aggregate_return = is_complete_c_aggregate(return_type, record_layouts);
         if !supported || (!is_supported_c_abi_type(return_type) && !aggregate_return) {
             continue;
@@ -1171,6 +1198,7 @@ fn declarations_from_ast_with_shims(
         let Some(data_type) = c_type(type_name, &alias_types) else {
             continue;
         };
+        let data_type = c_abi_type(data_type, &enum_underlying_types);
         let thread_local = declaration.get("tls").is_some();
         let complete_aggregate = matches!(data_type, DataType::Struct(name)
             if record_layouts.contains_key(name));
@@ -1198,6 +1226,20 @@ fn declarations_from_ast_with_shims(
     }
     let _ = header;
     Ok((output, generated_sources))
+}
+
+fn c_abi_type(data_type: DataType, enum_underlying_types: &HashMap<String, DataType>) -> DataType {
+    match data_type {
+        DataType::Enum(name) => enum_underlying_types
+            .get(name)
+            .copied()
+            .unwrap_or(data_type),
+        DataType::Pointer(inner) => DataType::Pointer(Box::leak(Box::new(c_abi_type(
+            *inner,
+            enum_underlying_types,
+        )))),
+        _ => data_type,
+    }
 }
 
 fn c_object_is_const(type_name: &str) -> bool {
@@ -1620,14 +1662,19 @@ mod tests {
     }
 
     #[test]
-    fn imports_named_c_enum_as_its_default_integer_representation() {
+    fn preserves_named_c_enum_and_its_integer_representation() {
         let json = JsonParser::parse(
             r#"{"inner":[{"kind":"EnumDecl","name":"Color","inner":[{"kind":"EnumConstantDecl","name":"RED"}]},{"kind":"FunctionDecl","name":"echo_color","type":{"qualType":"enum Color (enum Color)"},"inner":[{"kind":"ParmVarDecl","name":"value","type":{"qualType":"enum Color"}}]}]}"#,
         )
         .unwrap();
         let declarations = declarations_from_ast(&json, "color.h", &HashMap::new()).unwrap();
         assert!(declarations.iter().any(|declaration| matches!(declaration,
-            ASTNode::CTypeAlias { name, data_type: DataType::I32 } if name == "Color"
+            ASTNode::EnumDefinition { name, variants, .. }
+                if *name == "Color" && variants == &[("RED".into(), None)]
+        )));
+        assert!(declarations.iter().any(|declaration| matches!(declaration,
+            ASTNode::CTypeEnumRepresentation { name, underlying_type: DataType::I32 }
+                if name == "Color"
         )));
         assert!(declarations.iter().any(|declaration| matches!(declaration,
             ASTNode::ExternalFunction { name, parameters, return_type: DataType::I32, .. }

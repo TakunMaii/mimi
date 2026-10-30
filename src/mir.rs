@@ -4493,7 +4493,16 @@ pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout
         })
         .collect::<std::collections::HashMap<_, _>>();
     let type_layouts = TypeLayouts::new(layout, struct_field_types.clone(), enum_layouts)
-        .with_c_records(module.c_record_layouts.clone());
+        .with_c_records(module.c_record_layouts.clone())
+        .with_c_enum_representations(
+            module
+                .c_enum_representations
+                .iter()
+                .map(|(name, representation)| {
+                    (name.clone(), representation.underlying_type.clone())
+                })
+                .collect(),
+        );
     let function_slice_params = module
         .functions
         .iter()

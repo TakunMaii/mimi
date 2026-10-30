@@ -128,6 +128,11 @@ pub(crate) struct HirCRecordLayout {
     pub(crate) bit_fields: Vec<(String, u8, u8)>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HirCEnumRepresentation {
+    pub(crate) underlying_type: HirType,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct HirModule {
     pub(crate) functions: Vec<HirFunction>,
@@ -137,11 +142,24 @@ pub(crate) struct HirModule {
     pub(crate) enums: Vec<HirEnum>,
     pub(crate) structs: Vec<HirStruct>,
     pub(crate) c_record_layouts: std::collections::HashMap<String, HirCRecordLayout>,
+    pub(crate) c_enum_representations: std::collections::HashMap<String, HirCEnumRepresentation>,
 }
 
 pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
     let mut module = HirModule::default();
     for node in nodes {
+        if let ASTNode::CTypeEnumRepresentation {
+            name,
+            underlying_type,
+        } = node
+        {
+            module.c_enum_representations.insert(
+                name.clone(),
+                HirCEnumRepresentation {
+                    underlying_type: (*underlying_type).into(),
+                },
+            );
+        }
         if let ASTNode::CTypeRecordLayout {
             name,
             size_bytes,
@@ -1005,6 +1023,7 @@ fn generic_applications(
                 | ASTNode::CImport { .. }
                 | ASTNode::CDefine { .. }
                 | ASTNode::CTypeAlias { .. }
+                | ASTNode::CTypeEnumRepresentation { .. }
                 | ASTNode::ExternalGlobal { .. }
                 | ASTNode::CTypeRecordLayout { .. } => {}
             }
@@ -1205,6 +1224,7 @@ fn collect_free_names(
             | ASTNode::CImport { .. }
             | ASTNode::CDefine { .. }
             | ASTNode::CTypeAlias { .. }
+            | ASTNode::CTypeEnumRepresentation { .. }
             | ASTNode::ExternalGlobal { .. }
             | ASTNode::CTypeRecordLayout { .. } => {}
             ASTNode::If {
@@ -1558,6 +1578,7 @@ fn lift_lambdas_in_node(
         | ASTNode::CImport { .. }
         | ASTNode::CDefine { .. }
         | ASTNode::CTypeAlias { .. }
+        | ASTNode::CTypeEnumRepresentation { .. }
         | ASTNode::ExternalGlobal { .. }
         | ASTNode::CTypeRecordLayout { .. } => {}
     }

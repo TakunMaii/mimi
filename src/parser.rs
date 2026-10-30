@@ -233,6 +233,10 @@ pub(crate) enum ASTNode {
         name: String,
         data_type: DataType,
     },
+    CTypeEnumRepresentation {
+        name: String,
+        underlying_type: DataType,
+    },
     CTypeRecordLayout {
         name: String,
         size_bytes: u64,

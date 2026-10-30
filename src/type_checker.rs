@@ -1660,6 +1660,7 @@ fn check_statement(
         | ASTNode::CImport { .. }
         | ASTNode::CDefine { .. }
         | ASTNode::CTypeAlias { .. }
+        | ASTNode::CTypeEnumRepresentation { .. }
         | ASTNode::CTypeRecordLayout { .. }
         | ASTNode::Public(_) => Ok(()),
         ASTNode::IfLet {

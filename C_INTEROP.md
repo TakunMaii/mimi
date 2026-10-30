@@ -39,8 +39,9 @@ passed as callbacks; captured closures and callback signatures with aggregate
 arguments or returns are not supported.
 Records with unsupported field types remain opaque, so APIs that only pass
 pointers to those records can still be imported and called.
-Named C enum tags and typedefs are represented by their fixed integer type when
-Clang reports one, or by the target's default `int` representation otherwise.
+Named C enum tags are retained as imported enum types, with Clang's underlying
+integer type recorded separately for record layout. C function parameters,
+returns, and globals use the corresponding integer ABI representation.
 External scalar and pointer globals are available through the package namespace;
 top-level `const` globals are read-only in Mimi.
 Mutable globals of complete imported structs and unions support field reads,

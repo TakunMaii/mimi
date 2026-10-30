@@ -23,6 +23,7 @@ pub(crate) struct TypeLayouts {
     structs: HashMap<String, Vec<(String, HirType)>>,
     enums: HashMap<String, Vec<Option<HirType>>>,
     c_records: HashMap<String, crate::hir::HirCRecordLayout>,
+    c_enum_representations: HashMap<String, HirType>,
 }
 
 impl TypeLayouts {
@@ -36,6 +37,7 @@ impl TypeLayouts {
             structs,
             enums,
             c_records: HashMap::new(),
+            c_enum_representations: HashMap::new(),
         }
     }
 
@@ -44,6 +46,14 @@ impl TypeLayouts {
         records: HashMap<String, crate::hir::HirCRecordLayout>,
     ) -> Self {
         self.c_records = records;
+        self
+    }
+
+    pub(crate) fn with_c_enum_representations(
+        mut self,
+        representations: HashMap<String, HirType>,
+    ) -> Self {
+        self.c_enum_representations = representations;
         self
     }
 
@@ -233,6 +243,9 @@ impl TypeLayouts {
                 })
             }
             HirType::Named(name) if self.enums.contains_key(name) => {
+                if let Some(underlying) = self.c_enum_representations.get(name) {
+                    return self.layout_inner(underlying, visiting);
+                }
                 let variants = self.enums.get(name)?;
                 if variants.iter().all(Option::is_none) {
                     return Some(TypeLayout {

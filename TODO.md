@@ -18,6 +18,8 @@ imports while preserving C types, layout, and target ABI rules.
   - [x] Import named C enum tags as their Clang fixed integer type or target-default `int` representation.
   - [x] Import integer-valued C enum constants.
   - [ ] Preserve C enum types and their underlying representation.
+    - [x] Retain named C enum declarations and Clang's underlying integer representation in HIR.
+    - [ ] Apply C enum/integer compatibility during type checking without weakening Mimi enums.
 - [x] Parse ordinary C pointer and function-pointer spellings.
 - [x] Pass top-level non-capturing Mimi functions as scalar C callbacks.
   - [ ] Support callback parameters with aggregate C ABI arguments or returns.
