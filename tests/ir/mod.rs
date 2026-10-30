@@ -687,6 +687,31 @@ fn imports_record_typedefs_for_pointer_parameters() {
 }
 
 #[test]
+fn imports_libc_timespec_layout_and_function() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_cimport_timespec_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("main.mi");
+    let executable = directory.join("main");
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"time.h\") main :: fn () i32 { ts := c.timespec {tv_sec=0, tv_nsec=0} c.timespec_get(&ts, c.TIME_UTC) if ts.tv_sec > 0 {return 0} else {return 1} 0 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn compiles_and_links_c_source_with_mimi_program() {
     let directory = std::env::temp_dir().join(format!("mimi_c_source_link_{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();

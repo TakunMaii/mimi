@@ -814,6 +814,16 @@ fn declarations_from_ast(
         .map(str::to_string)
         .collect::<HashSet<_>>();
     for declaration in inner {
+        if declaration.get("kind").and_then(Json::string) == Some("RecordDecl")
+            && let Some(name) = declaration.get("name").and_then(Json::string)
+        {
+            let name = Box::leak(name.to_string().into_boxed_str());
+            alias_types
+                .entry(name.to_string())
+                .or_insert(DataType::Struct(name));
+        }
+    }
+    for declaration in inner {
         if declaration.get("kind").and_then(Json::string) != Some("RecordDecl")
             || declaration.get("completeDefinition").and_then(Json::bool) == Some(true)
             || declaration.get("tagUsed").and_then(Json::string) != Some("struct")
@@ -834,6 +844,21 @@ fn declarations_from_ast(
             fields: Vec::new(),
             methods: Vec::new(),
         });
+    }
+    for declaration in inner {
+        if declaration.get("kind").and_then(Json::string) != Some("TypedefDecl") {
+            continue;
+        }
+        if let (Some(name), Some(ty)) = (
+            declaration.get("name").and_then(Json::string),
+            declaration
+                .get("type")
+                .and_then(|ty| ty.get("desugaredQualType").or_else(|| ty.get("qualType")))
+                .and_then(Json::string),
+        ) && let Some(data_type) = c_type(ty, &alias_types)
+        {
+            alias_types.insert(name.to_string(), data_type);
+        }
     }
     for declaration in inner {
         if declaration.get("kind").and_then(Json::string) != Some("EnumDecl") {
