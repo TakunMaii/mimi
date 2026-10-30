@@ -20,9 +20,8 @@ imports while preserving C types, layout, and target ABI rules.
   - [ ] Preserve C enum types and their underlying representation.
 - [x] Parse ordinary C pointer and function-pointer spellings.
 - [x] Pass top-level non-capturing Mimi functions as scalar C callbacks.
-  - [ ] Support capturing closures through explicit callback context/trampolines.
   - [ ] Support callback parameters with aggregate C ABI arguments or returns.
-  - [ ] Preserve C qualifiers and calling convention metadata.
+- [ ] Preserve C qualifiers and calling convention metadata.
 - [x] Import forward declarations as opaque C types usable through pointers.
   - [x] Retain complete records with unsupported fields as opaque pointer types.
   - [x] Resolve pointers to complete imported C struct types.
@@ -35,22 +34,22 @@ imports while preserving C types, layout, and target ABI rules.
 - [ ] Add an explicit C type representation that remains distinct from Mimi types.
 - [x] Query target C record layouts from Clang, including size, alignment, and offsets for supported named structs.
 - [x] Import simple named C struct and union fields with scalar, pointer, and nested record members.
-- [x] Import signed and unsigned bitfields that fit within one byte.
+- [x] Import signed and unsigned bitfields contained within their declared storage unit.
   - [x] Support fields contained within 8/16/32/64-bit integer storage units.
   - [ ] Support fields that cross or do not match their declared storage unit.
 - [x] Pass complete C struct and union arguments and returns through Clang-generated ABI thunks.
-  - [ ] Run cross-target aggregate C calls once target SDKs are available.
+  - [x] Compile and link aggregate calls for x86_64 and AArch64; execute on the host target.
 - [x] Import and access scalar and pointer C global variables, including const write protection.
   - [x] Import mutable globals of complete structs and unions.
   - [ ] Support thread-local declarations and const aggregate globals.
 - [x] Compile and link integer and floating-point scalar C calls for x86_64 and AArch64.
-  - [ ] Run cross-target aggregate C calls once aggregate ABI classification exists.
 
 ## Advanced C Declarations
 
 - [x] Import simple numeric macro constants through Clang's preprocessor output.
   - [x] Provide source level `@cDefine` configuration.
 - [ ] Support variadic C functions and default argument promotions.
-- [ ] Support Mimi callbacks passed to C, with explicit lifetime/trampoline rules.
+- [x] Pass top-level non-capturing Mimi callbacks to C with static code lifetime.
+  - [ ] Support capturing closures through explicit callback context/trampolines.
 - [x] Build and link C source files alongside Mimi modules with `--c-source`.
 - [x] Document Clang discovery, target/sysroot setup, linking, and unsupported constructs.
