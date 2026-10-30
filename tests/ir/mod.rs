@@ -1071,7 +1071,7 @@ fn imports_c_enum_function_signatures() {
     .unwrap();
     std::fs::write(
         &source,
-        "c :: @cimport(\"color.h\") main :: fn () i32 { number : i32 = 5 c.echo_color(number) - c.GREEN }",
+        "c :: @cimport(\"color.h\") main :: fn () i32 { color : c.Color = c.GREEN integer : i32 = color returned : c.Color = c.echo_color(integer) returned - c.GREEN }",
     )
     .unwrap();
     build_file_for_target_with_c_options(

@@ -306,6 +306,14 @@ pub(crate) fn expand_with_shims(
                         *data_type = qualify_c_type(*data_type, &alias);
                     }
                 }
+                ASTNode::EnumDefinition { name, variants, .. } => {
+                    *name = Box::leak(format!("{alias}.{}", *name).into_boxed_str());
+                    for (_, payload) in variants {
+                        if let Some(data_type) = payload {
+                            *data_type = qualify_c_type(*data_type, &alias);
+                        }
+                    }
+                }
                 ASTNode::CompileTimeConstant { name, .. } => {
                     *name = format!("{alias}.{name}");
                 }
@@ -324,13 +332,22 @@ pub(crate) fn expand_with_shims(
             node
         }));
     }
-    let aliases = output
+    let mut aliases = output
         .iter()
         .filter_map(|node| match node {
             ASTNode::CTypeAlias { name, data_type } => Some((name.clone(), *data_type)),
             _ => None,
         })
         .collect::<HashMap<_, _>>();
+    for name in output.iter().filter_map(|node| match node {
+        ASTNode::CTypeEnumRepresentation { name, .. } => Some(name.clone()),
+        _ => None,
+    }) {
+        aliases.insert(
+            name.clone(),
+            DataType::CEnum(Box::leak(name.into_boxed_str())),
+        );
+    }
     rewrite_c_aliases(&mut output, &aliases);
     Ok((output, generated_sources))
 }
