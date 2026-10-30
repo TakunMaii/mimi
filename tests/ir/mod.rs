@@ -569,6 +569,100 @@ fn imports_c_functions_with_aggregate_arguments_and_returns() {
 }
 
 #[test]
+fn imports_and_calls_raylib_when_installed() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let Some((include, library)) = [
+        ("/opt/homebrew/include", "/opt/homebrew/lib"),
+        ("/usr/local/include", "/usr/local/lib"),
+    ]
+    .into_iter()
+    .map(|(include, library)| {
+        (
+            std::path::PathBuf::from(include),
+            std::path::PathBuf::from(library),
+        )
+    })
+    .find(|(include, library)| {
+        include.join("raylib.h").exists() && library.join("libraylib.dylib").exists()
+    }) else {
+        return;
+    };
+    let directory = std::env::temp_dir().join(format!("mimi_raylib_import_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("main.mi");
+    let executable = directory.join("main");
+    std::fs::write(
+        &source,
+        "ray :: @cimport(\"raylib.h\") main :: fn () i32 { if ray.CheckCollisionPointRec(ray.Vector2 {x=5.0, y=5.0}, ray.Rectangle {x=0.0, y=0.0, width=10.0, height=10.0}) {return 0} else {return 1} 0 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&include),
+        std::slice::from_ref(&library),
+        &["raylib".to_string()],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn imports_and_calls_sdl3_when_installed() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let Some((include, library)) = [
+        ("/opt/homebrew/include", "/opt/homebrew/lib"),
+        ("/usr/local/include", "/usr/local/lib"),
+    ]
+    .into_iter()
+    .map(|(include, library)| {
+        (
+            std::path::PathBuf::from(include),
+            std::path::PathBuf::from(library),
+        )
+    })
+    .find(|(include, library)| {
+        include.join("SDL3/SDL.h").exists() && library.join("libSDL3.dylib").exists()
+    }) else {
+        return;
+    };
+    let directory = std::env::temp_dir().join(format!("mimi_sdl3_import_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("main.mi");
+    let executable = directory.join("main");
+    std::fs::write(
+        &source,
+        "sdl :: @cimport(\"SDL3/SDL.h\") main :: fn () i32 { if sdl.SDL_Init(0) {sdl.SDL_Quit()} else {} 0 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&include),
+        std::slice::from_ref(&library),
+        &["SDL3".to_string()],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn passes_top_level_mimi_functions_as_c_callbacks() {
     let directory =
         std::env::temp_dir().join(format!("mimi_cimport_callback_{}", std::process::id()));
