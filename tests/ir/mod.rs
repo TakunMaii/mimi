@@ -777,6 +777,31 @@ fn passes_object_pointers_to_libc_void_pointer_parameters() {
 }
 
 #[test]
+fn imports_libc_malloc_and_free_void_pointer_signatures() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_cimport_malloc_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("main.mi");
+    let executable = directory.join("main");
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"stdlib.h\") main :: fn () i32 { buffer := c.malloc(8) c.free(buffer) 0 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn compiles_and_links_c_source_with_mimi_program() {
     let directory = std::env::temp_dir().join(format!("mimi_c_source_link_{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
