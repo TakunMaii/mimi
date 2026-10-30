@@ -173,6 +173,7 @@ pub(crate) enum LirInstruction {
         args: Vec<ValueId>,
         float_args: Vec<(usize, u16)>,
         result_float: Option<u16>,
+        variadic: bool,
     },
     Phi {
         destination: ValueId,
@@ -259,13 +260,17 @@ pub(crate) fn lower_mir<T: Target>(module: &MirModule, target: &T) -> LirModule 
         functions: module
             .functions
             .iter()
-            .map(|function| lower_function(function, &mut strings))
+            .map(|function| lower_function(function, target.arch(), &mut strings))
             .collect(),
         strings,
     }
 }
 
-fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) -> LirFunction {
+fn lower_function(
+    function: &MirFunction,
+    target: TargetArch,
+    strings: &mut Vec<(String, Vec<u8>)>,
+) -> LirFunction {
     let blocks = function
         .blocks
         .iter()
@@ -313,6 +318,7 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                                     args: vec![*lhs, *rhs],
                                     float_args: Vec::new(),
                                     result_float: None,
+                                    variadic: false,
                                 }
                             } else {
                                 LirInstruction::FloatBinary {
@@ -361,6 +367,7 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                                     args: vec![*value],
                                     float_args: Vec::new(),
                                     result_float: None,
+                                    variadic: false,
                                 }
                             } else {
                                 LirInstruction::FloatNeg {
@@ -408,6 +415,7 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                                     args: vec![*lhs, *rhs],
                                     float_args: Vec::new(),
                                     result_float: None,
+                                    variadic: false,
                                 }
                             } else {
                                 LirInstruction::FloatCompare {
@@ -456,13 +464,19 @@ fn lower_function(function: &MirFunction, strings: &mut Vec<(String, Vec<u8>)>) 
                             args,
                             float_args,
                             result_float,
+                            variadic,
                         } => LirInstruction::Call {
                             result: *result,
                             result_slice_length: *result_slice_length,
                             name: name.clone(),
                             args: args.clone(),
-                            float_args: float_args.clone(),
+                            float_args: if *variadic && target == TargetArch::Aarch64 {
+                                Vec::new()
+                            } else {
+                                float_args.clone()
+                            },
                             result_float: *result_float,
+                            variadic: *variadic,
                         },
                         MirInstruction::CallIndirect {
                             result,

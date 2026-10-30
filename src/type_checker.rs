@@ -2164,7 +2164,13 @@ fn infer_expression(
                     )?;
                     require_compatible(actual, Some(parameter_type))?;
                 } else {
-                    infer_expression(argument, scopes, functions, structs, None)?;
+                    let argument_type =
+                        infer_expression(argument, scopes, functions, structs, None)?;
+                    if matches!(argument_type, DataType::F32) {
+                        return Err(error(
+                            "C variadic f32 arguments require promotion to f64; cast explicitly to f64",
+                        ));
+                    }
                 }
             }
             require_compatible(function.return_type, expected)?;
@@ -2334,7 +2340,13 @@ fn infer_expression(
                                 Some(*parameter_type),
                             )?;
                         } else {
-                            infer_expression(argument, scopes, functions, structs, None)?;
+                            let argument_type =
+                                infer_expression(argument, scopes, functions, structs, None)?;
+                            if matches!(argument_type, DataType::F32) {
+                                return Err(error(
+                                    "C variadic f32 arguments require promotion to f64; cast explicitly to f64",
+                                ));
+                            }
                         }
                     }
                     require_compatible(function.return_type, expected)?;

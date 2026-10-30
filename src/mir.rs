@@ -123,6 +123,7 @@ pub(crate) enum MirInstruction {
         args: Vec<ValueId>,
         float_args: Vec<(usize, u16)>,
         result_float: Option<u16>,
+        variadic: bool,
     },
     CallIndirect {
         result: Option<ValueId>,
@@ -1039,6 +1040,7 @@ impl Builder {
                     args,
                     float_args,
                     result_float: return_type.as_ref().and_then(|ty| self.float_abi_width(ty)),
+                    variadic: self.variadic_functions.contains(&function_name),
                 });
                 result
             }
@@ -1079,6 +1081,7 @@ impl Builder {
                             args,
                             float_args,
                             result_float: self.float_abi_width(&return_type),
+                            variadic: self.variadic_functions.contains(&name),
                         });
                         return result;
                     }
@@ -1216,6 +1219,7 @@ impl Builder {
                     args,
                     float_args,
                     result_float: return_type.as_ref().and_then(|ty| self.float_abi_width(ty)),
+                    variadic: false,
                 });
                 result
             }
@@ -3634,6 +3638,7 @@ impl Builder {
                     args: vec![size],
                     float_args: vec![],
                     result_float: None,
+                    variadic: false,
                 });
                 self.copy_inline_value_to_address(&receiver_type, source, environment)?;
                 environment
@@ -3713,6 +3718,7 @@ impl Builder {
             args: vec![size_value],
             float_args: Vec::new(),
             result_float: None,
+            variadic: false,
         });
         for (((capture, data_type), (offset, _)), _) in captures.iter().zip(&offsets).zip(0..) {
             let source = self.expression(&Expression::Identifier(capture.clone()))?;

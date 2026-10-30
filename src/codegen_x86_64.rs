@@ -172,6 +172,7 @@ fn emit_instruction(
             args,
             float_args,
             result_float,
+            variadic,
         } => emit_call(
             function,
             args,
@@ -181,6 +182,7 @@ fn emit_instruction(
             *result,
             *result_slice_length,
             *result_float,
+            *variadic,
             assembly,
         )?,
         LirInstruction::CallIndirect {
@@ -190,6 +192,7 @@ fn emit_instruction(
             args,
             float_args,
             result_float,
+            ..
         } => emit_call(
             function,
             args,
@@ -199,6 +202,7 @@ fn emit_instruction(
             *result,
             *result_slice_length,
             *result_float,
+            false,
             assembly,
         )?,
         LirInstruction::Add {
@@ -410,6 +414,7 @@ fn emit_call(
     result: Option<ValueId>,
     result_slice_length: Option<ValueId>,
     result_float: Option<u16>,
+    variadic: bool,
     assembly: &mut String,
 ) -> Result<(), String> {
     if float_args.len() > 8 {
@@ -455,7 +460,9 @@ fn emit_call(
     // SysV x86_64 variadic calls require the number of XMM arguments in %al.
     // Setting it for ordinary calls is harmless and keeps the call instruction
     // independent from declaration metadata at this stage.
-    assembly.push_str(&format!("    mov al, {}\n", float_args.len()));
+    if variadic {
+        assembly.push_str(&format!("    mov al, {}\n", float_args.len()));
+    }
     if let Some(name) = direct_name {
         assembly.push_str(&format!("    call {name}\n"));
     } else {

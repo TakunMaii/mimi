@@ -1020,6 +1020,7 @@ fn encode_function(
                     args,
                     float_args,
                     result_float,
+                    variadic,
                 } => {
                     let integer_args = integer_arguments(args, float_args)?;
                     if integer_args.len() > 16 {
@@ -1038,7 +1039,9 @@ fn encode_function(
                         }
                         push_word(bytes, 0xf900_03e0 | ((offset / 8) << 10) | argument.0);
                     }
-                    encode_float_argument_moves(args, float_args, bytes)?;
+                    if !variadic {
+                        encode_float_argument_moves(args, float_args, bytes)?;
+                    }
                     encode_parallel_argument_moves(
                         &integer_args[..integer_args.len().min(8)],
                         bytes,
@@ -1083,6 +1086,7 @@ fn encode_function(
                     args,
                     float_args,
                     result_float,
+                    ..
                 } => {
                     let integer_args = integer_arguments(args, float_args)?;
                     if integer_args.len() > 16 {
@@ -2017,6 +2021,7 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     args,
                     float_args,
                     result_float,
+                    variadic,
                 } => {
                     let integer_args = integer_arguments(args, float_args)?;
                     if integer_args.len() > 16 {
@@ -2029,7 +2034,9 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     for (index, argument) in integer_args.iter().enumerate().skip(8) {
                         emit_stack_store(assembly, argument.0, (index as u32 - 8) * 8);
                     }
-                    emit_float_argument_moves_assembly(assembly, args, float_args)?;
+                    if !variadic {
+                        emit_float_argument_moves_assembly(assembly, args, float_args)?;
+                    }
                     emit_register_moves(
                         assembly,
                         &argument_moves(&integer_args[..integer_args.len().min(8)]),
