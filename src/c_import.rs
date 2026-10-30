@@ -948,7 +948,7 @@ fn declarations_from_ast_with_shims(
             .and_then(|name| c_scalar_type(name.trim()))
             .unwrap_or(DataType::I32);
         let enum_name = Box::leak(name.to_string().into_boxed_str());
-        let enum_type = DataType::Enum(enum_name);
+        let enum_type = DataType::CEnum(enum_name);
         alias_types.insert(name.to_string(), enum_type);
         enum_underlying_types.insert(name.to_string(), data_type);
         let variants = declaration
@@ -1011,7 +1011,6 @@ fn declarations_from_ast_with_shims(
                 imported_fields.clear();
                 break;
             };
-            let data_type = c_abi_type(data_type, &enum_underlying_types);
             imported_fields.push((field_name.to_string(), data_type, None, true));
         }
         let layout = record_layouts.get(record_name);
@@ -1124,10 +1123,10 @@ fn declarations_from_ast_with_shims(
                 supported = false;
                 break;
             };
-            let data_type = c_abi_type(data_type, &enum_underlying_types);
-            let is_aggregate = is_complete_c_aggregate(data_type, record_layouts);
+            let abi_type = c_abi_type(data_type, &enum_underlying_types);
+            let is_aggregate = is_complete_c_aggregate(abi_type, record_layouts);
             has_aggregate_parameter |= is_aggregate;
-            if !is_supported_c_abi_type(data_type) && !is_aggregate {
+            if !is_supported_c_abi_type(abi_type) && !is_aggregate {
                 supported = false;
                 break;
             }
@@ -1163,9 +1162,9 @@ fn declarations_from_ast_with_shims(
             continue;
         };
         let return_qualifiers = c_qualifiers(return_name);
-        let return_type = c_abi_type(return_type, &enum_underlying_types);
-        let aggregate_return = is_complete_c_aggregate(return_type, record_layouts);
-        if !supported || (!is_supported_c_abi_type(return_type) && !aggregate_return) {
+        let abi_return_type = c_abi_type(return_type, &enum_underlying_types);
+        let aggregate_return = is_complete_c_aggregate(abi_return_type, record_layouts);
+        if !supported || (!is_supported_c_abi_type(abi_return_type) && !aggregate_return) {
             continue;
         }
         let mut link_name = name.to_string();
@@ -1212,12 +1211,11 @@ fn declarations_from_ast_with_shims(
         let Some(data_type) = c_type(type_name, &alias_types) else {
             continue;
         };
-        let data_type = c_abi_type(data_type, &enum_underlying_types);
         let thread_local = declaration.get("tls").is_some();
+        let abi_type = c_abi_type(data_type, &enum_underlying_types);
         let complete_aggregate = matches!(data_type, DataType::Struct(name)
             if record_layouts.contains_key(name));
-        if (!is_supported_c_abi_type(data_type) && !complete_aggregate)
-            || data_type == DataType::Void
+        if (!is_supported_c_abi_type(abi_type) && !complete_aggregate) || abi_type == DataType::Void
         {
             continue;
         }
@@ -1244,7 +1242,7 @@ fn declarations_from_ast_with_shims(
 
 fn c_abi_type(data_type: DataType, enum_underlying_types: &HashMap<String, DataType>) -> DataType {
     match data_type {
-        DataType::Enum(name) => enum_underlying_types
+        DataType::Enum(name) | DataType::CEnum(name) => enum_underlying_types
             .get(name)
             .copied()
             .unwrap_or(data_type),
@@ -1704,8 +1702,8 @@ mod tests {
                 if name == "Color"
         )));
         assert!(declarations.iter().any(|declaration| matches!(declaration,
-            ASTNode::ExternalFunction { name, parameters, return_type: DataType::I32, .. }
-                if name == "echo_color" && parameters == &[("value".into(), DataType::I32)]
+            ASTNode::ExternalFunction { name, parameters, return_type: DataType::CEnum("Color"), .. }
+                if name == "echo_color" && parameters == &[("value".into(), DataType::CEnum("Color"))]
         )));
     }
 

@@ -46,7 +46,9 @@ impl From<DataType> for HirType {
                 element: Box::new((*element).into()),
             },
             DataType::Slice(element) => Self::Slice(Box::new((*element).into())),
-            DataType::Struct(name) | DataType::Enum(name) => Self::Named(name.to_string()),
+            DataType::Struct(name) | DataType::Enum(name) | DataType::CEnum(name) => {
+                Self::Named(name.to_string())
+            }
             DataType::GenericStruct(name, arguments) | DataType::GenericEnum(name, arguments) => {
                 Self::Named(crate::parser::generic_instance_name(name, arguments))
             }

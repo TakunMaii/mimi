@@ -21,6 +21,7 @@ pub(crate) enum DataType {
     Array(u64, &'static DataType),
     Slice(&'static DataType),
     Enum(&'static str),
+    CEnum(&'static str),
     GenericEnum(&'static str, &'static [GenericArgument]),
     Function(&'static [DataType], &'static DataType),
     SelfType,

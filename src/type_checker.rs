@@ -2891,6 +2891,9 @@ fn require_compatible(actual: DataType, expected: Option<DataType>) -> Result<()
         && !matches!((actual, expected), (DataType::Pointer(_), DataType::Pointer(inner)) if *inner == DataType::Void)
         && !matches!((normalize_generic_type(actual), normalize_generic_type(expected)), (DataType::Function(actual_params, actual_result), DataType::Pointer(expected_inner)) if matches!(*expected_inner, DataType::Function(expected_params, expected_result) if actual_params == expected_params && *actual_result == *expected_result))
         && !matches!((normalize_generic_type(actual), expected), (DataType::Struct(a), DataType::Enum(b)) | (DataType::Enum(a), DataType::Struct(b)) if a == b)
+        && !(matches!(actual, DataType::CEnum(_)) && expected.is_integer())
+        && !(actual.is_integer() && matches!(expected, DataType::CEnum(_)))
+        && !(matches!((actual, expected), (DataType::CEnum(_), DataType::CEnum(_))))
         && !(actual.is_integer() && expected.is_float())
     {
         return Err(error(format!("expected {expected}, found {actual}")));
@@ -3010,11 +3013,15 @@ impl DataType {
                 | Self::I16
                 | Self::I32
                 | Self::I64
+                | Self::CEnum(_)
         )
     }
 
     fn is_signed_integer(self) -> bool {
-        matches!(self, Self::I8 | Self::I16 | Self::I32 | Self::I64)
+        matches!(
+            self,
+            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::CEnum(_)
+        )
     }
 
     fn is_float(self) -> bool {
@@ -3046,6 +3053,7 @@ impl DataType {
             Self::Struct(_) | Self::GenericStruct(_, _) => 0,
             Self::Array(_, _) | Self::Slice(_) => 0,
             Self::Enum(_) | Self::GenericEnum(_, _) => 0,
+            Self::CEnum(_) => 32,
             Self::Function(_, _) | Self::SelfType | Self::Pointer(_) => 0,
         }
     }
@@ -3098,7 +3106,7 @@ impl std::fmt::Display for DataType {
             }
             Self::Array(length, element) => return write!(formatter, "[{length}]{element}"),
             Self::Slice(element) => return write!(formatter, "[]{element}"),
-            Self::Enum(name) => name,
+            Self::Enum(name) | Self::CEnum(name) => name,
             Self::GenericEnum(name, arguments) => {
                 return formatter.write_str(&crate::parser::generic_instance_name(name, arguments));
             }

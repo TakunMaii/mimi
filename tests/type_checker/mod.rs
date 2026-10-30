@@ -75,6 +75,14 @@ fn specializes_generic_enum_payload_types() {
 }
 
 #[test]
+fn keeps_mimi_enums_nominal() {
+    let invalid = parse(tokenize(
+        "color :: enum { red, green } value : color = 1".chars(),
+    ));
+    assert!(check(&invalid).is_err());
+}
+
+#[test]
 fn rejects_missing_and_invalid_generic_arguments() {
     for (program, expected) in [
         (
