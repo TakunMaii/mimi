@@ -164,6 +164,9 @@ pub(crate) enum ASTNode {
         parameters: Vec<(String, DataType)>,
         return_type: DataType,
         variadic: bool,
+        calling_convention: String,
+        parameter_qualifiers: Vec<Vec<String>>,
+        return_qualifiers: Vec<String>,
     },
     ExternalGlobal {
         name: String,
@@ -348,12 +351,16 @@ where
         tokens.next();
     }
     let return_type = parse_type(tokens);
+    let parameter_qualifiers = vec![Vec::new(); parameters.len()];
     ASTNode::ExternalFunction {
         name,
         link_name: None,
         parameters,
         return_type,
         variadic: false,
+        calling_convention: "cdecl".into(),
+        parameter_qualifiers,
+        return_qualifiers: Vec::new(),
     }
 }
 

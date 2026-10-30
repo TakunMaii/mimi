@@ -34,7 +34,10 @@ and simple named struct and union fields are imported. Named records use Clang's
 target size, alignment, and field offsets. Union literals initialize one member.
 Complete struct and union values can be passed to and returned from C functions
 through small Clang-compiled ABI thunks. Function pointer parameters are still
-imported for scalar signatures. Top-level non-capturing Mimi functions can be
+imported for scalar signatures. Parameter and return qualifiers are retained in
+imported metadata. Declarations using non-default calling conventions are
+skipped because the native backends currently implement the platform C
+convention. Top-level non-capturing Mimi functions can be
 passed as callbacks; captured closures and callback signatures with aggregate
 arguments or returns are not supported.
 Records with unsupported field types remain opaque, so APIs that only pass

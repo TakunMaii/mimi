@@ -23,7 +23,9 @@ imports while preserving C types, layout, and target ABI rules.
 - [x] Parse ordinary C pointer and function-pointer spellings.
 - [x] Pass top-level non-capturing Mimi functions as scalar C callbacks.
   - [ ] Support callback parameters with aggregate C ABI arguments or returns.
-- [ ] Preserve C qualifiers and calling convention metadata.
+- [x] Preserve C qualifiers and calling convention metadata.
+  - [x] Retain parameter/return qualifiers and calling convention in AST/HIR.
+  - [x] Skip declarations using non-default calling conventions not supported by the native backends.
 - [x] Import forward declarations as opaque C types usable through pointers.
   - [x] Retain complete records with unsupported fields as opaque pointer types.
   - [x] Resolve pointers to complete imported C struct types.

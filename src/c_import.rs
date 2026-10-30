@@ -1104,6 +1104,7 @@ fn declarations_from_ast_with_shims(
             .unwrap_or_default();
         let mut parameters = Vec::new();
         let mut parameter_c_types = Vec::new();
+        let mut parameter_qualifiers = Vec::new();
         let mut has_aggregate_parameter = false;
         let mut supported = true;
         for (index, child) in children
@@ -1137,6 +1138,7 @@ fn declarations_from_ast_with_shims(
                 .unwrap_or_else(|| format!("arg{index}"));
             parameters.push((parameter_name, data_type));
             parameter_c_types.push(type_name.to_string());
+            parameter_qualifiers.push(c_qualifiers(type_name));
         }
         let Some(type_name) = declaration
             .get("type")
@@ -1146,12 +1148,21 @@ fn declarations_from_ast_with_shims(
             continue;
         };
         let variadic = type_name.contains("...");
+        let calling_convention = declaration
+            .get("callingConv")
+            .and_then(Json::string)
+            .unwrap_or("cdecl")
+            .to_string();
+        if !matches!(calling_convention.as_str(), "cdecl" | "C") {
+            continue;
+        }
         let Some(return_name) = function_return_type(type_name) else {
             continue;
         };
         let Some(return_type) = c_type(return_name, &alias_types) else {
             continue;
         };
+        let return_qualifiers = c_qualifiers(return_name);
         let return_type = c_abi_type(return_type, &enum_underlying_types);
         let aggregate_return = is_complete_c_aggregate(return_type, record_layouts);
         if !supported || (!is_supported_c_abi_type(return_type) && !aggregate_return) {
@@ -1178,6 +1189,9 @@ fn declarations_from_ast_with_shims(
             parameters,
             return_type,
             variadic,
+            calling_convention,
+            parameter_qualifiers,
+            return_qualifiers,
         });
     }
     for declaration in inner {
@@ -1253,6 +1267,19 @@ fn c_object_is_const(type_name: &str) -> bool {
             .split_whitespace()
             .any(|qualifier| qualifier == "const")
     }
+}
+
+fn c_qualifiers(type_name: &str) -> Vec<String> {
+    type_name
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|word| {
+            matches!(
+                *word,
+                "const" | "volatile" | "restrict" | "_Nonnull" | "_Nullable" | "_Null_unspecified"
+            )
+        })
+        .map(str::to_string)
+        .collect()
 }
 
 fn is_complete_c_aggregate(
@@ -1679,6 +1706,27 @@ mod tests {
         assert!(declarations.iter().any(|declaration| matches!(declaration,
             ASTNode::ExternalFunction { name, parameters, return_type: DataType::I32, .. }
                 if name == "echo_color" && parameters == &[("value".into(), DataType::I32)]
+        )));
+    }
+
+    #[test]
+    fn preserves_c_function_calling_convention_and_type_qualifiers() {
+        let json = JsonParser::parse(
+            r#"{"inner":[{"kind":"FunctionDecl","name":"read_value","callingConv":"cdecl","type":{"qualType":"const int (const int *restrict, volatile int)"},"inner":[{"kind":"ParmVarDecl","name":"data","type":{"qualType":"const int *restrict"}},{"kind":"ParmVarDecl","name":"state","type":{"qualType":"volatile int"}}]}]}"#,
+        )
+        .unwrap();
+        let declarations = declarations_from_ast(&json, "qualifiers.h", &HashMap::new()).unwrap();
+        assert!(declarations.iter().any(|declaration| matches!(declaration,
+            ASTNode::ExternalFunction {
+                name,
+                calling_convention,
+                parameter_qualifiers,
+                return_qualifiers,
+                ..
+            } if name == "read_value"
+                && calling_convention == "cdecl"
+                && parameter_qualifiers == &[vec!["const".to_string(), "restrict".to_string()], vec!["volatile".to_string()]]
+                && return_qualifiers == &["const".to_string()]
         )));
     }
 

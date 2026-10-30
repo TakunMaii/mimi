@@ -281,6 +281,9 @@ fn parses_external_function_declarations_with_named_parameters() {
             )],
             return_type: DataType::Void,
             variadic: false,
+            calling_convention: "cdecl".into(),
+            parameter_qualifiers: vec![Vec::new()],
+            return_qualifiers: Vec::new(),
         }]
     );
 }
