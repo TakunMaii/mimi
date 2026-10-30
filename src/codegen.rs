@@ -435,6 +435,7 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 | LirInstruction::Neg { .. } => 1,
                 LirInstruction::FloatBinary { .. } => 4,
                 LirInstruction::FloatNeg { .. } => 3,
+                LirInstruction::FloatConvert { .. } => 3,
                 LirInstruction::LoadSlot { .. } | LirInstruction::StoreSlot { .. } => 1,
                 LirInstruction::SlotAddress { slot, .. } => slot_address_words(*slot),
                 LirInstruction::IndexAddress { scale, .. } => index_address_words(*scale)?,
@@ -454,6 +455,7 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                     result_slice_length,
                     float_args,
                     result_float,
+                    variadic_start,
                     ..
                 } => encoded_call_words(
                     args,
@@ -462,6 +464,7 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                     float_args,
                     *result_float,
                     false,
+                    *variadic_start,
                 )?,
                 LirInstruction::CallIndirect {
                     args,
@@ -477,6 +480,7 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                     float_args,
                     *result_float,
                     true,
+                    None,
                 )?,
             } * 4;
         }
@@ -609,9 +613,32 @@ fn encoded_call_words(
     float_args: &[(usize, u16)],
     result_float: Option<u16>,
     indirect: bool,
+    variadic_start: Option<usize>,
 ) -> Result<usize, String> {
     if let Some(width) = result_float {
         validate_float_width(width)?;
+    }
+    if let Some(start) = variadic_start {
+        if start > args.len() {
+            return Err("invalid variadic argument boundary".into());
+        }
+        let fixed_float_args = float_args
+            .iter()
+            .copied()
+            .filter(|(position, _)| *position < start)
+            .collect::<Vec<_>>();
+        let integer_args = integer_arguments(&args[..start], &fixed_float_args)?;
+        if integer_args.len() > 8 {
+            return Err("ARM64 variadic calls support at most 8 fixed integer arguments".into());
+        }
+        let outgoing_size = (args.len() - start).saturating_mul(8).next_multiple_of(16);
+        return Ok(fixed_float_args.len()
+            + argument_moves(&integer_args).len()
+            + (args.len() - start)
+            + stack_adjust_words(outgoing_size as u32) * 2
+            + 1
+            + usize::from(indirect)
+            + call_result_moves(result, result_slice_length, result_float));
     }
     let integer_args = integer_arguments(args, float_args)?;
     if integer_args.len() > 16 {
@@ -902,6 +929,26 @@ fn encode_function(
                     encode_float_neg(*destination, *value, *width, bytes)?;
                     continue;
                 }
+                LirInstruction::FloatConvert {
+                    destination,
+                    value,
+                    from_width: 32,
+                    to_width: 64,
+                } => {
+                    push_word(bytes, 0x1e27_0000 | (value.0 << 5) | 16);
+                    push_word(bytes, 0x1e22_c000 | (16 << 5) | 16);
+                    push_word(bytes, 0x9e66_0000 | (16 << 5) | destination.0);
+                    continue;
+                }
+                LirInstruction::FloatConvert {
+                    from_width,
+                    to_width,
+                    ..
+                } => {
+                    return Err(format!(
+                        "unsupported ARM64 float conversion f{from_width} to f{to_width}"
+                    ));
+                }
                 LirInstruction::Neg { destination, value } => {
                     push_word(bytes, 0xcb00_03e0 | (value.0 << 16) | destination.0);
                     continue;
@@ -1020,28 +1067,51 @@ fn encode_function(
                     args,
                     float_args,
                     result_float,
-                    variadic,
+                    variadic_start,
                 } => {
-                    let integer_args = integer_arguments(args, float_args)?;
-                    if integer_args.len() > 16 {
-                        return Err(
-                            "ARM64 backend currently supports at most 16 integer arguments".into(),
-                        );
+                    let fixed_count = variadic_start.unwrap_or(args.len());
+                    if fixed_count > args.len() {
+                        return Err("invalid variadic argument boundary".into());
                     }
-                    let stack_size = stack_argument_size(integer_args.len());
+                    let fixed_float_args = float_args
+                        .iter()
+                        .copied()
+                        .filter(|(position, _)| *position < fixed_count)
+                        .collect::<Vec<_>>();
+                    let integer_args = integer_arguments(&args[..fixed_count], &fixed_float_args)?;
+                    if integer_args.len() > if variadic_start.is_some() { 8 } else { 16 } {
+                        return Err("ARM64 backend supports too many integer arguments".into());
+                    }
+                    let stack_size = if variadic_start.is_some() {
+                        (args.len() - fixed_count)
+                            .saturating_mul(8)
+                            .next_multiple_of(16) as u32
+                    } else {
+                        stack_argument_size(integer_args.len())
+                    };
                     encode_stack_adjust(bytes, stack_size, true)?;
-                    for (index, argument) in integer_args.iter().enumerate().skip(8) {
-                        let offset = (index as u32 - 8) * 8;
-                        if offset > 32760 {
-                            return Err(
-                                "ARM64 outgoing argument offset exceeds the store range".into()
-                            );
+                    if variadic_start.is_some() {
+                        for (index, argument) in args[fixed_count..].iter().enumerate() {
+                            let offset = index as u32 * 8;
+                            if offset > 32760 {
+                                return Err(
+                                    "ARM64 variadic argument offset exceeds the store range".into(),
+                                );
+                            }
+                            push_word(bytes, 0xf900_03e0 | ((offset / 8) << 10) | argument.0);
                         }
-                        push_word(bytes, 0xf900_03e0 | ((offset / 8) << 10) | argument.0);
+                    } else {
+                        for (index, argument) in integer_args.iter().enumerate().skip(8) {
+                            let offset = (index as u32 - 8) * 8;
+                            if offset > 32760 {
+                                return Err(
+                                    "ARM64 outgoing argument offset exceeds the store range".into(),
+                                );
+                            }
+                            push_word(bytes, 0xf900_03e0 | ((offset / 8) << 10) | argument.0);
+                        }
                     }
-                    if !variadic {
-                        encode_float_argument_moves(args, float_args, bytes)?;
-                    }
+                    encode_float_argument_moves(args, &fixed_float_args, bytes)?;
                     encode_parallel_argument_moves(
                         &integer_args[..integer_args.len().min(8)],
                         bytes,
@@ -1235,6 +1305,7 @@ fn block_encoded_size(
             | LirInstruction::Neg { .. } => 1,
             LirInstruction::FloatBinary { .. } => 4,
             LirInstruction::FloatNeg { .. } => 3,
+            LirInstruction::FloatConvert { .. } => 3,
             LirInstruction::LoadSlot { .. } | LirInstruction::StoreSlot { .. } => 1,
             LirInstruction::SlotAddress { slot, .. } => slot_address_words(*slot),
             LirInstruction::IndexAddress { scale, .. } => index_address_words(*scale)?,
@@ -1254,6 +1325,7 @@ fn block_encoded_size(
                 result_slice_length,
                 float_args,
                 result_float,
+                variadic_start,
                 ..
             } => encoded_call_words(
                 args,
@@ -1262,6 +1334,7 @@ fn block_encoded_size(
                 float_args,
                 *result_float,
                 false,
+                *variadic_start,
             )?,
             LirInstruction::CallIndirect {
                 args,
@@ -1277,6 +1350,7 @@ fn block_encoded_size(
                 float_args,
                 *result_float,
                 true,
+                None,
             )?,
         } * 4;
     }
@@ -1382,6 +1456,9 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
         }
         LirInstruction::Neg { destination, value } => vec![*destination, *value],
         LirInstruction::FloatNeg {
+            destination, value, ..
+        }
+        | LirInstruction::FloatConvert {
             destination, value, ..
         } => vec![*destination, *value],
         LirInstruction::Not { destination, value } => vec![*destination, *value],
@@ -1982,6 +2059,24 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     value,
                     width,
                 } => emit_float_neg_assembly(assembly, *destination, *value, *width)?,
+                LirInstruction::FloatConvert {
+                    destination,
+                    value,
+                    from_width: 32,
+                    to_width: 64,
+                } => assembly.push_str(&format!(
+                    "    fmov s16, w{}\n    fcvt d16, s16\n    fmov x{}, d16\n",
+                    value.0, destination.0
+                )),
+                LirInstruction::FloatConvert {
+                    from_width,
+                    to_width,
+                    ..
+                } => {
+                    return Err(format!(
+                        "unsupported ARM64 float conversion f{from_width} to f{to_width}"
+                    ));
+                }
                 LirInstruction::Not { destination, value } => assembly.push_str(&format!(
                     "    cmp x{}, #0\n    cset x{}, eq\n",
                     value.0, destination.0
@@ -2021,22 +2116,41 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     args,
                     float_args,
                     result_float,
-                    variadic,
+                    variadic_start,
                 } => {
-                    let integer_args = integer_arguments(args, float_args)?;
-                    if integer_args.len() > 16 {
+                    let fixed_count = variadic_start.unwrap_or(args.len());
+                    if fixed_count > args.len() {
+                        return Err("invalid variadic argument boundary".into());
+                    }
+                    let fixed_float_args = float_args
+                        .iter()
+                        .copied()
+                        .filter(|(position, _)| *position < fixed_count)
+                        .collect::<Vec<_>>();
+                    let integer_args = integer_arguments(&args[..fixed_count], &fixed_float_args)?;
+                    if integer_args.len() > if variadic_start.is_some() { 8 } else { 16 } {
                         return Err(
-                            "ARM64 assembly emitter supports at most 16 integer arguments".into(),
+                            "ARM64 assembly emitter supports too many integer arguments".into()
                         );
                     }
-                    let stack_size = stack_argument_size(integer_args.len());
+                    let stack_size = if variadic_start.is_some() {
+                        (args.len() - fixed_count)
+                            .saturating_mul(8)
+                            .next_multiple_of(16) as u32
+                    } else {
+                        stack_argument_size(integer_args.len())
+                    };
                     emit_stack_adjust(assembly, stack_size, true);
-                    for (index, argument) in integer_args.iter().enumerate().skip(8) {
-                        emit_stack_store(assembly, argument.0, (index as u32 - 8) * 8);
+                    if variadic_start.is_some() {
+                        for (index, argument) in args[fixed_count..].iter().enumerate() {
+                            emit_stack_store(assembly, argument.0, index as u32 * 8);
+                        }
+                    } else {
+                        for (index, argument) in integer_args.iter().enumerate().skip(8) {
+                            emit_stack_store(assembly, argument.0, (index as u32 - 8) * 8);
+                        }
                     }
-                    if !variadic {
-                        emit_float_argument_moves_assembly(assembly, args, float_args)?;
-                    }
+                    emit_float_argument_moves_assembly(assembly, args, &fixed_float_args)?;
                     emit_register_moves(
                         assembly,
                         &argument_moves(&integer_args[..integer_args.len().min(8)]),

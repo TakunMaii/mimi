@@ -322,6 +322,9 @@ fn instruction_uses_defs(instruction: &LirInstruction) -> (Vec<ValueId>, Vec<Val
         LirInstruction::FloatNeg {
             destination, value, ..
         } => (vec![*value], vec![*destination]),
+        LirInstruction::FloatConvert {
+            destination, value, ..
+        } => (vec![*value], vec![*destination]),
         LirInstruction::Call {
             result,
             result_slice_length,
@@ -463,6 +466,12 @@ fn rewrite_function(
                     map_value(value)?;
                 }
                 LirInstruction::FloatNeg {
+                    destination, value, ..
+                } => {
+                    map_value(destination)?;
+                    map_value(value)?;
+                }
+                LirInstruction::FloatConvert {
                     destination, value, ..
                 } => {
                     map_value(destination)?;

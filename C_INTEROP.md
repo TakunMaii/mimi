@@ -68,8 +68,8 @@ The importer currently skips declarations it cannot represent. It does not
 provide a general C ABI for bitfields that cross their declared integer storage
 unit, opaque incomplete record field access, thread-local C globals, captured
 callbacks, arbitrary macros, `long double`, or
-automatic conversion between Mimi slices and C strings. Variadic imports
-currently support integer arguments and `f64`; `f32` arguments are rejected with
-an explicit diagnostic until numeric promotion conversion is available.
+automatic conversion between Mimi slices and C strings. Variadic imports apply
+the default promotions for integer and floating-point arguments on x86_64 and
+AArch64.
 Aggregate thunks currently cover complete struct and union parameters and
 returns. Cross-target ABI runtime verification remains outstanding.

@@ -172,7 +172,7 @@ fn emit_instruction(
             args,
             float_args,
             result_float,
-            variadic,
+            variadic_start,
         } => emit_call(
             function,
             args,
@@ -182,7 +182,7 @@ fn emit_instruction(
             *result,
             *result_slice_length,
             *result_float,
-            *variadic,
+            variadic_start.is_some(),
             assembly,
         )?,
         LirInstruction::CallIndirect {
@@ -296,6 +296,25 @@ fn emit_instruction(
                 _ => return Err(format!("unsupported x86_64 float width {width}")),
             }
             store_value(assembly, function, *destination, "rax")?;
+        }
+        LirInstruction::FloatConvert {
+            destination,
+            value,
+            from_width: 32,
+            to_width: 64,
+        } => {
+            load_value(assembly, function, *value, "rax")?;
+            assembly.push_str("    movd xmm0, eax\n    cvtss2sd xmm0, xmm0\n    movq rax, xmm0\n");
+            store_value(assembly, function, *destination, "rax")?;
+        }
+        LirInstruction::FloatConvert {
+            from_width,
+            to_width,
+            ..
+        } => {
+            return Err(format!(
+                "unsupported x86_64 float conversion f{from_width} to f{to_width}"
+            ));
         }
         LirInstruction::FloatCompare {
             destination,
@@ -771,6 +790,9 @@ fn instruction_values(instruction: &LirInstruction, values: &mut Vec<ValueId>) {
         LirInstruction::Neg { destination, value }
         | LirInstruction::Not { destination, value }
         | LirInstruction::FloatNeg {
+            destination, value, ..
+        }
+        | LirInstruction::FloatConvert {
             destination, value, ..
         } => {
             values.extend([*destination, *value]);

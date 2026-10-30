@@ -156,7 +156,7 @@ fn imports_and_calls_c_variadic_printf() {
         .unwrap();
         if target == host {
             let status = std::process::Command::new(&executable).status().unwrap();
-            assert_eq!(status.code(), Some(20));
+            assert_eq!(status.code(), Some(11));
         }
         std::fs::remove_file(executable).unwrap();
     }
@@ -219,12 +219,12 @@ fn promotes_narrow_integer_c_variadic_arguments() {
     std::fs::write(&header, "int check_narrow(int count, ...);\n").unwrap();
     std::fs::write(
         &c_source,
-        "#include <stdarg.h>\n#include \"vararg.h\"\nint check_narrow(int count, ...) { va_list args; va_start(args, count); int value = va_arg(args, int); va_end(args); return value == -2 ? 0 : 1; }\n",
+        "#include <stdarg.h>\n#include \"vararg.h\"\nint check_narrow(int count, ...) { va_list args; va_start(args, count); int i8 = va_arg(args, int); int u8 = va_arg(args, int); int i16 = va_arg(args, int); va_end(args); return i8 == -2 && u8 == 250 && i16 == -300 ? 0 : 1; }\n",
     )
     .unwrap();
     std::fs::write(
         &source,
-        "c :: @cimport(\"vararg.h\") main :: fn () i32 { small : i8 = -2 c.check_narrow(1, small) }",
+        "c :: @cimport(\"vararg.h\") main :: fn () i32 { small : i8 = -2 byte : u8 = 250 medium : i16 = -300 c.check_narrow(3, small, byte, medium) }",
     )
     .unwrap();
     build_file_for_target_with_c_options(
@@ -241,6 +241,51 @@ fn promotes_narrow_integer_c_variadic_arguments() {
     .unwrap();
     let output = std::process::Command::new(&executable).status().unwrap();
     assert_eq!(output.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn promotes_f32_c_variadic_arguments_to_double() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let directory = std::env::temp_dir().join(format!("mimi_variadic_f32_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("vararg.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("vararg.c");
+    std::fs::write(&header, "int check_f32(int count, ...);\n").unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <stdarg.h>\n#include \"vararg.h\"\nint check_f32(int count, ...) { va_list args; va_start(args, count); double value = va_arg(args, double); va_end(args); return (int)(value * 10.0); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"vararg.h\") main :: fn () i32 { value : f32 = 1.5 c.check_f32(1, value) }",
+    )
+    .unwrap();
+    let host = <lir::HostTarget as lir::Target>::arch(&lir::HostTarget);
+    for target in [lir::TargetArch::X86_64, lir::TargetArch::Aarch64] {
+        let executable = directory.join(format!("main-{target:?}"));
+        build_file_for_target_with_c_options(
+            source.to_str().unwrap(),
+            executable.to_str().unwrap(),
+            std::slice::from_ref(&directory),
+            &[],
+            &[],
+            target,
+            &[],
+            None,
+            std::slice::from_ref(&c_source),
+        )
+        .unwrap();
+        if target == host {
+            let status = std::process::Command::new(&executable).status().unwrap();
+            assert_eq!(status.code(), Some(15));
+        }
+        std::fs::remove_file(executable).unwrap();
+    }
     std::fs::remove_dir_all(directory).unwrap();
 }
 

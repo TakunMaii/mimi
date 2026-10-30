@@ -149,6 +149,12 @@ pub(crate) enum LirInstruction {
         value: ValueId,
         width: u16,
     },
+    FloatConvert {
+        destination: ValueId,
+        value: ValueId,
+        from_width: u16,
+        to_width: u16,
+    },
     Not {
         destination: ValueId,
         value: ValueId,
@@ -173,7 +179,7 @@ pub(crate) enum LirInstruction {
         args: Vec<ValueId>,
         float_args: Vec<(usize, u16)>,
         result_float: Option<u16>,
-        variadic: bool,
+        variadic_start: Option<usize>,
     },
     Phi {
         destination: ValueId,
@@ -318,7 +324,7 @@ fn lower_function(
                                     args: vec![*lhs, *rhs],
                                     float_args: Vec::new(),
                                     result_float: None,
-                                    variadic: false,
+                                    variadic_start: None,
                                 }
                             } else {
                                 LirInstruction::FloatBinary {
@@ -367,7 +373,7 @@ fn lower_function(
                                     args: vec![*value],
                                     float_args: Vec::new(),
                                     result_float: None,
-                                    variadic: false,
+                                    variadic_start: None,
                                 }
                             } else {
                                 LirInstruction::FloatNeg {
@@ -377,6 +383,17 @@ fn lower_function(
                                 }
                             }
                         }
+                        MirInstruction::FloatConvert {
+                            result,
+                            value,
+                            from_width,
+                            to_width,
+                        } => LirInstruction::FloatConvert {
+                            destination: *result,
+                            value: *value,
+                            from_width: *from_width,
+                            to_width: *to_width,
+                        },
                         MirInstruction::Not { result, value } => LirInstruction::Not {
                             destination: *result,
                             value: *value,
@@ -415,7 +432,7 @@ fn lower_function(
                                     args: vec![*lhs, *rhs],
                                     float_args: Vec::new(),
                                     result_float: None,
-                                    variadic: false,
+                                    variadic_start: None,
                                 }
                             } else {
                                 LirInstruction::FloatCompare {
@@ -464,19 +481,25 @@ fn lower_function(
                             args,
                             float_args,
                             result_float,
-                            variadic,
+                            variadic_start,
                         } => LirInstruction::Call {
                             result: *result,
                             result_slice_length: *result_slice_length,
                             name: name.clone(),
                             args: args.clone(),
-                            float_args: if *variadic && target == TargetArch::Aarch64 {
-                                Vec::new()
+                            float_args: if target == TargetArch::Aarch64 {
+                                float_args
+                                    .iter()
+                                    .copied()
+                                    .filter(|(position, _)| {
+                                        variadic_start.is_none_or(|start| *position < start)
+                                    })
+                                    .collect()
                             } else {
                                 float_args.clone()
                             },
                             result_float: *result_float,
-                            variadic: *variadic,
+                            variadic_start: *variadic_start,
                         },
                         MirInstruction::CallIndirect {
                             result,

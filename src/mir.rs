@@ -95,6 +95,12 @@ pub(crate) enum MirInstruction {
         value: ValueId,
         width: u16,
     },
+    FloatConvert {
+        result: ValueId,
+        value: ValueId,
+        from_width: u16,
+        to_width: u16,
+    },
     Not {
         result: ValueId,
         value: ValueId,
@@ -123,7 +129,7 @@ pub(crate) enum MirInstruction {
         args: Vec<ValueId>,
         float_args: Vec<(usize, u16)>,
         result_float: Option<u16>,
-        variadic: bool,
+        variadic_start: Option<usize>,
     },
     CallIndirect {
         result: Option<ValueId>,
@@ -1040,7 +1046,10 @@ impl Builder {
                     args,
                     float_args,
                     result_float: return_type.as_ref().and_then(|ty| self.float_abi_width(ty)),
-                    variadic: self.variadic_functions.contains(&function_name),
+                    variadic_start: self
+                        .variadic_functions
+                        .contains(&function_name)
+                        .then(|| self.function_signatures[&function_name].0.len()),
                 });
                 result
             }
@@ -1081,7 +1090,10 @@ impl Builder {
                             args,
                             float_args,
                             result_float: self.float_abi_width(&return_type),
-                            variadic: self.variadic_functions.contains(&name),
+                            variadic_start: self
+                                .variadic_functions
+                                .contains(&name)
+                                .then(|| self.function_signatures[&name].0.len()),
                         });
                         return result;
                     }
@@ -1219,7 +1231,7 @@ impl Builder {
                     args,
                     float_args,
                     result_float: return_type.as_ref().and_then(|ty| self.float_abi_width(ty)),
-                    variadic: false,
+                    variadic_start: None,
                 });
                 result
             }
@@ -1840,23 +1852,39 @@ impl Builder {
                 values.extend([base, length]);
                 continue;
             }
-            let value = match parameter_type {
+            let mut value = match parameter_type {
                 Some(data_type) if self.is_inline_aggregate(data_type) => {
                     self.materialize_inline_argument(argument, data_type)?
                 }
                 Some(data_type) => self.expression_expected(argument, data_type)?,
                 None => self.expression(argument)?,
             };
-            if let Some(width) = parameter_type.and_then(|ty| self.float_abi_width(ty)) {
-                float_args.push((values.len(), width));
-            } else if variadic && parameter_type.is_none() {
-                if let Some(data_type) = self.expression_type(argument) {
-                    if matches!(data_type, HirType::Float { bits: 64 }) {
-                        float_args.push((values.len(), 64));
-                    } else if matches!(data_type, HirType::Float { bits: 32 }) {
+            let float_width = parameter_type
+                .and_then(|ty| self.float_abi_width(ty))
+                .or_else(|| {
+                    if !variadic || parameter_type.is_some() {
                         return None;
                     }
-                }
+                    match self.expression_type(argument)? {
+                        HirType::Float { bits: 64 } => Some(64),
+                        HirType::Float { bits: 32 } => {
+                            let converted = self.value();
+                            self.emit(MirInstruction::FloatConvert {
+                                result: converted,
+                                value,
+                                from_width: 32,
+                                to_width: 64,
+                            });
+                            self.value_types
+                                .insert(converted, HirType::Float { bits: 64 });
+                            value = converted;
+                            Some(64)
+                        }
+                        _ => None,
+                    }
+                });
+            if let Some(width) = float_width {
+                float_args.push((values.len(), width));
             }
             values.push(value);
         }
@@ -3638,7 +3666,7 @@ impl Builder {
                     args: vec![size],
                     float_args: vec![],
                     result_float: None,
-                    variadic: false,
+                    variadic_start: None,
                 });
                 self.copy_inline_value_to_address(&receiver_type, source, environment)?;
                 environment
@@ -3718,7 +3746,7 @@ impl Builder {
             args: vec![size_value],
             float_args: Vec::new(),
             result_float: None,
-            variadic: false,
+            variadic_start: None,
         });
         for (((capture, data_type), (offset, _)), _) in captures.iter().zip(&offsets).zip(0..) {
             let source = self.expression(&Expression::Identifier(capture.clone()))?;

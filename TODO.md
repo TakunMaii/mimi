@@ -49,9 +49,10 @@ imports while preserving C types, layout, and target ABI rules.
 
 - [x] Import simple numeric macro constants through Clang's preprocessor output.
   - [x] Provide source level `@cDefine` configuration.
-- [ ] Support variadic C functions and default argument promotions.
+- [x] Support variadic C functions and default argument promotions.
   - [x] Import declarations and call with integer variadic arguments and `f64`.
-  - [ ] Promote `f32` and narrow integers according to C's default promotions.
+  - [x] Pass narrow integer values with C default-promotion semantics.
+  - [x] Promote `f32` arguments to `f64` on x86_64 and AArch64.
 - [x] Pass top-level non-capturing Mimi callbacks to C with static code lifetime.
   - [ ] Support capturing closures through explicit callback context/trampolines.
 - [x] Build and link C source files alongside Mimi modules with `--c-source`.
