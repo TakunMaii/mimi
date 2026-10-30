@@ -55,9 +55,17 @@ fn catch_compiler_failure<T>(
 
 fn parse_source(source_name: &str, source: &str) -> Result<Vec<parser::ASTNode>, String> {
     let tokens = catch_compiler_failure(source_name, source, "lex", || {
-        lexer::tokenize(source.chars())
+        lexer::tokenize_spanned(source)
+    })?
+    .map_err(|error| {
+        diagnostic::render_span(source_name, source, "lex", &error.message, error.span)
     })?;
-    catch_compiler_failure(source_name, source, "parse", || parser::parse(tokens))
+    catch_compiler_failure(source_name, source, "parse", || {
+        parser::parse_spanned(tokens, source.len())
+    })?
+    .map_err(|error| {
+        diagnostic::render_span(source_name, source, "parse", &error.message, error.span)
+    })
 }
 
 fn render_type_errors(
@@ -65,9 +73,22 @@ fn render_type_errors(
     source: &str,
     errors: Vec<type_checker::TypeError>,
 ) -> String {
+    let tokens = lexer::tokenize_spanned(source).ok();
     errors
         .into_iter()
-        .map(|error| diagnostic::render(source_name, source, "type", &error.message))
+        .map(|error| {
+            if error.message.contains("error[lex]:") || error.message.contains("error[parse]:") {
+                return error.message;
+            }
+            if let Some(span) = tokens
+                .as_deref()
+                .and_then(|tokens| diagnostic::find_token_span(tokens, &error.message))
+            {
+                diagnostic::render_span(source_name, source, "type", &error.message, span)
+            } else {
+                diagnostic::render(source_name, source, "type", &error.message)
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }

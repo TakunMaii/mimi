@@ -1,5 +1,4 @@
 pub(crate) fn render(source_name: &str, source: &str, phase: &str, message: &str) -> String {
-    let lines: Vec<_> = source.lines().collect();
     let location = locate(source, message);
     let Some((line_index, column)) = location else {
         return format!(
@@ -7,7 +6,85 @@ pub(crate) fn render(source_name: &str, source: &str, phase: &str, message: &str
             suggestion(phase, message)
         );
     };
+    render_at(source_name, source, phase, message, line_index, column, 1)
+}
 
+pub(crate) fn render_span(
+    source_name: &str,
+    source: &str,
+    phase: &str,
+    message: &str,
+    span: crate::lexer::Span,
+) -> String {
+    let Some((line_index, column)) = offset_to_line_column(source, span.start) else {
+        return render(source_name, source, phase, message);
+    };
+    let width = source
+        .get(span.start..span.end)
+        .map(|text| text.chars().count())
+        .unwrap_or(1)
+        .max(1);
+    render_at(
+        source_name,
+        source,
+        phase,
+        message,
+        line_index,
+        column,
+        width,
+    )
+}
+
+pub(crate) fn find_token_span(
+    tokens: &[crate::lexer::SpannedToken],
+    message: &str,
+) -> Option<crate::lexer::Span> {
+    if message.contains("found bool")
+        && let Some(token) = tokens
+            .iter()
+            .rev()
+            .find(|token| matches!(token.token, crate::lexer::Token::LiteralBool(_)))
+    {
+        return Some(token.span);
+    }
+    let candidates = message
+        .split('\'')
+        .skip(1)
+        .step_by(2)
+        .filter(|part| !part.is_empty() && part.len() < 80);
+    for candidate in candidates {
+        if let Some(token) = tokens
+            .iter()
+            .rev()
+            .find(|token| token_matches_text(&token.token, candidate))
+        {
+            return Some(token.span);
+        }
+    }
+    None
+}
+
+fn token_matches_text(token: &crate::lexer::Token, text: &str) -> bool {
+    match token {
+        crate::lexer::Token::Identifier(value) | crate::lexer::Token::LiteralNumber(value) => {
+            value == text
+        }
+        crate::lexer::Token::LiteralString(value) => value == text,
+        crate::lexer::Token::LiteralBool(value) => text == value.to_string(),
+        _ => false,
+    }
+}
+
+fn render_at(
+    source_name: &str,
+    source: &str,
+    phase: &str,
+    message: &str,
+    line_index: usize,
+    column: usize,
+    span_width: usize,
+) -> String {
+    let lines: Vec<_> = source.split('\n').collect();
     let start = line_index.saturating_sub(1);
     let end = (line_index + 2).min(lines.len());
     let number_width = end.max(1).to_string().len();
@@ -25,12 +102,17 @@ pub(crate) fn render(source_name: &str, source: &str, phase: &str, message: &str
         ));
         if index == line_index {
             let prefix: String = lines[index].chars().take(column).collect();
+            let remaining = lines[index].chars().count().saturating_sub(column).max(1);
+            let marker = format!(
+                "^{}",
+                "~".repeat(span_width.min(remaining).saturating_sub(1))
+            );
             let indent = prefix
                 .chars()
                 .map(|ch| if ch == '\t' { '\t' } else { ' ' })
                 .collect::<String>();
             output.push_str(&format!(
-                "{:>width$} | {indent}^\n",
+                "{:>width$} | {indent}{marker}\n",
                 "",
                 width = number_width
             ));
@@ -152,7 +234,7 @@ fn suggestion(phase: &str, message: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::render;
+    use super::{find_token_span, render, render_span};
 
     #[test]
     fn renders_source_context_and_actionable_help() {
@@ -177,5 +259,26 @@ mod tests {
         );
         assert!(output.contains("example.mi:2:3"));
         assert!(output.contains("check the spelling"));
+    }
+
+    #[test]
+    fn renders_explicit_spans_and_highlights_the_full_token() {
+        let output = render_span(
+            "example.mi",
+            "value := 123\n",
+            "lex",
+            "invalid number literal",
+            crate::lexer::Span { start: 9, end: 12 },
+        );
+        assert!(output.contains("example.mi:1:10"));
+        assert!(output.contains("^~~"));
+    }
+
+    #[test]
+    fn finds_type_error_tokens_using_lexed_spans() {
+        let source = "main :: fn () i32 { missing } ";
+        let tokens = crate::lexer::tokenize_spanned(source).unwrap();
+        let span = find_token_span(&tokens, "undefined identifier 'missing'").unwrap();
+        assert_eq!(&source[span.start..span.end], "missing");
     }
 }

@@ -248,6 +248,36 @@ fn parses_tuple_destructuring_bindings() {
 }
 
 #[test]
+fn lexer_spans_cover_exact_source_bytes() {
+    let tokens = super::lexer::tokenize_spanned("a := 1").unwrap();
+    assert_eq!(tokens[0].span, super::lexer::Span { start: 0, end: 1 });
+    assert_eq!(tokens[1].span, super::lexer::Span { start: 2, end: 3 });
+    assert_eq!(tokens[3].span, super::lexer::Span { start: 5, end: 6 });
+
+    let tokens = super::lexer::tokenize_spanned("猫 := 1").unwrap();
+    assert_eq!(tokens[0].span, super::lexer::Span { start: 0, end: 3 });
+
+    let tokens = super::lexer::tokenize_spanned(r#""a\nb""#).unwrap();
+    assert_eq!(tokens[0].token, Token::LiteralString("a\nb".into()));
+}
+
+#[test]
+fn lexer_errors_include_the_offending_source_span() {
+    let error = super::lexer::tokenize_spanned("value := \"bad\\q\"").unwrap_err();
+    assert!(error.message.contains("unsupported string escape"));
+    assert_eq!(error.span, super::lexer::Span { start: 13, end: 15 });
+}
+
+#[test]
+fn parser_errors_point_to_the_unexpected_token() {
+    let source = "main :: fn () i32 {\n  value := }";
+    let tokens = super::lexer::tokenize_spanned(source).unwrap();
+    let error = super::parser::parse_spanned(tokens, source.len()).unwrap_err();
+    assert!(error.message.contains("expected an expression"));
+    assert_eq!(&source[error.span.start..error.span.end], "}");
+}
+
+#[test]
 fn tokenizes_boolean_literals() {
     assert_eq!(
         tokenize("true false".chars()),

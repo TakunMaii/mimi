@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use crate::lexer::tokenize;
 use crate::parser::{ASTNode, DataType, Expression, Pattern};
 
 const LOOP_CONTEXT: &str = "\0mimi_loop_context";
@@ -394,7 +393,24 @@ fn imported_exports_inner(
     }
     let source = std::fs::read_to_string(&source_path)
         .map_err(|err| format!("cannot read '{}': {err}", source_path.display()))?;
-    let ast = crate::parser::parse(tokenize(source.chars()));
+    let tokens = crate::lexer::tokenize_spanned(&source).map_err(|error| {
+        crate::diagnostic::render_span(
+            &source_path.display().to_string(),
+            &source,
+            "lex",
+            &error.message,
+            error.span,
+        )
+    })?;
+    let ast = crate::parser::parse_spanned(tokens, source.len()).map_err(|error| {
+        crate::diagnostic::render_span(
+            &source_path.display().to_string(),
+            &source,
+            "parse",
+            &error.message,
+            error.span,
+        )
+    })?;
     let mut nested_import_paths = import_paths.to_vec();
     if let Some(parent) = source_path.parent()
         && !nested_import_paths

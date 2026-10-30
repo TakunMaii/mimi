@@ -52,25 +52,61 @@ pub(crate) enum Token {
     DotDot,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Span {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SpannedToken {
+    pub(crate) token: Token,
+    pub(crate) span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LexError {
+    pub(crate) message: String,
+    pub(crate) span: Span,
+}
+
+#[cfg(test)]
 pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
-    let mut result = vec![];
-    let mut chars = code.peekable();
+    let source: String = code.collect();
+    tokenize_spanned(&source)
+        .unwrap_or_else(|error| panic!("{}", error.message))
+        .into_iter()
+        .map(|token| token.token)
+        .collect()
+}
+
+pub(crate) fn tokenize_spanned(source: &str) -> Result<Vec<SpannedToken>, LexError> {
+    let chars: Vec<char> = source.chars().collect();
+    let byte_offsets: Vec<usize> = source
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(source.len()))
+        .collect();
+    let mut result = Vec::new();
+    let mut index = 0;
     let mut after_member_dot = false;
 
-    while let Some(&ch) = chars.peek() {
+    while let Some(&ch) = chars.get(index) {
+        let start = index;
         if ch.is_whitespace() {
-            chars.next();
+            index += 1;
         } else if ch.is_alphabetic() || ch == '_' {
             after_member_dot = false;
             let mut identifier = String::new();
-            while let Some(&ch) = chars.peek() {
+            while let Some(&ch) = chars.get(index) {
                 if ch.is_alphanumeric() || ch == '_' {
-                    identifier.push(chars.next().unwrap());
+                    identifier.push(ch);
+                    index += 1;
                 } else {
                     break;
                 }
             }
-            result.push(match identifier.as_str() {
+            let token = match identifier.as_str() {
                 "true" => Token::LiteralBool(true),
                 "false" => Token::LiteralBool(false),
                 "f8" => Token::F8,
@@ -92,140 +128,220 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                 "break" => Token::Break,
                 "continue" => Token::Continue,
                 _ => Token::Identifier(identifier),
-            });
+            };
+            push_spanned(&mut result, token, start, index, &byte_offsets);
         } else if ch == '"' {
             after_member_dot = false;
-            chars.next();
+            index += 1;
             let mut value = String::new();
             let mut closed = false;
-            while let Some(next) = chars.next() {
+            while let Some(&next) = chars.get(index) {
+                index += 1;
                 match next {
                     '"' => {
                         closed = true;
                         break;
                     }
-                    '\\' => match chars.next() {
-                        Some('"') => value.push('"'),
-                        Some('\\') => value.push('\\'),
-                        Some('n') => value.push('\n'),
-                        Some('r') => value.push('\r'),
-                        Some('t') => value.push('\t'),
-                        Some(other) => panic!("unsupported string escape: \\{other}"),
-                        None => break,
-                    },
+                    '\\' => {
+                        let escape_start = index - 1;
+                        let Some(escape) = chars.get(index).copied() else {
+                            break;
+                        };
+                        index += 1;
+                        match escape {
+                            '"' => value.push('"'),
+                            '\\' => value.push('\\'),
+                            'n' => value.push('\n'),
+                            'r' => value.push('\r'),
+                            't' => value.push('\t'),
+                            other => {
+                                return Err(LexError {
+                                    message: format!("unsupported string escape: \\{other}"),
+                                    span: make_span(escape_start, index, &byte_offsets),
+                                });
+                            }
+                        }
+                    }
                     other => value.push(other),
                 }
             }
-            assert!(closed, "unterminated string literal");
-            result.push(Token::LiteralString(value));
+            if !closed {
+                return Err(LexError {
+                    message: "unterminated string literal".into(),
+                    span: make_span(start, chars.len(), &byte_offsets),
+                });
+            }
+            push_spanned(
+                &mut result,
+                Token::LiteralString(value),
+                start,
+                index,
+                &byte_offsets,
+            );
         } else if ch.is_ascii_digit() {
             let mut number = String::new();
-            while let Some(&ch) = chars.peek() {
+            while let Some(&ch) = chars.get(index) {
                 if ch.is_ascii_digit() || (ch == '.' && !after_member_dot) {
-                    number.push(chars.next().unwrap());
+                    number.push(ch);
+                    index += 1;
                 } else {
                     break;
                 }
             }
             after_member_dot = false;
-            number.parse::<f64>().expect("invalid number literal");
-            result.push(Token::LiteralNumber(number));
+            if number.parse::<f64>().is_err() {
+                return Err(LexError {
+                    message: "invalid number literal".into(),
+                    span: make_span(start, index, &byte_offsets),
+                });
+            }
+            push_spanned(
+                &mut result,
+                Token::LiteralNumber(number),
+                start,
+                index,
+                &byte_offsets,
+            );
         } else {
-            chars.next();
+            index += 1;
             after_member_dot = false;
-            match ch {
-                ':' => result.push(Token::Colon),
-                ',' => result.push(Token::Comma),
+            let token = match ch {
+                ':' => Some(Token::Colon),
+                ',' => Some(Token::Comma),
                 '.' => {
-                    if chars.peek() == Some(&'.') {
-                        chars.next();
-                        result.push(Token::DotDot);
+                    if chars.get(index) == Some(&'.') {
+                        index += 1;
+                        Some(Token::DotDot)
                     } else {
                         after_member_dot = true;
-                        result.push(Token::Dot);
+                        Some(Token::Dot)
                     }
                 }
                 '=' => {
-                    if chars.peek() == Some(&'=') {
-                        chars.next();
-                        result.push(Token::EqualEqual);
-                    } else if chars.peek() == Some(&'>') {
-                        chars.next();
-                        result.push(Token::FatArrow);
+                    if chars.get(index) == Some(&'=') {
+                        index += 1;
+                        Some(Token::EqualEqual)
+                    } else if chars.get(index) == Some(&'>') {
+                        index += 1;
+                        Some(Token::FatArrow)
                     } else {
-                        result.push(Token::Equal);
+                        Some(Token::Equal)
                     }
                 }
                 '!' => {
-                    if chars.peek() == Some(&'=') {
-                        chars.next();
-                        result.push(Token::NotEqual);
+                    if chars.get(index) == Some(&'=') {
+                        index += 1;
+                        Some(Token::NotEqual)
                     } else {
-                        result.push(Token::Bang);
+                        Some(Token::Bang)
                     }
                 }
                 '<' => {
-                    if chars.peek() == Some(&'=') {
-                        chars.next();
-                        result.push(Token::LessThanOrEqual);
+                    if chars.get(index) == Some(&'=') {
+                        index += 1;
+                        Some(Token::LessThanOrEqual)
                     } else {
-                        result.push(Token::LessThan);
+                        Some(Token::LessThan)
                     }
                 }
                 '>' => {
-                    if chars.peek() == Some(&'=') {
-                        chars.next();
-                        result.push(Token::GreaterThanOrEqual);
+                    if chars.get(index) == Some(&'=') {
+                        index += 1;
+                        Some(Token::GreaterThanOrEqual)
                     } else {
-                        result.push(Token::GreaterThan);
+                        Some(Token::GreaterThan)
                     }
                 }
                 '&' => {
-                    if chars.peek() == Some(&'&') {
-                        chars.next();
-                        result.push(Token::AndAnd);
+                    if chars.get(index) == Some(&'&') {
+                        index += 1;
+                        Some(Token::AndAnd)
                     } else {
-                        result.push(Token::Ampersand);
+                        Some(Token::Ampersand)
                     }
                 }
-                '@' => result.push(Token::At),
+                '@' => Some(Token::At),
                 '|' => {
-                    assert_eq!(chars.next(), Some('|'), "expected '||'");
-                    result.push(Token::OrOr);
+                    if chars.get(index) != Some(&'|') {
+                        return Err(LexError {
+                            message: "expected '||'".into(),
+                            span: make_span(start, index, &byte_offsets),
+                        });
+                    }
+                    index += 1;
+                    Some(Token::OrOr)
                 }
-                '+' => result.push(Token::Plus),
-                '-' => result.push(Token::Minus),
-                '*' => result.push(Token::Star),
-                '/' => match chars.peek() {
+                '+' => Some(Token::Plus),
+                '-' => Some(Token::Minus),
+                '*' => Some(Token::Star),
+                '/' => match chars.get(index) {
                     Some('/') => {
-                        chars.next();
-                        while !matches!(chars.next(), None | Some('\n')) {}
+                        index += 1;
+                        while chars.get(index).is_some_and(|ch| *ch != '\n') {
+                            index += 1;
+                        }
+                        None
                     }
                     Some('*') => {
-                        chars.next();
+                        index += 1;
                         let mut closed = false;
-                        while let Some(comment_char) = chars.next() {
-                            if comment_char == '*' && chars.peek() == Some(&'/') {
-                                chars.next();
+                        while let Some(&comment_char) = chars.get(index) {
+                            index += 1;
+                            if comment_char == '*' && chars.get(index) == Some(&'/') {
+                                index += 1;
                                 closed = true;
                                 break;
                             }
                         }
-                        assert!(closed, "unterminated block comment");
+                        if !closed {
+                            return Err(LexError {
+                                message: "unterminated block comment".into(),
+                                span: make_span(start, index, &byte_offsets),
+                            });
+                        }
+                        None
                     }
-                    _ => result.push(Token::Slash),
+                    _ => Some(Token::Slash),
                 },
-                '%' => result.push(Token::Percent),
-                '(' => result.push(Token::LeftParen),
-                ')' => result.push(Token::RightParen),
-                '{' => result.push(Token::LeftBrace),
-                '}' => result.push(Token::RightBrace),
-                '[' => result.push(Token::LeftBracket),
-                ']' => result.push(Token::RightBracket),
-                _ => panic!("unexpected character: {ch}"),
+                '%' => Some(Token::Percent),
+                '(' => Some(Token::LeftParen),
+                ')' => Some(Token::RightParen),
+                '{' => Some(Token::LeftBrace),
+                '}' => Some(Token::RightBrace),
+                '[' => Some(Token::LeftBracket),
+                ']' => Some(Token::RightBracket),
+                _ => {
+                    return Err(LexError {
+                        message: format!("unexpected character: {ch}"),
+                        span: make_span(start, index, &byte_offsets),
+                    });
+                }
+            };
+            if let Some(token) = token {
+                push_spanned(&mut result, token, start, index, &byte_offsets);
             }
         }
     }
 
-    result
+    Ok(result)
+}
+
+fn push_spanned(
+    output: &mut Vec<SpannedToken>,
+    token: Token,
+    start: usize,
+    end: usize,
+    byte_offsets: &[usize],
+) {
+    output.push(SpannedToken {
+        token,
+        span: make_span(start, end, byte_offsets),
+    });
+}
+
+fn make_span(start: usize, end: usize, byte_offsets: &[usize]) -> Span {
+    Span {
+        start: byte_offsets[start],
+        end: byte_offsets[end],
+    }
 }

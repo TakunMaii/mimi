@@ -263,6 +263,12 @@ pub(crate) enum ASTNode {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ParseError {
+    pub(crate) message: String,
+    pub(crate) span: crate::lexer::Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MethodDefinition {
     pub(crate) name: String,
     pub(crate) parameters: Vec<(String, DataType)>,
@@ -278,6 +284,7 @@ pub(crate) enum Pattern {
     },
 }
 
+#[cfg(test)]
 pub(crate) fn parse(tokens: Vec<Token>) -> Vec<ASTNode> {
     let mut tokens = tokens.into_iter().peekable();
     let mut nodes = vec![];
@@ -287,6 +294,67 @@ pub(crate) fn parse(tokens: Vec<Token>) -> Vec<ASTNode> {
     }
 
     nodes
+}
+
+pub(crate) fn parse_spanned(
+    input: Vec<crate::lexer::SpannedToken>,
+    source_len: usize,
+) -> Result<Vec<ASTNode>, ParseError> {
+    let token_count = input.len();
+    let mut tokens = input
+        .iter()
+        .map(|token| token.token.clone())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .peekable();
+    let mut nodes = Vec::new();
+
+    while let Some(token) = tokens.next() {
+        let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            parse_statement_token(token, &mut tokens)
+        }));
+        match parsed {
+            Ok(node) => nodes.push(node),
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| {
+                        payload
+                            .downcast_ref::<&str>()
+                            .map(|message| (*message).to_string())
+                    })
+                    .unwrap_or_else(|| "invalid syntax".into());
+                let consumed = token_count - tokens.clone().count();
+                let consumed_closing_delimiter = message.contains("expected an expression")
+                    && input.last().is_some_and(|token| {
+                        matches!(
+                            token.token,
+                            Token::RightBrace | Token::RightParen | Token::RightBracket
+                        )
+                    });
+                let token_index = if consumed == token_count && consumed_closing_delimiter {
+                    Some(token_count - 1)
+                } else if consumed == token_count {
+                    None
+                } else if message.starts_with("expected") && consumed > 0 {
+                    Some(consumed - 1)
+                } else {
+                    Some(consumed)
+                };
+                let span = token_index
+                    .and_then(|index| input.get(index))
+                    .map(|token| token.span)
+                    .unwrap_or(crate::lexer::Span {
+                        start: source_len,
+                        end: source_len,
+                    });
+                return Err(ParseError { message, span });
+            }
+        }
+    }
+
+    Ok(nodes)
 }
 
 fn parse_statement_token<I>(token: Token, tokens: &mut std::iter::Peekable<I>) -> ASTNode
