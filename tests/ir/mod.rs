@@ -522,6 +522,53 @@ fn imports_simple_c_struct_layout() {
 }
 
 #[test]
+fn imports_c_functions_with_aggregate_arguments_and_returns() {
+    let directory =
+        std::env::temp_dir().join(format!("mimi_cimport_aggregate_abi_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("point.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("point.c");
+    let host = <lir::HostTarget as lir::Target>::arch(&lir::HostTarget);
+    std::fs::write(
+        &header,
+        "typedef struct Point { double x; double y; } Point; Point point_add(Point a, Point b); union Value { int integer; double real; }; union Value value_roundtrip(union Value value);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <point.h>\nPoint point_add(Point a, Point b) { return (Point){a.x + b.x, a.y + b.y}; }\nunion Value value_roundtrip(union Value value) { return value; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"point.h\") main :: fn () i32 { a := c.Point {x=1.5, y=2.5} b := c.Point {x=3.5, y=4.5} result := c.point_add(a, b) value := c.value_roundtrip(c.Value {real=3.25}) if result.x == 5.0 && result.y == 7.0 && value.real == 3.25 {return 0} else {return 1} 0 }",
+    )
+    .unwrap();
+    for target in [lir::TargetArch::X86_64, lir::TargetArch::Aarch64] {
+        let executable = directory.join(format!("main-{target:?}"));
+        build_file_for_target_with_c_options(
+            source.to_str().unwrap(),
+            executable.to_str().unwrap(),
+            std::slice::from_ref(&directory),
+            &[],
+            &[],
+            target,
+            &[],
+            None,
+            std::slice::from_ref(&c_source),
+        )
+        .unwrap();
+        if target == host {
+            let status = std::process::Command::new(&executable).status().unwrap();
+            assert_eq!(status.code(), Some(0));
+        }
+        std::fs::remove_file(executable).unwrap();
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn imports_c_struct_with_mixed_field_widths() {
     let directory =
         std::env::temp_dir().join(format!("mimi_cimport_mixed_struct_{}", std::process::id()));

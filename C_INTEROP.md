@@ -32,9 +32,9 @@ Scalar C functions, scalar and supported pointer/record typedef names (for examp
 `c.size_t`), ordinary pointers, integer enum constants, simple numeric macros,
 and simple named struct and union fields are imported. Named records use Clang's
 target size, alignment, and field offsets. Union literals initialize one member.
-Imported function calls use their C linker names. Prototypes
-using by-value records or function pointer parameters are skipped because the
-current backends do not implement those C calling conventions.
+Complete struct and union values can be passed to and returned from C functions
+through small Clang-compiled ABI thunks. Function pointer parameters are still
+skipped.
 Named C enum tags and typedefs are represented by their fixed integer type when
 Clang reports one, or by the target's default `int` representation otherwise.
 External scalar and pointer globals are available through the package namespace;
@@ -61,10 +61,9 @@ into the output. Use `-I`, `-L`, and `-l` for header and library search paths.
 ## Current Limits
 
 The importer currently skips declarations it cannot represent. It does not
-provide a general C ABI for structs and unions passed by value, bitfields that
-cross their declared integer storage unit, opaque incomplete record field access, thread-local or const
+provide a general C ABI for bitfields that cross their declared integer storage
+unit, opaque incomplete record field access, thread-local or const
 aggregate C globals, variadic functions, callbacks, arbitrary macros,
 `long double`, or automatic conversion between Mimi slices and C strings.
-Simple imported struct field access uses Mimi's current aggregate layout and
-uses the Clang layout metadata; such structs must not be passed by value to C
-functions until target ABI classification is implemented.
+Aggregate thunks currently cover complete struct and union parameters and
+returns. Cross-target ABI runtime verification remains outstanding.

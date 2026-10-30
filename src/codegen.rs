@@ -32,6 +32,7 @@ pub(crate) struct LinkOptions {
     pub(crate) library_paths: Vec<std::path::PathBuf>,
     pub(crate) libraries: Vec<String>,
     pub(crate) c_sources: Vec<std::path::PathBuf>,
+    pub(crate) generated_c_sources: Vec<String>,
     pub(crate) include_paths: Vec<std::path::PathBuf>,
     pub(crate) defines: Vec<String>,
     pub(crate) sysroot: Option<std::path::PathBuf>,
@@ -202,7 +203,26 @@ fn compile_c_sources(
     options: &LinkOptions,
 ) -> Result<Vec<std::path::PathBuf>, String> {
     let mut objects = Vec::new();
-    for (index, source) in options.c_sources.iter().enumerate() {
+    let mut generated_paths = Vec::new();
+    for (index, contents) in options.generated_c_sources.iter().enumerate() {
+        let source = output.with_extension(format!("cabi{index}.c"));
+        if let Err(error) = std::fs::write(&source, contents) {
+            for generated in &generated_paths {
+                let _ = std::fs::remove_file(generated);
+            }
+            return Err(format!(
+                "cannot write generated C ABI shim '{}': {error}",
+                source.display()
+            ));
+        }
+        generated_paths.push(source);
+    }
+    for (index, source) in options
+        .c_sources
+        .iter()
+        .chain(generated_paths.iter())
+        .enumerate()
+    {
         let object = output.with_extension(format!("c{index}.o"));
         let mut compiler = Command::new("cc");
         if cfg!(target_os = "macos") {
@@ -228,11 +248,28 @@ fn compile_c_sources(
             .arg(source)
             .arg("-o")
             .arg(&object)
-            .output()
-            .map_err(|error| format!("cannot compile C source '{}': {error}", source.display()))?;
+            .output();
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                for object in &objects {
+                    let _ = std::fs::remove_file(object);
+                }
+                for generated in &generated_paths {
+                    let _ = std::fs::remove_file(generated);
+                }
+                return Err(format!(
+                    "cannot compile C source '{}': {error}",
+                    source.display()
+                ));
+            }
+        };
         if !result.status.success() {
             for object in &objects {
                 let _ = std::fs::remove_file(object);
+            }
+            for generated in &generated_paths {
+                let _ = std::fs::remove_file(generated);
             }
             return Err(format!(
                 "C compilation failed for '{}': {}",
@@ -241,6 +278,9 @@ fn compile_c_sources(
             ));
         }
         objects.push(object);
+    }
+    for source in generated_paths {
+        let _ = std::fs::remove_file(source);
     }
     Ok(objects)
 }

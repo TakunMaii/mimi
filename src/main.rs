@@ -168,7 +168,8 @@ fn build_file_for_target_with_c_options(
         import_paths.push(parent.to_path_buf());
     }
     let ast = parser::parse(lexer::tokenize(source.chars()));
-    let ast = c_import::expand(&ast, target, &import_paths, defines, sysroot)?;
+    let (ast, generated_c_sources) =
+        c_import::expand_with_shims(&ast, target, &import_paths, defines, sysroot)?;
     type_checker::check_with_import_paths(&ast, &import_paths).map_err(|errors| {
         errors
             .into_iter()
@@ -195,6 +196,7 @@ fn build_file_for_target_with_c_options(
             library_paths: library_paths.to_vec(),
             libraries: libraries.to_vec(),
             c_sources: c_sources.to_vec(),
+            generated_c_sources,
             include_paths: import_paths.clone(),
             defines: defines.to_vec(),
             sysroot: sysroot.map(std::path::Path::to_path_buf),

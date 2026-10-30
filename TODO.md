@@ -35,7 +35,8 @@ imports while preserving C types, layout, and target ABI rules.
 - [x] Import signed and unsigned bitfields that fit within one byte.
   - [x] Support fields contained within 8/16/32/64-bit integer storage units.
   - [ ] Support fields that cross or do not match their declared storage unit.
-- [ ] Classify C aggregate arguments and returns for each supported target ABI.
+- [x] Pass complete C struct and union arguments and returns through Clang-generated ABI thunks.
+  - [ ] Run cross-target aggregate C calls once target SDKs are available.
 - [x] Import and access scalar and pointer C global variables, including const write protection.
   - [x] Import mutable globals of complete structs and unions.
   - [ ] Support thread-local declarations and const aggregate globals.

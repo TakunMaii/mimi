@@ -250,14 +250,16 @@ impl<'a> JsonParser<'a> {
     }
 }
 
-pub(crate) fn expand(
+pub(crate) fn expand_with_shims(
     nodes: &[ASTNode],
     target: TargetArch,
     include_paths: &[std::path::PathBuf],
     defines: &[String],
     sysroot: Option<&std::path::Path>,
-) -> Result<Vec<ASTNode>, String> {
+) -> Result<(Vec<ASTNode>, Vec<String>), String> {
     let mut output = nodes.to_vec();
+    let mut generated_sources = Vec::new();
+    let mut generated_source_set = HashSet::new();
     let mut imports = Vec::new();
     let mut source_defines = Vec::new();
     for node in nodes {
@@ -271,7 +273,13 @@ pub(crate) fn expand(
     let mut defines = defines.to_vec();
     defines.extend(source_defines);
     for (alias, path) in imports {
-        let declarations = import_header(&path, target, include_paths, &defines, sysroot)?;
+        let (declarations, shims) =
+            import_header_with_shims(&path, target, include_paths, &defines, sysroot)?;
+        generated_sources.extend(
+            shims
+                .into_iter()
+                .filter(|shim| generated_source_set.insert(shim.clone())),
+        );
         output.extend(declarations.into_iter().map(|mut node| {
             match &mut node {
                 ASTNode::ExternalFunction {
@@ -321,7 +329,7 @@ pub(crate) fn expand(
         })
         .collect::<HashMap<_, _>>();
     rewrite_c_aliases(&mut output, &aliases);
-    Ok(output)
+    Ok((output, generated_sources))
 }
 
 fn rewrite_c_aliases(nodes: &mut [ASTNode], aliases: &HashMap<String, DataType>) {
@@ -459,21 +467,21 @@ fn qualify_c_type(data_type: DataType, alias: &str) -> DataType {
     }
 }
 
-fn import_header(
+fn import_header_with_shims(
     path: &str,
     target: TargetArch,
     include_paths: &[std::path::PathBuf],
     defines: &[String],
     sysroot: Option<&std::path::Path>,
-) -> Result<Vec<ASTNode>, String> {
+) -> Result<(Vec<ASTNode>, Vec<String>), String> {
     let clang = std::env::var_os("MIMI_CLANG").unwrap_or("clang".into());
     let cache_key = header_cache_key(&clang, path, target, include_paths, defines, sysroot);
-    static CACHE: OnceLock<Mutex<HashMap<u64, Vec<ASTNode>>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<u64, (Vec<ASTNode>, Vec<String>)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(cache) = cache.lock()
-        && let Some(declarations) = cache.get(&cache_key)
+        && let Some(imported) = cache.get(&cache_key)
     {
-        return Ok(declarations.clone());
+        return Ok(imported.clone());
     }
     let mut command = Command::new(&clang);
     command.args(["-Xclang", "-ast-dump=json", "-fsyntax-only", "-x", "c"]);
@@ -517,7 +525,8 @@ fn import_header(
     let json = JsonParser::parse(&String::from_utf8_lossy(&result.stdout))?;
     let record_layouts =
         import_record_layouts(&clang, path, target, include_paths, defines, sysroot)?;
-    let mut declarations = declarations_from_ast(&json, path, &record_layouts)?;
+    let (mut declarations, generated_sources) =
+        declarations_from_ast_with_shims(&json, path, &record_layouts)?;
     declarations.extend(import_numeric_macros(
         path,
         target,
@@ -532,9 +541,9 @@ fn import_header(
         ));
     }
     if let Ok(mut cache) = cache.lock() {
-        cache.insert(cache_key, declarations.clone());
+        cache.insert(cache_key, (declarations.clone(), generated_sources.clone()));
     }
-    Ok(declarations)
+    Ok((declarations, generated_sources))
 }
 
 fn header_cache_key(
@@ -842,7 +851,16 @@ fn declarations_from_ast(
     header: &str,
     record_layouts: &HashMap<String, CRecordLayout>,
 ) -> Result<Vec<ASTNode>, String> {
+    declarations_from_ast_with_shims(root, header, record_layouts).map(|(nodes, _)| nodes)
+}
+
+fn declarations_from_ast_with_shims(
+    root: &Json,
+    header: &str,
+    record_layouts: &HashMap<String, CRecordLayout>,
+) -> Result<(Vec<ASTNode>, Vec<String>), String> {
     let mut output = Vec::new();
+    let mut generated_sources = Vec::new();
     let mut seen = HashSet::new();
     let mut alias_types = HashMap::new();
     let Some(inner) = root.get("inner").and_then(Json::array) else {
@@ -1054,6 +1072,8 @@ fn declarations_from_ast(
             .and_then(Json::array)
             .unwrap_or_default();
         let mut parameters = Vec::new();
+        let mut parameter_c_types = Vec::new();
+        let mut has_aggregate_parameter = false;
         let mut supported = true;
         for (index, child) in children
             .iter()
@@ -1072,12 +1092,19 @@ fn declarations_from_ast(
                 supported = false;
                 break;
             };
+            let is_aggregate = is_complete_c_aggregate(data_type, record_layouts);
+            has_aggregate_parameter |= is_aggregate;
+            if !is_supported_c_abi_type(data_type) && !is_aggregate {
+                supported = false;
+                break;
+            }
             let parameter_name = child
                 .get("name")
                 .and_then(Json::string)
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("arg{index}"));
             parameters.push((parameter_name, data_type));
+            parameter_c_types.push(type_name.to_string());
         }
         let Some(type_name) = declaration
             .get("type")
@@ -1086,24 +1113,37 @@ fn declarations_from_ast(
         else {
             continue;
         };
+        if type_name.contains("...") {
+            continue;
+        }
         let Some(return_name) = function_return_type(type_name) else {
             continue;
         };
         let Some(return_type) = c_type(return_name, &alias_types) else {
             continue;
         };
-        if !supported || !is_supported_c_abi_type(return_type) {
+        let aggregate_return = is_complete_c_aggregate(return_type, record_layouts);
+        if !supported || (!is_supported_c_abi_type(return_type) && !aggregate_return) {
             continue;
         }
-        if parameters
-            .iter()
-            .any(|(_, ty)| !is_supported_c_abi_type(*ty))
-        {
-            continue;
+        let mut link_name = name.to_string();
+        if has_aggregate_parameter || aggregate_return {
+            let wrapper = c_aggregate_thunk_name(header, name);
+            generated_sources.push(generate_c_aggregate_thunk(
+                header,
+                name,
+                &wrapper,
+                return_name,
+                aggregate_return,
+                &parameter_c_types,
+                &parameters,
+                record_layouts,
+            ));
+            link_name = wrapper;
         }
         output.push(ASTNode::ExternalFunction {
             name: name.to_string(),
-            link_name: Some(name.to_string()),
+            link_name: Some(link_name),
             parameters,
             return_type,
         });
@@ -1143,7 +1183,69 @@ fn declarations_from_ast(
         });
     }
     let _ = header;
-    Ok(output)
+    Ok((output, generated_sources))
+}
+
+fn is_complete_c_aggregate(
+    data_type: DataType,
+    record_layouts: &HashMap<String, CRecordLayout>,
+) -> bool {
+    matches!(data_type, DataType::Struct(name) if record_layouts.contains_key(name))
+}
+
+fn c_aggregate_thunk_name(header: &str, function: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    header.hash(&mut hasher);
+    function.hash(&mut hasher);
+    format!("mimi_cabi_{:016x}", hasher.finish())
+}
+
+fn generate_c_aggregate_thunk(
+    header: &str,
+    function: &str,
+    wrapper: &str,
+    return_c_type: &str,
+    aggregate_return: bool,
+    parameter_c_types: &[String],
+    parameters: &[(String, DataType)],
+    record_layouts: &HashMap<String, CRecordLayout>,
+) -> String {
+    let include = header.replace('\\', "\\\\").replace('"', "\\\"");
+    let mut declarations = Vec::new();
+    let mut arguments = Vec::new();
+    if aggregate_return {
+        declarations.push(format!("{return_c_type} *mimi_result"));
+    }
+    for (index, (c_type, (_, data_type))) in parameter_c_types.iter().zip(parameters).enumerate() {
+        let argument = format!("mimi_arg_{index}");
+        if is_complete_c_aggregate(*data_type, record_layouts) {
+            declarations.push(format!("{c_type} *{argument}"));
+            arguments.push(format!("*{argument}"));
+        } else {
+            declarations.push(format!("{c_type} {argument}"));
+            arguments.push(argument);
+        }
+    }
+    let parameter_list = if declarations.is_empty() {
+        "void".to_string()
+    } else {
+        declarations.join(", ")
+    };
+    let call = format!("{function}({})", arguments.join(", "));
+    let body = if aggregate_return {
+        format!("*mimi_result = {call};")
+    } else if return_c_type == "void" {
+        format!("{call};")
+    } else {
+        format!("return {call};")
+    };
+    let wrapper_return = if aggregate_return {
+        "void"
+    } else {
+        return_c_type
+    };
+    format!("#include \"{include}\"\n{wrapper_return} {wrapper}({parameter_list}) {{ {body} }}\n")
 }
 
 fn collect_enum_constants(
@@ -1502,7 +1604,7 @@ mod tests {
     #[test]
     fn skips_signatures_without_a_supported_c_abi() {
         let json = JsonParser::parse(
-            r#"{"inner":[{"kind":"FunctionDecl","name":"take_record","type":{"qualType":"void (struct Record)"},"inner":[{"kind":"ParmVarDecl","name":"record","type":{"qualType":"struct Record"}}]},{"kind":"FunctionDecl","name":"take_callback","type":{"qualType":"void (int (*)(int))"},"inner":[{"kind":"ParmVarDecl","name":"callback","type":{"qualType":"int (*)(int)"}}]}]}"#,
+            r#"{"inner":[{"kind":"FunctionDecl","name":"take_record","type":{"qualType":"void (struct Record)"},"inner":[{"kind":"ParmVarDecl","name":"record","type":{"qualType":"struct Record"}}]},{"kind":"FunctionDecl","name":"take_callback","type":{"qualType":"void (int (*)(int))"},"inner":[{"kind":"ParmVarDecl","name":"callback","type":{"qualType":"int (*)(int)"}}]},{"kind":"FunctionDecl","name":"printf","type":{"qualType":"int (const char *, ...)"},"inner":[{"kind":"ParmVarDecl","name":"format","type":{"qualType":"const char *"}}]}]}"#,
         )
         .unwrap();
         assert!(
