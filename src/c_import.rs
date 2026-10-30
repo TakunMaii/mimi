@@ -989,14 +989,9 @@ fn declarations_from_ast_with_shims(
             };
             imported_fields.push((field_name.to_string(), data_type, None, true));
         }
-        if !imported_fields.is_empty() {
-            let Some(layout) = record_layouts.get(record_name) else {
-                continue;
-            };
-            if !layout.fields_supported || layout.field_offsets.len() != imported_fields.len() {
-                continue;
-            }
-            let unsupported_bit_field = layout.bit_fields.iter().any(|(field, offset, width)| {
+        let layout = record_layouts.get(record_name);
+        let unsupported_bit_field = layout.is_some_and(|layout| {
+            layout.bit_fields.iter().any(|(field, offset, width)| {
                 imported_fields
                     .iter()
                     .find(|(name, _, _, _)| name == field)
@@ -1010,29 +1005,40 @@ fn declarations_from_ast_with_shims(
                         };
                         capacity == 0 || *width == 0 || *offset as u16 + *width as u16 > capacity
                     })
+            })
+        });
+        let fields_supported = !imported_fields.is_empty()
+            && layout.is_some_and(|layout| {
+                layout.fields_supported
+                    && layout.field_offsets.len() == imported_fields.len()
+                    && imported_fields.iter().all(|(field, _, _, _)| {
+                        layout.field_offsets.iter().any(|(name, _)| name == field)
+                    })
+                    && !unsupported_bit_field
             });
-            if unsupported_bit_field {
-                continue;
-            }
-            if imported_fields
-                .iter()
-                .any(|(field, _, _, _)| !layout.field_offsets.iter().any(|(name, _)| name == field))
-            {
-                continue;
-            }
-            output.push(ASTNode::StructDefinition {
-                name: record_name,
-                parameters: Vec::new(),
-                fields: imported_fields,
-                methods: Vec::new(),
-            });
+        let fields = if fields_supported {
+            imported_fields
+        } else {
+            Vec::new()
+        };
+        output.push(ASTNode::StructDefinition {
+            name: record_name,
+            parameters: Vec::new(),
+            fields,
+            methods: Vec::new(),
+        });
+        if let Some(layout) = layout {
             output.push(ASTNode::CTypeRecordLayout {
                 name: record_name.to_string(),
                 size_bytes: layout.size_bytes,
                 align_bytes: layout.align_bytes,
                 is_union: layout.is_union,
                 field_offsets: layout.field_offsets.clone(),
-                bit_fields: layout.bit_fields.clone(),
+                bit_fields: if fields_supported {
+                    layout.bit_fields.clone()
+                } else {
+                    Vec::new()
+                },
             });
         }
     }
@@ -1446,7 +1452,7 @@ fn is_supported_c_scalar_abi_type(data_type: DataType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        Json, JsonParser, c_type, declarations_from_ast, import_record_layouts,
+        CRecordLayout, Json, JsonParser, c_type, declarations_from_ast, import_record_layouts,
         parse_record_layouts,
     };
     use crate::lir::TargetArch;
@@ -1631,6 +1637,35 @@ mod tests {
             ASTNode::ExternalFunction { name, parameters, .. }
                 if name == "use_opaque"
                     && parameters == &[("value".into(), DataType::Pointer(Box::leak(Box::new(DataType::Struct("Opaque")))))]
+        )));
+    }
+
+    #[test]
+    fn keeps_unsupported_complete_records_opaque_for_pointer_apis() {
+        let json = JsonParser::parse(
+            r#"{"inner":[{"kind":"RecordDecl","name":"Event","tagUsed":"struct","completeDefinition":true,"inner":[{"kind":"FieldDecl","name":"data","type":{"qualType":"int[2]"}}]},{"kind":"FunctionDecl","name":"poll_event","type":{"qualType":"int (struct Event *)"},"inner":[{"kind":"ParmVarDecl","name":"event","type":{"qualType":"struct Event *"}}]}]}"#,
+        )
+        .unwrap();
+        let layouts = HashMap::from([(
+            "Event".to_string(),
+            CRecordLayout {
+                size_bytes: 8,
+                align_bytes: 4,
+                is_union: false,
+                field_offsets: vec![("data".to_string(), 0)],
+                bit_fields: Vec::new(),
+                fields_supported: true,
+            },
+        )]);
+        let declarations = declarations_from_ast(&json, "event.h", &layouts).unwrap();
+        assert!(declarations.iter().any(|declaration| matches!(
+            declaration,
+            ASTNode::StructDefinition { name, fields, .. } if *name == "Event" && fields.is_empty()
+        )));
+        assert!(declarations.iter().any(|declaration| matches!(
+            declaration,
+            ASTNode::ExternalFunction { name, parameters, .. }
+                if name == "poll_event" && matches!(parameters.as_slice(), [(_, DataType::Pointer(inner))] if **inner == DataType::Struct("Event"))
         )));
     }
 

@@ -24,6 +24,7 @@ imports while preserving C types, layout, and target ABI rules.
   - [ ] Support callback parameters with aggregate C ABI arguments or returns.
   - [ ] Preserve C qualifiers and calling convention metadata.
 - [x] Import forward declarations as opaque C types usable through pointers.
+  - [x] Retain complete records with unsupported fields as opaque pointer types.
   - [x] Resolve pointers to complete imported C struct types.
 - [x] Pass string literals as NUL-terminated C `char *` arguments.
 - [x] Pass mutable Mimi byte-array buffers through explicit element pointers to C `char *` parameters.

@@ -37,6 +37,8 @@ through small Clang-compiled ABI thunks. Function pointer parameters are still
 imported for scalar signatures. Top-level non-capturing Mimi functions can be
 passed as callbacks; captured closures and callback signatures with aggregate
 arguments or returns are not supported.
+Records with unsupported field types remain opaque, so APIs that only pass
+pointers to those records can still be imported and called.
 Named C enum tags and typedefs are represented by their fixed integer type when
 Clang reports one, or by the target's default `int` representation otherwise.
 External scalar and pointer globals are available through the package namespace;
