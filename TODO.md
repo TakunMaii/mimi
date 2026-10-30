@@ -41,7 +41,7 @@ imports while preserving C types, layout, and target ABI rules.
   - [x] Compile and link aggregate calls for x86_64 and AArch64; execute on the host target.
 - [x] Import and access scalar and pointer C global variables, including const write protection.
   - [x] Import mutable globals of complete structs and unions.
-  - [ ] Support thread-local declarations.
+  - [x] Support thread-local declarations through generated C address accessors.
   - [x] Support const aggregate globals as read-only values.
 - [x] Compile and link integer and floating-point scalar C calls for x86_64 and AArch64.
 

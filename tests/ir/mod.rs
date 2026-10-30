@@ -205,6 +205,41 @@ fn imports_const_c_aggregate_globals_as_read_only() {
 }
 
 #[test]
+fn imports_and_accesses_c_thread_local_globals() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let directory = std::env::temp_dir().join(format!("mimi_c_tls_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("tls.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("tls.c");
+    let executable = directory.join("main");
+    std::fs::write(&header, "extern _Thread_local int counter;\n").unwrap();
+    std::fs::write(&c_source, "_Thread_local int counter = 41;\n").unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"tls.h\") main :: fn () i32 { current := c.counter c.counter = current + 1 c.counter - 42 }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn promotes_narrow_integer_c_variadic_arguments() {
     if !cfg!(target_os = "macos") {
         return;

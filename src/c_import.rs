@@ -1156,7 +1156,6 @@ fn declarations_from_ast_with_shims(
     for declaration in inner {
         if declaration.get("kind").and_then(Json::string) != Some("VarDecl")
             || declaration.get("storageClass").and_then(Json::string) != Some("extern")
-            || declaration.get("tls").is_some()
         {
             continue;
         }
@@ -1172,6 +1171,7 @@ fn declarations_from_ast_with_shims(
         let Some(data_type) = c_type(type_name, &alias_types) else {
             continue;
         };
+        let thread_local = declaration.get("tls").is_some();
         let complete_aggregate = matches!(data_type, DataType::Struct(name)
             if record_layouts.contains_key(name));
         if (!is_supported_c_abi_type(data_type) && !complete_aggregate)
@@ -1179,11 +1179,21 @@ fn declarations_from_ast_with_shims(
         {
             continue;
         }
+        let link_name = if thread_local {
+            let accessor = format!("__mimi_tls_addr_{name}");
+            generated_sources.push(format!(
+                "#include \"{header}\"\nvoid *{accessor}(void) {{ return (void *)&{name}; }}\n"
+            ));
+            accessor
+        } else {
+            name.to_string()
+        };
         output.push(ASTNode::ExternalGlobal {
             name: name.to_string(),
-            link_name: Some(name.to_string()),
+            link_name: Some(link_name),
             data_type,
             mutable: !c_object_is_const(type_name),
+            thread_local,
         });
     }
     let _ = header;

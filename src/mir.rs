@@ -2282,6 +2282,26 @@ impl Builder {
     }
 
     fn external_global_address(&mut self, global: &crate::hir::HirExternalGlobal) -> ValueId {
+        if global.thread_local {
+            let callee = self.value();
+            self.emit(MirInstruction::LoadFunctionAddress {
+                result: callee,
+                symbol: format!("_{}", global.link_name),
+                external: true,
+            });
+            let result = self.value();
+            self.emit(MirInstruction::CallIndirect {
+                result: Some(result),
+                result_slice_length: None,
+                callee,
+                args: Vec::new(),
+                float_args: Vec::new(),
+                result_float: None,
+            });
+            self.value_types
+                .insert(result, HirType::Pointer(Box::new(global.data_type.clone())));
+            return result;
+        }
         let result = self.value();
         self.emit(MirInstruction::LoadFunctionAddress {
             result,

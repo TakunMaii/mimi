@@ -170,6 +170,7 @@ pub(crate) enum ASTNode {
         link_name: Option<String>,
         data_type: DataType,
         mutable: bool,
+        thread_local: bool,
     },
     Return(Option<Expression>),
     Break,

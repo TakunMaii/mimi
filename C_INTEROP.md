@@ -66,8 +66,8 @@ into the output. Use `-I`, `-L`, and `-l` for header and library search paths.
 
 The importer currently skips declarations it cannot represent. It does not
 provide a general C ABI for bitfields that cross their declared integer storage
-unit, opaque incomplete record field access, thread-local C globals, captured
-callbacks, arbitrary macros, `long double`, or
+unit, opaque incomplete record field access, captured callbacks, arbitrary
+macros, `long double`, or
 automatic conversion between Mimi slices and C strings. Variadic imports apply
 the default promotions for integer and floating-point arguments on x86_64 and
 AArch64.

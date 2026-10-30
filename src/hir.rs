@@ -95,6 +95,7 @@ pub(crate) struct HirExternalGlobal {
     pub(crate) link_name: String,
     pub(crate) data_type: HirType,
     pub(crate) mutable: bool,
+    pub(crate) thread_local: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -228,6 +229,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
             link_name,
             data_type,
             mutable,
+            thread_local,
         } = node
         {
             module.extern_globals.push(HirExternalGlobal {
@@ -235,6 +237,7 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                 link_name: link_name.clone().unwrap_or_else(|| name.clone()),
                 data_type: (*data_type).into(),
                 mutable: *mutable,
+                thread_local: *thread_local,
             });
         }
         if let ASTNode::CompileTimeConstant {
