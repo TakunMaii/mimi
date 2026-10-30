@@ -647,6 +647,22 @@ impl Builder {
                 self.lower_struct_literal((*type_name)?, fields)
             }
             Expression::MemberAccess { object, member } => {
+                if member == "len"
+                    && matches!(
+                        self.expression_type(object),
+                        Some(HirType::Array { .. } | HirType::Slice(_))
+                    )
+                {
+                    let (_, length, _) = self.lower_array_view(object)?;
+                    self.value_types.insert(
+                        length,
+                        HirType::Integer {
+                            bits: 64,
+                            signed: false,
+                        },
+                    );
+                    return Some(length);
+                }
                 if let Expression::Identifier(package) = object.as_ref() {
                     let name = self.resolve_package_member_name(package, member);
                     if self.global_constants.contains_key(&name) {
@@ -2422,6 +2438,17 @@ impl Builder {
                 ..
             } => Some(HirType::Named((*name).to_string())),
             Expression::MemberAccess { object, member } => {
+                if member == "len"
+                    && matches!(
+                        self.expression_type(object),
+                        Some(HirType::Array { .. } | HirType::Slice(_))
+                    )
+                {
+                    return Some(HirType::Integer {
+                        bits: 64,
+                        signed: false,
+                    });
+                }
                 if let Expression::Identifier(package) = object.as_ref() {
                     let name = self.resolve_package_member_name(package, member);
                     if let Some(constant) = self.global_constants.get(&name) {

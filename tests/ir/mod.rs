@@ -927,15 +927,19 @@ fn passes_mutable_mimi_byte_buffers_to_c_char_pointers() {
     let source = directory.join("main.mi");
     let c_source = directory.join("buffer.c");
     let executable = directory.join("main");
-    std::fs::write(&header, "void fill_buffer(char *buffer);\n").unwrap();
+    std::fs::write(
+        &header,
+        "#include <stdint.h>\nuint64_t fill_buffer(char *buffer, uint64_t length);\n",
+    )
+    .unwrap();
     std::fs::write(
         &c_source,
-        "#include <buffer.h>\nvoid fill_buffer(char *buffer) { buffer[0] = 'O'; buffer[1] = 'K'; }\n",
+        "#include <buffer.h>\nuint64_t fill_buffer(char *buffer, uint64_t length) { buffer[0] = 'O'; buffer[length - 1] = 'K'; return length; }\n",
     )
     .unwrap();
     std::fs::write(
         &source,
-        "c :: @cimport(\"buffer.h\") main :: fn () i32 { buffer : [2]u8 = [0, 0] c.fill_buffer(&buffer[0]) if buffer[0] == 79 && buffer[1] == 75 {return 0} else {return 1} 0 }",
+        "c :: @cimport(\"buffer.h\") main :: fn () i32 { buffer : [2]u8 = [0, 0] view := buffer[0:2] c.fill_buffer(&view[0], view.len) if buffer.len == 2 && buffer[0] == 79 && buffer[1] == 75 {return 0} else {return 1} 0 }",
     )
     .unwrap();
     build_file_for_target_with_c_options(

@@ -2234,6 +2234,10 @@ fn infer_expression(
                 }
             }
             let object_type = infer_expression(object, scopes, functions, structs, None)?;
+            if member == "len" && matches!(object_type, DataType::Array(_, _) | DataType::Slice(_))
+            {
+                return Ok(DataType::U64);
+            }
             let struct_name = match object_type {
                 DataType::Struct(name) => name,
                 DataType::GenericStruct(name, arguments) => {
