@@ -1175,7 +1175,7 @@ fn declarations_from_ast_with_shims(
         };
         let complete_aggregate = matches!(data_type, DataType::Struct(name)
             if record_layouts.contains_key(name)
-                && !type_name.trim_start().starts_with("const "));
+                && !c_object_is_const(type_name));
         if (!is_supported_c_abi_type(data_type) && !complete_aggregate)
             || data_type == DataType::Void
         {
@@ -1185,11 +1185,24 @@ fn declarations_from_ast_with_shims(
             name: name.to_string(),
             link_name: Some(name.to_string()),
             data_type,
-            mutable: !type_name.trim_start().starts_with("const "),
+            mutable: !c_object_is_const(type_name),
         });
     }
     let _ = header;
     Ok((output, generated_sources))
+}
+
+fn c_object_is_const(type_name: &str) -> bool {
+    let type_name = type_name.trim();
+    if let Some((_, pointer_suffix)) = type_name.rsplit_once('*') {
+        pointer_suffix
+            .split_whitespace()
+            .any(|qualifier| qualifier == "const")
+    } else {
+        type_name
+            .split_whitespace()
+            .any(|qualifier| qualifier == "const")
+    }
 }
 
 fn is_complete_c_aggregate(
@@ -1337,7 +1350,14 @@ fn function_return_type(signature: &str) -> Option<&str> {
 }
 
 fn c_type(type_name: &str, aliases: &HashMap<String, DataType>) -> Option<DataType> {
-    let type_name = type_name.trim();
+    let mut type_name = type_name.trim();
+    for qualifier in ["const", "volatile", "restrict"] {
+        if let Some(prefix) = type_name.strip_suffix(qualifier)
+            && prefix.ends_with([' ', '*'])
+        {
+            type_name = prefix.trim_end();
+        }
+    }
     if let Some(pointer) = type_name.find("(*") {
         let return_type = c_type(type_name[..pointer].trim(), aliases)?;
         let parameters = type_name[pointer + 2..]
@@ -1666,6 +1686,23 @@ mod tests {
             declaration,
             ASTNode::ExternalFunction { name, parameters, .. }
                 if name == "poll_event" && matches!(parameters.as_slice(), [(_, DataType::Pointer(inner))] if **inner == DataType::Struct("Event"))
+        )));
+    }
+
+    #[test]
+    fn distinguishes_pointer_qualifiers_on_c_globals() {
+        let json = JsonParser::parse(
+            r#"{"inner":[{"kind":"VarDecl","name":"pointee_const","storageClass":"extern","type":{"qualType":"const int *"}},{"kind":"VarDecl","name":"pointer_const","storageClass":"extern","type":{"qualType":"int *const"}}]}"#,
+        )
+        .unwrap();
+        let declarations = declarations_from_ast(&json, "qualifiers.h", &HashMap::new()).unwrap();
+        assert!(declarations.iter().any(|declaration| matches!(
+            declaration,
+            ASTNode::ExternalGlobal { name, mutable: true, .. } if name == "pointee_const"
+        )));
+        assert!(declarations.iter().any(|declaration| matches!(
+            declaration,
+            ASTNode::ExternalGlobal { name, mutable: false, .. } if name == "pointer_const"
         )));
     }
 
