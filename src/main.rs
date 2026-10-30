@@ -397,6 +397,14 @@ fn qualify_imported_type(
                 local_type_names,
             ))),
         ),
+        parser::DataType::Tuple(elements) => parser::DataType::Tuple(Box::leak(
+            elements
+                .iter()
+                .copied()
+                .map(|element| qualify_imported_type(element, package, local_type_names))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )),
         other => other,
     }
 }
@@ -633,7 +641,7 @@ fn qualify_imported_expression(
         Expression::MemberAccess { object, .. } => {
             qualify_imported_expression(object, package, local_type_names);
         }
-        Expression::ArrayLiteral(values) => {
+        Expression::ArrayLiteral(values) | Expression::TupleLiteral(values) => {
             for value in values {
                 qualify_imported_expression(value, package, local_type_names);
             }

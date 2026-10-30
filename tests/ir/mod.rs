@@ -56,6 +56,30 @@ fn lowers_pointer_stride_from_target_data_layout() {
 }
 
 #[test]
+fn builds_and_runs_tuples_through_functions_and_member_assignment() {
+    let source = std::env::temp_dir().join(format!("mimi_tuple_source_{}.mi", std::process::id()));
+    let executable =
+        std::env::temp_dir().join(format!("mimi_tuple_executable_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "make :: fn (value : i32) (i32, bool) { (value, true) } identity :: fn (pair : (i32, bool)) (i32, bool) { pair } main :: fn () i32 { pair := identity(make(7)) pair.0 = 9 nested := (pair.1, (pair.0, false)) nested.1.0 = 11 wide := (5000000000, true) negative := (-2147483648, true) items := [(1, true), (2, false)] items[1].0 = 3 result := if nested.0 && nested.1.0 == 11 && !nested.1.1 && wide.0 == 5000000000 && wide.1 && negative.0 == -2147483648 && negative.1 && items[1].0 == 3 && !items[1].1 { 0 } else { 1 } result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
 fn lowers_capture_free_lambdas_to_indirectly_callable_functions() {
     let ast = parse(tokenize(
         "apply :: fn (function : fn(i32)i32, value : i32) i32 { function(value) } main :: fn () i32 { square := fn (value : i32) i32 { value * value } apply(square, 7) + apply(fn (value : i32) i32 { value + 1 }, 2) }".chars(),

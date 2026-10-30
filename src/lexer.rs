@@ -55,11 +55,13 @@ pub(crate) enum Token {
 pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
     let mut result = vec![];
     let mut chars = code.peekable();
+    let mut after_member_dot = false;
 
     while let Some(&ch) = chars.peek() {
         if ch.is_whitespace() {
             chars.next();
         } else if ch.is_alphabetic() || ch == '_' {
+            after_member_dot = false;
             let mut identifier = String::new();
             while let Some(&ch) = chars.peek() {
                 if ch.is_alphanumeric() || ch == '_' {
@@ -92,6 +94,7 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                 _ => Token::Identifier(identifier),
             });
         } else if ch == '"' {
+            after_member_dot = false;
             chars.next();
             let mut value = String::new();
             let mut closed = false;
@@ -118,16 +121,18 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
         } else if ch.is_ascii_digit() {
             let mut number = String::new();
             while let Some(&ch) = chars.peek() {
-                if ch.is_ascii_digit() || ch == '.' {
+                if ch.is_ascii_digit() || (ch == '.' && !after_member_dot) {
                     number.push(chars.next().unwrap());
                 } else {
                     break;
                 }
             }
+            after_member_dot = false;
             number.parse::<f64>().expect("invalid number literal");
             result.push(Token::LiteralNumber(number));
         } else {
             chars.next();
+            after_member_dot = false;
             match ch {
                 ':' => result.push(Token::Colon),
                 ',' => result.push(Token::Comma),
@@ -136,6 +141,7 @@ pub(crate) fn tokenize<T: Iterator<Item = char>>(code: T) -> Vec<Token> {
                         chars.next();
                         result.push(Token::DotDot);
                     } else {
+                        after_member_dot = true;
                         result.push(Token::Dot);
                     }
                 }

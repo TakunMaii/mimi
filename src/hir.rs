@@ -22,6 +22,7 @@ pub(crate) enum HirType {
         params: Vec<HirType>,
         result: Box<HirType>,
     },
+    Tuple(Vec<HirType>),
 }
 
 impl From<DataType> for HirType {
@@ -56,6 +57,9 @@ impl From<DataType> for HirType {
                 params: params.iter().copied().map(Into::into).collect(),
                 result: Box::new((*result).into()),
             },
+            DataType::Tuple(elements) => {
+                Self::Tuple(elements.iter().copied().map(Into::into).collect())
+            }
             DataType::SelfType => Self::Named("Self".into()),
         }
     }
@@ -582,6 +586,21 @@ fn infer_constant_type(
                 element: Box::new(element_type),
             })
         }
+        Expression::TupleLiteral(values) => {
+            if let Some(HirType::Tuple(elements)) = expected
+                && elements.len() == values.len()
+            {
+                return Some(HirType::Tuple(elements.clone()));
+            }
+            Some(HirType::Tuple(
+                values
+                    .iter()
+                    .map(|value| {
+                        infer_constant_type(value, None, constants, namespace, enum_variants)
+                    })
+                    .collect::<Option<Vec<_>>>()?,
+            ))
+        }
         Expression::Call { name, .. } => enum_variants.get(name).map(|(owner, _)| owner.clone()),
         Expression::If {
             then_branch,
@@ -662,6 +681,24 @@ fn is_constant_expression(
                 is_constant_expression(value, constants, namespace, enum_variants, element_type)
             })
         }
+        Expression::TupleLiteral(values) => {
+            let expected_elements = match expected {
+                Some(HirType::Tuple(elements)) if elements.len() == values.len() => {
+                    Some(elements.as_slice())
+                }
+                Some(HirType::Tuple(_)) => return false,
+                _ => None,
+            };
+            values.iter().enumerate().all(|(index, value)| {
+                is_constant_expression(
+                    value,
+                    constants,
+                    namespace,
+                    enum_variants,
+                    expected_elements.map(|elements| &elements[index]),
+                )
+            })
+        }
         Expression::Call { name, arguments } => {
             enum_variants.contains_key(name)
                 && arguments.iter().all(|argument| {
@@ -703,6 +740,7 @@ fn is_constant_type(data_type: &HirType) -> bool {
             | HirType::Bool
             | HirType::Named(_)
     ) || matches!(data_type, HirType::Array { element, .. } if !matches!(element.as_ref(), HirType::Slice(_)) && is_constant_type(element))
+        || matches!(data_type, HirType::Tuple(elements) if elements.iter().all(is_constant_type))
         || matches!(data_type, HirType::Slice(inner) if **inner == HirType::Integer { bits: 8, signed: false })
 }
 
@@ -827,6 +865,11 @@ fn generic_applications(
                 }
                 add_type(*result, output);
             }
+            DataType::Tuple(elements) => {
+                for element in elements {
+                    add_type(*element, output);
+                }
+            }
             _ => {}
         }
     }
@@ -881,7 +924,8 @@ fn generic_applications(
             Expression::Block(items) => visit_nodes(items, output),
             Expression::Call { arguments, .. }
             | Expression::CallValue { arguments, .. }
-            | Expression::ArrayLiteral(arguments) => {
+            | Expression::ArrayLiteral(arguments)
+            | Expression::TupleLiteral(arguments) => {
                 for argument in arguments {
                     visit_expr(argument, output);
                 }
@@ -1135,6 +1179,9 @@ fn hir_data_type_contains(data_type: DataType, parameter: &str) -> bool {
                 .any(|ty| hir_data_type_contains(*ty, parameter))
                 || hir_data_type_contains(*result, parameter)
         }
+        DataType::Tuple(elements) => elements
+            .iter()
+            .any(|element| hir_data_type_contains(*element, parameter)),
         _ => false,
     }
 }
@@ -1165,6 +1212,13 @@ fn substitute_generic_data_type(
             ),
             Box::leak(Box::new(substitute_generic_data_type(*result, arguments))),
         ),
+        DataType::Tuple(elements) => DataType::Tuple(Box::leak(
+            elements
+                .iter()
+                .map(|element| substitute_generic_data_type(*element, arguments))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )),
         _ => data_type,
     }
 }
@@ -1347,7 +1401,7 @@ fn collect_free_names(
             }
         }
         Expression::MemberAccess { object, .. } => collect_free_names(object, bound, captures),
-        Expression::ArrayLiteral(values) => {
+        Expression::ArrayLiteral(values) | Expression::TupleLiteral(values) => {
             for value in values {
                 collect_free_names(value, bound, captures);
             }
@@ -1433,7 +1487,9 @@ fn lift_lambdas_in_expression(
                 lift_lambdas_in_node(item, functions, used_names, next_lambda);
             }
         }
-        Expression::Call { arguments, .. } | Expression::ArrayLiteral(arguments) => {
+        Expression::Call { arguments, .. }
+        | Expression::ArrayLiteral(arguments)
+        | Expression::TupleLiteral(arguments) => {
             for argument in arguments {
                 lift_lambdas_in_expression(argument, functions, used_names, next_lambda);
             }

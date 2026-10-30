@@ -142,6 +142,18 @@ impl TypeLayouts {
         None
     }
 
+    pub(crate) fn tuple_element_offset_bytes(
+        &self,
+        elements: &[HirType],
+        index: usize,
+    ) -> Option<u64> {
+        let mut offset = 0u64;
+        for element in elements.iter().take(index) {
+            offset = offset.checked_add(self.round_to_slot(self.layout(element)?.size_bytes)?)?;
+        }
+        (index < elements.len()).then_some(offset)
+    }
+
     pub(crate) fn enum_uses_storage(&self, name: &str) -> bool {
         self.enums
             .get(name)
@@ -156,7 +168,7 @@ impl TypeLayouts {
     }
 
     fn is_aggregate_type(&self, data_type: &HirType) -> bool {
-        matches!(data_type, HirType::Array { .. })
+        matches!(data_type, HirType::Array { .. } | HirType::Tuple(_))
             || matches!(data_type, HirType::Named(name) if self.structs.contains_key(name) || self.enum_uses_storage(name))
     }
 
@@ -212,6 +224,18 @@ impl TypeLayouts {
                 Some(TypeLayout {
                     size_bytes: length.checked_mul(element.size_bytes)?,
                     align_bytes: element.align_bytes,
+                })
+            }
+            HirType::Tuple(elements) => {
+                let mut size = 0u64;
+                for element in elements {
+                    size = size.checked_add(
+                        self.round_to_slot(self.layout_inner(element, visiting)?.size_bytes)?,
+                    )?;
+                }
+                Some(TypeLayout {
+                    size_bytes: size,
+                    align_bytes: self.target.stack_slot_bytes(),
                 })
             }
             HirType::Named(name) if self.structs.contains_key(name) => {
@@ -352,6 +376,28 @@ mod tests {
         assert_eq!(
             layouts.abi_class(&holder),
             Some(AbiClass::IndirectAggregate { slots: 7 })
+        );
+    }
+
+    #[test]
+    fn lays_out_tuple_elements_as_aligned_aggregate_fields() {
+        let layouts = TypeLayouts::new(TargetDataLayout::HOST_64, HashMap::new(), HashMap::new());
+        let tuple = HirType::Tuple(vec![integer(32), HirType::Bool]);
+
+        assert_eq!(layouts.layout(&tuple).unwrap().size_bytes, 16);
+        assert_eq!(
+            layouts.tuple_element_offset_bytes(
+                match &tuple {
+                    HirType::Tuple(elements) => elements,
+                    _ => unreachable!(),
+                },
+                1
+            ),
+            Some(8)
+        );
+        assert_eq!(
+            layouts.abi_class(&tuple),
+            Some(AbiClass::IndirectAggregate { slots: 2 })
         );
     }
 

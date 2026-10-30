@@ -39,6 +39,34 @@ fn specializes_generic_struct_fields_and_checks_field_types() {
 }
 
 #[test]
+fn checks_tuple_inference_signatures_and_member_bounds() {
+    let valid = parse(tokenize(
+        "make :: fn (value : i32) (i32, bool) { (value, true) } first :: fn (pair : (i32, bool)) i32 { pair.0 } main :: fn () i32 { pair := make(7) first(pair) }".chars(),
+    ));
+    check(&valid).unwrap();
+
+    let invalid = parse(tokenize(
+        "main :: fn () i32 { pair := (7, true) pair.2 }".chars(),
+    ));
+    let errors = check(&invalid).unwrap_err();
+    assert!(
+        errors[0]
+            .message
+            .contains("tuple index '2' is out of bounds")
+    );
+
+    let immutable = parse(tokenize(
+        "main :: fn () i32 { pair :: (7, true) pair.0 = 9 0 }".chars(),
+    ));
+    let errors = check(&immutable).unwrap_err();
+    assert!(
+        errors[0]
+            .message
+            .contains("cannot assign through constant tuple")
+    );
+}
+
+#[test]
 fn specializes_compile_time_generic_defaults_and_checks_argument_kind() {
     let valid = parse(tokenize(
         "fixed :: struct <dx> { x : f32 = dx } value : fixed<3.5> = fixed<3.5> {}".chars(),

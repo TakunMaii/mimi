@@ -572,6 +572,31 @@ impl Builder {
                 }
                 Some(result)
             }
+            Expression::TupleLiteral(values) => {
+                let elements = match self.expected_type_hint.as_ref() {
+                    Some(HirType::Tuple(elements)) if elements.len() == values.len() => {
+                        elements.clone()
+                    }
+                    _ => values
+                        .iter()
+                        .map(|value| self.expression_type(value))
+                        .collect::<Option<Vec<_>>>()?,
+                };
+                let tuple_type = HirType::Tuple(elements.clone());
+                let slot_count = self.type_layouts.aggregate_slot_count(&tuple_type)?;
+                let base = self.slot();
+                self.next_slot = self.next_slot.checked_add(slot_count.saturating_sub(1))?;
+                let address = self.slot_address_value(base);
+                for (index, (element, value)) in elements.iter().zip(values).enumerate() {
+                    let offset = self
+                        .type_layouts
+                        .tuple_element_offset_bytes(&elements, index)?;
+                    let destination = self.byte_offset_address(address, offset);
+                    self.lower_inline_value_into(element, value, destination)?;
+                }
+                self.value_types.insert(address, tuple_type);
+                Some(address)
+            }
             Expression::Index { object, index } => {
                 let (base, scale) = self.lower_index_base(object)?;
                 let index = self.expression_unhinted(index)?;
@@ -730,6 +755,31 @@ impl Builder {
                         self.slice_value_lengths.insert(result, environment);
                         return Some(result);
                     }
+                }
+                if let Some(HirType::Tuple(elements)) = self.expression_type(object) {
+                    let index = member
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|index| *index < elements.len())?;
+                    let offset = self
+                        .type_layouts
+                        .tuple_element_offset_bytes(&elements, index)?;
+                    let field_type = elements[index].clone();
+                    let base = self.expression(object)?;
+                    let address = self.byte_offset_address(base, offset);
+                    if self.is_inline_aggregate(&field_type) {
+                        return Some(address);
+                    }
+                    if matches!(field_type, HirType::Slice(_)) {
+                        return self.load_slice_descriptor(address, &field_type);
+                    }
+                    if matches!(field_type, HirType::Function { .. }) {
+                        return self.load_function_descriptor(address, &field_type);
+                    }
+                    let result = self.value();
+                    self.emit_load_indirect(result, address, Some(&field_type));
+                    self.value_types.insert(result, field_type);
+                    return Some(result);
                 }
                 let struct_name = self.expression_struct_name(object)?;
                 if self.struct_field_offset(&struct_name, member).is_none()
@@ -1676,6 +1726,21 @@ impl Builder {
                                         value,
                                         Some(&global.data_type),
                                     );
+                                    continue;
+                                }
+                                if let Some(HirType::Tuple(elements)) = self.expression_type(object)
+                                {
+                                    let index = member
+                                        .parse::<usize>()
+                                        .ok()
+                                        .filter(|index| *index < elements.len())?;
+                                    let field_type = elements[index].clone();
+                                    let offset = self
+                                        .type_layouts
+                                        .tuple_element_offset_bytes(&elements, index)?;
+                                    let base = self.expression(object)?;
+                                    let address = self.byte_offset_address(base, offset);
+                                    self.lower_inline_value_into(&field_type, value, address)?;
                                     continue;
                                 }
                                 let struct_name = self.expression_struct_name(object)?;
@@ -2686,10 +2751,19 @@ impl Builder {
             Expression::LiteralNumber(text) if text.contains('.') => {
                 Some(HirType::Float { bits: 64 })
             }
-            Expression::LiteralNumber(_) => Some(HirType::Integer {
-                bits: 32,
-                signed: true,
-            }),
+            Expression::LiteralNumber(text) => {
+                let value = text.parse::<u128>().ok()?;
+                let (bits, signed) = if value <= i32::MAX as u128 {
+                    (32, true)
+                } else if value <= i64::MAX as u128 {
+                    (64, true)
+                } else if value <= u64::MAX as u128 {
+                    (64, false)
+                } else {
+                    return None;
+                };
+                Some(HirType::Integer { bits, signed })
+            }
             Expression::LiteralBool(_) => Some(HirType::Bool),
             Expression::LiteralString(_) => Some(HirType::Slice(Box::new(HirType::Integer {
                 bits: 8,
@@ -2771,6 +2845,18 @@ impl Builder {
                     element: Box::new(element),
                 })
             }),
+            Expression::TupleLiteral(values) => {
+                let elements = match self.expected_type_hint.as_ref() {
+                    Some(HirType::Tuple(elements)) if elements.len() == values.len() => {
+                        return Some(HirType::Tuple(elements.clone()));
+                    }
+                    _ => values
+                        .iter()
+                        .map(|value| self.expression_type(value))
+                        .collect::<Option<Vec<_>>>()?,
+                };
+                Some(HirType::Tuple(elements))
+            }
             Expression::Call { name, .. } => self
                 .variable_function_signatures
                 .get(name)
@@ -2783,7 +2869,25 @@ impl Builder {
             Expression::CallValue { callee, .. } => self
                 .function_signature_for_expression(callee)
                 .map(|(_, result)| result),
-            Expression::Negate(inner) => self.expression_type(inner),
+            Expression::Negate(inner) => match inner.as_ref() {
+                Expression::LiteralNumber(text) if !text.contains('.') => {
+                    let magnitude = text.parse::<u128>().ok()?;
+                    if magnitude <= (i32::MAX as u128) + 1 {
+                        Some(HirType::Integer {
+                            bits: 32,
+                            signed: true,
+                        })
+                    } else if magnitude <= (i64::MAX as u128) + 1 {
+                        Some(HirType::Integer {
+                            bits: 64,
+                            signed: true,
+                        })
+                    } else {
+                        None
+                    }
+                }
+                _ => self.expression_type(inner),
+            },
             Expression::Add(lhs, rhs)
             | Expression::Multiply(lhs, rhs)
             | Expression::Divide(lhs, rhs)
@@ -4138,6 +4242,24 @@ impl Builder {
                     self.copy_inline_value_to_address(data_type, value, destination)
                 }
             }
+            HirType::Tuple(elements) => {
+                if let Expression::TupleLiteral(values) = expression {
+                    if elements.len() != values.len() {
+                        return None;
+                    }
+                    for (index, (element, value)) in elements.iter().zip(values).enumerate() {
+                        let offset = self
+                            .type_layouts
+                            .tuple_element_offset_bytes(elements, index)?;
+                        let destination = self.byte_offset_address(destination, offset);
+                        self.lower_inline_value_into(element, value, destination)?;
+                    }
+                    Some(())
+                } else {
+                    let value = self.expression_expected(expression, data_type)?;
+                    self.copy_inline_value_to_address(data_type, value, destination)
+                }
+            }
             _ => {
                 let value = self.expression_expected(expression, data_type)?;
                 self.emit_store_indirect(destination, value, Some(data_type));
@@ -4174,6 +4296,32 @@ impl Builder {
                             source_address,
                             destination_address,
                         )?;
+                    } else {
+                        let value = self.value();
+                        self.emit_load_indirect(value, source_address, Some(element));
+                        self.emit_store_indirect(destination_address, value, Some(element));
+                    }
+                }
+                Some(())
+            }
+            HirType::Tuple(elements) => {
+                for (index, element) in elements.iter().enumerate() {
+                    let offset = self
+                        .type_layouts
+                        .tuple_element_offset_bytes(elements, index)?;
+                    let source_address = self.byte_offset_address(source, offset);
+                    let destination_address = self.byte_offset_address(destination, offset);
+                    if self.is_inline_storage_aggregate(element) {
+                        self.copy_inline_value_to_address(
+                            element,
+                            source_address,
+                            destination_address,
+                        )?;
+                    } else if matches!(element, HirType::Slice(_)) {
+                        self.copy_slice_descriptor(source_address, destination_address)?;
+                    } else if matches!(element, HirType::Function { .. }) {
+                        let value = self.load_function_descriptor(source_address, element)?;
+                        self.store_function_descriptor(destination_address, value)?;
                     } else {
                         let value = self.value();
                         self.emit_load_indirect(value, source_address, Some(element));

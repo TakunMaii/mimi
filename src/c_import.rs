@@ -708,7 +708,7 @@ fn rewrite_callback_expression(
                 rewrite_callback_expression(value, adapters);
             }
         }
-        Expression::ArrayLiteral(values) => {
+        Expression::ArrayLiteral(values) | Expression::TupleLiteral(values) => {
             for value in values {
                 rewrite_callback_expression(value, adapters);
             }

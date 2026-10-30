@@ -28,6 +28,24 @@ fn tokenizes_arithmetic_operators_and_parentheses() {
 }
 
 #[test]
+fn tokenizes_chained_numeric_members_separately_from_decimals() {
+    assert_eq!(
+        tokenize("nested.1.0 ratio := 1.25".chars()),
+        vec![
+            Token::Identifier("nested".into()),
+            Token::Dot,
+            Token::LiteralNumber("1".into()),
+            Token::Dot,
+            Token::LiteralNumber("0".into()),
+            Token::Identifier("ratio".into()),
+            Token::Colon,
+            Token::Equal,
+            Token::LiteralNumber("1.25".into()),
+        ]
+    );
+}
+
+#[test]
 fn parses_arithmetic_precedence_and_parentheses() {
     assert_eq!(
         parse(tokenize("result := 1 + 2 * (3 - 4)".chars())),
@@ -601,6 +619,33 @@ fn parses_array_types_literals_indexing_and_slices() {
             value: Expression::Slice { .. },
             ..
         }
+    ));
+}
+
+#[test]
+fn parses_tuple_types_literals_and_numeric_members() {
+    let nodes = parse(tokenize(
+        "identity :: fn (value : (i32, bool)) (i32, bool) { value } main :: fn () i32 { pair := (7, true) one := (pair.0,) one.0 }".chars(),
+    ));
+    assert!(matches!(
+        &nodes[0],
+        ASTNode::FunctionDefinition {
+            parameters,
+            return_type: DataType::Tuple(elements),
+            ..
+        } if matches!(parameters.as_slice(), [(_, DataType::Tuple(parameter_elements))]
+            if parameter_elements.len() == 2 && elements.len() == 2)
+    ));
+    assert!(matches!(
+        &nodes[1],
+        ASTNode::FunctionDefinition {
+            body: Expression::Block(items),
+            ..
+        } if matches!(items.as_slice(), [
+            ASTNode::VariableDefinition { value: Expression::TupleLiteral(pair_values), .. },
+            ASTNode::VariableDefinition { value: Expression::TupleLiteral(single_values), .. },
+            ASTNode::Expression(Expression::MemberAccess { member, .. }),
+        ] if pair_values.len() == 2 && single_values.len() == 1 && member == "0")
     ));
 }
 

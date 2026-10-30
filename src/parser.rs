@@ -24,6 +24,7 @@ pub(crate) enum DataType {
     CEnum(&'static str),
     GenericEnum(&'static str, &'static [GenericArgument]),
     Function(&'static [DataType], &'static DataType),
+    Tuple(&'static [DataType]),
     SelfType,
     Pointer(&'static DataType),
 }
@@ -77,6 +78,7 @@ pub(crate) enum Expression {
         member: String,
     },
     ArrayLiteral(Vec<Expression>),
+    TupleLiteral(Vec<Expression>),
     Index {
         object: Box<Expression>,
         index: Box<Expression>,
@@ -1253,6 +1255,28 @@ fn parse_type_from<I>(first: Token, tokens: &mut std::iter::Peekable<I>) -> Data
 where
     I: Iterator<Item = Token> + Clone,
 {
+    if matches!(first, Token::LeftParen) {
+        let mut elements = Vec::new();
+        if matches!(tokens.peek(), Some(Token::RightParen)) {
+            panic!("empty tuple types are not supported");
+        }
+        loop {
+            elements.push(parse_type(tokens));
+            match tokens.next() {
+                Some(Token::Comma) if matches!(tokens.peek(), Some(Token::RightParen)) => {
+                    tokens.next();
+                    break;
+                }
+                Some(Token::Comma) => continue,
+                Some(Token::RightParen) if elements.len() > 1 => break,
+                Some(Token::RightParen) => {
+                    panic!("single-element tuple types require a trailing comma")
+                }
+                _ => panic!("expected ',' or ')' in tuple type"),
+            }
+        }
+        return DataType::Tuple(Box::leak(elements.into_boxed_slice()));
+    }
     if matches!(first, Token::Fn) {
         assert!(
             matches!(tokens.next(), Some(Token::LeftParen)),
@@ -1373,10 +1397,30 @@ where
             allow_struct_literal,
         ))),
         Token::LeftParen => {
-            let expression = parse_expression(tokens, 0);
-            match tokens.next() {
-                Some(Token::RightParen) => expression,
-                _ => panic!("expected ')' after expression"),
+            if matches!(tokens.peek(), Some(Token::RightParen)) {
+                panic!("empty tuple literals are not supported");
+            }
+            let first = parse_expression(tokens, 0);
+            if !matches!(tokens.peek(), Some(Token::Comma)) {
+                assert!(
+                    matches!(tokens.next(), Some(Token::RightParen)),
+                    "expected ')' after expression"
+                );
+                first
+            } else {
+                let mut elements = vec![first];
+                while matches!(tokens.peek(), Some(Token::Comma)) {
+                    tokens.next();
+                    if matches!(tokens.peek(), Some(Token::RightParen)) {
+                        break;
+                    }
+                    elements.push(parse_expression(tokens, 0));
+                }
+                assert!(
+                    matches!(tokens.next(), Some(Token::RightParen)),
+                    "expected ')' after tuple literal"
+                );
+                Expression::TupleLiteral(elements)
             }
         }
         Token::LeftBrace => parse_brace_expression(tokens),
@@ -1534,6 +1578,11 @@ where
             tokens.next();
             let member = match tokens.next() {
                 Some(Token::Identifier(member)) => member,
+                Some(Token::LiteralNumber(member))
+                    if member.bytes().all(|byte| byte.is_ascii_digit()) =>
+                {
+                    member
+                }
                 _ => panic!("expected member name after '.'"),
             };
             lhs = Expression::MemberAccess {

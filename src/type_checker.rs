@@ -52,6 +52,9 @@ fn generic_type_contains(data_type: DataType, parameter: &str) -> bool {
                 .any(|ty| generic_type_contains(*ty, parameter))
                 || generic_type_contains(*result, parameter)
         }
+        DataType::Tuple(elements) => elements
+            .iter()
+            .any(|element| generic_type_contains(*element, parameter)),
         _ => false,
     }
 }
@@ -245,6 +248,12 @@ fn validate_generic_type_use(
             }
             validate_generic_type_use(*result, structs)
         }
+        DataType::Tuple(elements) => {
+            for element in elements {
+                validate_generic_type_use(*element, structs)?;
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
@@ -320,6 +329,13 @@ fn substitute_generic_type(data_type: DataType, arguments: &HashMap<&str, DataTy
             ),
             Box::leak(Box::new(substitute_generic_type(*result, arguments))),
         ),
+        DataType::Tuple(elements) => DataType::Tuple(Box::leak(
+            elements
+                .iter()
+                .map(|element| substitute_generic_type(*element, arguments))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )),
         _ => data_type,
     }
 }
@@ -733,6 +749,14 @@ fn qualify_imported_type(
                 local_type_names,
             ))),
         ),
+        DataType::Tuple(elements) => DataType::Tuple(Box::leak(
+            elements
+                .iter()
+                .copied()
+                .map(|element| qualify_imported_type(element, package, local_type_names))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )),
         other => other,
     }
 }
@@ -1072,6 +1096,9 @@ fn is_constant_type(data_type: DataType, local_type_names: &HashSet<&'static str
         DataType::Array(_, element) => {
             !matches!(*element, DataType::Slice(_)) && is_constant_type(*element, local_type_names)
         }
+        DataType::Tuple(elements) => elements
+            .iter()
+            .all(|element| is_constant_type(*element, local_type_names)),
         DataType::Slice(element) => *element == DataType::U8,
         _ => false,
     }
@@ -1615,6 +1642,16 @@ fn check_statement(
                 return Ok(());
             }
             let object_type = infer_expression(object, scopes, functions, structs, None)?;
+            if let DataType::Tuple(elements) = object_type {
+                ensure_mutable_tuple_target(object, scopes, functions, structs)?;
+                let index = member
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|index| *index < elements.len())
+                    .ok_or_else(|| error(format!("tuple index '{member}' is out of bounds")))?;
+                infer_expression(value, scopes, functions, structs, Some(elements[index]))?;
+                return Ok(());
+            }
             let struct_name = match object_type {
                 DataType::Struct(name) => name,
                 DataType::GenericStruct(name, arguments) => {
@@ -1824,6 +1861,14 @@ fn ensure_mutable_index_target(
         }
         Expression::MemberAccess { object, member } => {
             let object_type = infer_expression(object, scopes, functions, structs, None)?;
+            if let DataType::Tuple(elements) = object_type {
+                member
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|index| *index < elements.len())
+                    .ok_or_else(|| error(format!("tuple index '{member}' is out of bounds")))?;
+                return ensure_mutable_tuple_target(object, scopes, functions, structs);
+            }
             let struct_name = match object_type {
                 DataType::Struct(name) => name,
                 DataType::Pointer(inner) => match *inner {
@@ -1848,6 +1893,67 @@ fn ensure_mutable_index_target(
             ensure_mutable_index_target(object, scopes, functions, structs)
         }
         _ => Err(error("indexed assignment target is not mutable")),
+    }
+}
+
+fn ensure_mutable_tuple_target(
+    expression: &Expression,
+    scopes: &mut Vec<HashMap<String, Symbol>>,
+    functions: &HashMap<String, Function>,
+    structs: &HashMap<&'static str, StructInfo>,
+) -> Result<(), TypeError> {
+    match expression {
+        Expression::Identifier(name) => {
+            if lookup(scopes, name).is_some_and(|symbol| symbol.mutable) {
+                Ok(())
+            } else {
+                Err(error("cannot assign through constant tuple"))
+            }
+        }
+        Expression::MemberAccess { object, member } => {
+            let object_type = infer_expression(object, scopes, functions, structs, None)?;
+            match object_type {
+                DataType::Tuple(elements)
+                    if member
+                        .parse::<usize>()
+                        .is_ok_and(|index| index < elements.len()) =>
+                {
+                    ensure_mutable_tuple_target(object, scopes, functions, structs)
+                }
+                DataType::Struct(name) => {
+                    let field = structs
+                        .get(name)
+                        .and_then(|info| info.fields.get(member))
+                        .ok_or_else(|| error(format!("unknown field '{member}' in '{name}'")))?;
+                    if field.mutable {
+                        Ok(())
+                    } else {
+                        Err(error(format!("cannot assign to fixed field '{member}'")))
+                    }
+                }
+                DataType::Pointer(inner) => match *inner {
+                    DataType::Struct(name) => {
+                        let field = structs
+                            .get(name)
+                            .and_then(|info| info.fields.get(member))
+                            .ok_or_else(|| {
+                                error(format!("unknown field '{member}' in '{name}'"))
+                            })?;
+                        if field.mutable {
+                            Ok(())
+                        } else {
+                            Err(error(format!("cannot assign to fixed field '{member}'")))
+                        }
+                    }
+                    _ => Err(error("cannot assign through constant tuple")),
+                },
+                _ => Err(error("cannot assign through constant tuple")),
+            }
+        }
+        Expression::Index { object, .. } => {
+            ensure_mutable_index_target(object, scopes, functions, structs)
+        }
+        _ => Err(error("cannot assign through constant tuple")),
     }
 }
 
@@ -2280,6 +2386,14 @@ fn infer_expression(
                 }
             }
             let object_type = infer_expression(object, scopes, functions, structs, None)?;
+            if let DataType::Tuple(elements) = object_type {
+                let index = member
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|index| *index < elements.len())
+                    .ok_or_else(|| error(format!("tuple index '{member}' is out of bounds")))?;
+                return Ok(elements[index]);
+            }
             if member == "len" && matches!(object_type, DataType::Array(_, _) | DataType::Slice(_))
             {
                 return Ok(DataType::U64);
@@ -2548,6 +2662,33 @@ fn infer_expression(
                 _ => Err(error("array value requires an array or slice type")),
             }
         }
+        Expression::TupleLiteral(values) => {
+            let expected_elements = match expected {
+                Some(DataType::Tuple(elements)) if elements.len() == values.len() => Some(elements),
+                Some(DataType::Tuple(elements)) => {
+                    return Err(error(format!(
+                        "tuple expects {} elements, got {}",
+                        elements.len(),
+                        values.len()
+                    )));
+                }
+                _ => None,
+            };
+            let mut types = Vec::with_capacity(values.len());
+            for (index, value) in values.iter().enumerate() {
+                let expected = expected_elements.map(|elements| elements[index]);
+                let actual = infer_expression(value, scopes, functions, structs, expected)?;
+                if let Some(expected) = expected {
+                    require_compatible(actual, Some(expected))?;
+                    types.push(expected);
+                } else {
+                    types.push(actual);
+                }
+            }
+            let tuple_type = DataType::Tuple(Box::leak(types.into_boxed_slice()));
+            require_compatible(tuple_type, expected)?;
+            Ok(tuple_type)
+        }
         Expression::Index { object, index } => {
             let object_type = infer_expression(object, scopes, functions, structs, None)?;
             let index_type = infer_expression(index, scopes, functions, structs, None)?;
@@ -2698,6 +2839,14 @@ fn type_storage_stride(
         DataType::Pointer(_) | DataType::Function(_, _) => Some(8),
         DataType::Array(length, element) if length > 0 => {
             length.checked_mul(type_storage_stride(*element, structs, visiting)?)
+        }
+        DataType::Tuple(elements) => {
+            let mut size = 0u64;
+            for element in elements {
+                let element_size = type_storage_stride(*element, structs, visiting)?;
+                size = size.checked_add(element_size.div_ceil(8) * 8)?;
+            }
+            Some(size)
         }
         DataType::Struct(name) | DataType::Enum(name) => {
             let info = structs.get(name)?;
@@ -2984,6 +3133,13 @@ fn normalize_generic_type(data_type: DataType) -> DataType {
             ),
             Box::leak(Box::new(normalize_generic_type(*result))),
         ),
+        DataType::Tuple(elements) => DataType::Tuple(Box::leak(
+            elements
+                .iter()
+                .map(|element| normalize_generic_type(*element))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )),
         _ => data_type,
     }
 }
@@ -3011,6 +3167,12 @@ fn validate_generic_argument_type(
                 validate_generic_argument_type(*parameter, structs)?;
             }
             validate_generic_argument_type(*result, structs)
+        }
+        DataType::Tuple(elements) => {
+            for element in elements {
+                validate_generic_argument_type(*element, structs)?;
+            }
+            Ok(())
         }
         _ => Ok(()),
     }
@@ -3076,6 +3238,7 @@ impl DataType {
             Self::Enum(_) | Self::GenericEnum(_, _) => 0,
             Self::CEnum(_) => 32,
             Self::Function(_, _) | Self::SelfType | Self::Pointer(_) => 0,
+            Self::Tuple(_) => 0,
         }
     }
 
@@ -3134,6 +3297,20 @@ impl std::fmt::Display for DataType {
             Self::SelfType => "Self",
             Self::Function(parameters, return_type) => {
                 return write!(formatter, "fn({parameters:?}){return_type}");
+            }
+            Self::Tuple(elements) => {
+                write!(formatter, "(")?;
+                for (index, element) in elements.iter().enumerate() {
+                    if index > 0 {
+                        write!(formatter, ", ")?;
+                    }
+                    write!(formatter, "{element}")?;
+                }
+                if elements.len() == 1 {
+                    write!(formatter, ",")?;
+                }
+                write!(formatter, ")")?;
+                return Ok(());
             }
             Self::Pointer(element) => return write!(formatter, "*{element}"),
         };
