@@ -835,6 +835,25 @@ fn declarations_from_ast(
         });
     }
     for declaration in inner {
+        if declaration.get("kind").and_then(Json::string) != Some("EnumDecl") {
+            continue;
+        }
+        let Some(name) = declaration.get("name").and_then(Json::string) else {
+            continue;
+        };
+        let data_type = declaration
+            .get("fixedUnderlyingType")
+            .and_then(|ty| ty.get("qualType"))
+            .and_then(Json::string)
+            .and_then(|name| c_scalar_type(name.trim()))
+            .unwrap_or(DataType::I32);
+        alias_types.insert(name.to_string(), data_type);
+        output.push(ASTNode::CTypeAlias {
+            name: name.to_string(),
+            data_type,
+        });
+    }
+    for declaration in inner {
         if declaration.get("kind").and_then(Json::string) != Some("RecordDecl")
             || declaration.get("completeDefinition").and_then(Json::bool) != Some(true)
             || declaration.get("tagUsed").and_then(Json::string) != Some("struct")
@@ -1098,6 +1117,7 @@ fn c_type(type_name: &str, aliases: &HashMap<String, DataType>) -> Option<DataTy
     if let Some(name) = normalized
         .strip_prefix("struct ")
         .or_else(|| normalized.strip_prefix("union "))
+        .or_else(|| normalized.strip_prefix("enum "))
     {
         return aliases.get(name).copied();
     }
@@ -1195,6 +1215,22 @@ mod tests {
             point.field_offsets,
             [("x".into(), 0), ("y".into(), 4), ("z".into(), 8)]
         );
+    }
+
+    #[test]
+    fn imports_named_c_enum_as_its_default_integer_representation() {
+        let json = JsonParser::parse(
+            r#"{"inner":[{"kind":"EnumDecl","name":"Color","inner":[{"kind":"EnumConstantDecl","name":"RED"}]},{"kind":"FunctionDecl","name":"echo_color","type":{"qualType":"enum Color (enum Color)"},"inner":[{"kind":"ParmVarDecl","name":"value","type":{"qualType":"enum Color"}}]}]}"#,
+        )
+        .unwrap();
+        let declarations = declarations_from_ast(&json, "color.h", &HashMap::new()).unwrap();
+        assert!(declarations.iter().any(|declaration| matches!(declaration,
+            ASTNode::CTypeAlias { name, data_type: DataType::I32 } if name == "Color"
+        )));
+        assert!(declarations.iter().any(|declaration| matches!(declaration,
+            ASTNode::ExternalFunction { name, parameters, return_type: DataType::I32, .. }
+                if name == "echo_color" && parameters == &[("value".into(), DataType::I32)]
+        )));
     }
 
     #[test]

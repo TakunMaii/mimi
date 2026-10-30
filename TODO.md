@@ -15,6 +15,7 @@ imports while preserving C types, layout, and target ABI rules.
   - [x] Resolve scalar typedefs while importing function prototypes.
   - [x] Expose typedef aliases and target-sized integer widths to Mimi code.
   - [x] Expose pointer and record typedef aliases as first class types where their pointee types are supported.
+  - [x] Import named C enum tags as their Clang fixed integer type or target-default `int` representation.
   - [x] Import integer-valued C enum constants.
   - [ ] Preserve C enum types and their underlying representation.
 - [x] Parse ordinary C pointer and function-pointer spellings.

@@ -34,6 +34,8 @@ and simple named struct fields are imported. Named structs use Clang's target
 size, alignment, and field offsets. Imported function calls use their C linker names. Prototypes
 using by-value records or function pointer parameters are skipped because the
 current backends do not implement those C calling conventions.
+Named C enum tags and typedefs are represented by their fixed integer type when
+Clang reports one, or by the target's default `int` representation otherwise.
 String literals passed to imported `char *` parameters are emitted as
 NUL-terminated static byte arrays. Mutable buffers and arbitrary Mimi slices
 still require explicit conversion support.

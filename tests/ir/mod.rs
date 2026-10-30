@@ -563,6 +563,46 @@ fn imports_c_struct_with_mixed_field_widths() {
 }
 
 #[test]
+fn imports_c_enum_function_signatures() {
+    let directory = std::env::temp_dir().join(format!("mimi_cimport_enum_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let header = directory.join("color.h");
+    let source = directory.join("main.mi");
+    let c_source = directory.join("color.c");
+    let executable = directory.join("main");
+    std::fs::write(
+        &header,
+        "enum Color { RED, GREEN = 5 }; enum Color echo_color(enum Color value);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &c_source,
+        "#include <color.h>\nenum Color echo_color(enum Color value) { return value; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &source,
+        "c :: @cimport(\"color.h\") main :: fn () i32 { c.echo_color(c.GREEN) - c.GREEN }",
+    )
+    .unwrap();
+    build_file_for_target_with_c_options(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        std::slice::from_ref(&directory),
+        &[],
+        &[],
+        <lir::HostTarget as lir::Target>::arch(&lir::HostTarget),
+        &[],
+        None,
+        std::slice::from_ref(&c_source),
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn compiles_and_links_c_source_with_mimi_program() {
     let directory = std::env::temp_dir().join(format!("mimi_c_source_link_{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
