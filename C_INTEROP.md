@@ -55,7 +55,8 @@ into the output. Use `-I`, `-L`, and `-l` for header and library search paths.
 The importer currently skips declarations it cannot represent. It does not
 provide a general C ABI for structs and unions passed by value, bitfields,
 opaque incomplete record field access, C globals, variadic functions, callbacks,
-arbitrary macros, or automatic conversion between Mimi slices and C strings.
+arbitrary macros, `long double`, or automatic conversion between Mimi slices
+and C strings.
 Simple imported struct field access uses Mimi's current aggregate layout and
 uses the Clang layout metadata; such structs must not be passed by value to C
 functions until target ABI classification is implemented.

@@ -1181,7 +1181,7 @@ fn c_scalar_type(name: &str) -> Option<DataType> {
         }
         "unsigned long long" | "unsigned long long int" => DataType::U64,
         "float" => DataType::F32,
-        "double" | "long double" => DataType::F64,
+        "double" => DataType::F64,
         _ => return None,
     })
 }
@@ -1229,6 +1229,7 @@ mod tests {
     #[test]
     fn maps_c_scalars_and_pointer_types() {
         assert_eq!(c_type("int", &HashMap::new()), Some(DataType::I32));
+        assert_eq!(c_type("long double", &HashMap::new()), None);
         assert_eq!(
             c_type("const char *", &HashMap::new()),
             Some(DataType::Pointer(Box::leak(Box::new(DataType::I8))))
