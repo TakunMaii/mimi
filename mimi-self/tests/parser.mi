@@ -25,6 +25,11 @@ main :: fn () i32 {
     if lexer.expression_is_null(logical) || logical.kind != 133 { return 13 }
     if logical.right.kind != 132 || logical.right.right.kind != 283 { return 14 }
 
+    members := lexer.parse_expression("pair.0.1", &storage)
+    if lexer.expression_is_null(members) || members.kind != 260 { return 17 }
+    if members.left.kind != 260 || members.right.kind != 2 { return 18 }
+    if members.start != 0 || members.end != 8 { return 19 }
+
     unary := lexer.parse_expression("-(a + 2)", &storage)
     if lexer.expression_is_null(unary) || unary.kind != 295 { return 9 }
     if unary.left.kind != 43 { return 10 }
@@ -35,6 +40,8 @@ main :: fn () i32 {
     if !lexer.expression_is_null(unmatched) { return 15 }
     adjacent := lexer.parse_expression("a b", &storage)
     if !lexer.expression_is_null(adjacent) { return 16 }
+    incomplete_member := lexer.parse_expression("a.", &storage)
+    if !lexer.expression_is_null(incomplete_member) { return 20 }
     lexer.expression_arena_release(&storage)
     0
 }

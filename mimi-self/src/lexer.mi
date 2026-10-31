@@ -534,6 +534,18 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                 if !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
             }
         } else {
+            if token.0 == 46 && !expecting_operand {
+                if stacks.node_count == 0 { return mimi_buffer_empty() as *ExprNode }
+                member := next_token(source, cursor)
+                if member.0 != 1 && member.0 != 2 { return mimi_buffer_empty() as *ExprNode }
+                cursor = member.2
+                member_node := allocate_expr(storage, member.0 as u64, member.1, member.2, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+                if expression_is_null(member_node) { return member_node }
+                receiver := stacks.nodes[stacks.node_count - 1]
+                access := allocate_expr(storage, 260, receiver.start, member.2, receiver, member_node)
+                if expression_is_null(access) { return access }
+                stacks.nodes[stacks.node_count - 1] = access
+            } else {
             if token.0 == 40 {
                 if !expecting_operand { return mimi_buffer_empty() as *ExprNode }
                 stacks.operators[stacks.operator_count] = ExprOperator { kind = 40, start = token.1 }
@@ -576,6 +588,7 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                         expecting_operand = true
                     }
                 }
+            }
             }
         }
     }

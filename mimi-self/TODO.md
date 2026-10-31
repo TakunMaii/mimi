@@ -53,6 +53,8 @@ two consecutive stages.
   statements, imports, generics, and control flow.
 - [x] Parse grouped unary and binary expressions with operator precedence into
   arena-backed AST nodes.
+- [x] Parse chained named and numeric member access in expressions.
+- [x] Parse chained named and numeric member access in expressions.
 - [ ] Implement name resolution, type checking, generic specialization, and
   diagnostics.
 - [x] Add a Python differential smoke suite for accepted programs and
