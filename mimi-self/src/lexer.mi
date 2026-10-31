@@ -68,7 +68,7 @@ pub next_token_raw :: fn (source : *u8, source_length : u64, cursor : u64) (u8, 
                                 if (next >= 65 && next <= 90) || (next >= 97 && next <= 122) || (next >= 48 && next <= 57) || next == 95 || next >= 128 {
                                     if next >= 128 {
                                         width := utf8_width_raw(source, source_length, index)
-                                        if width == 0 { return (255, index, index) }
+                                        if width == 0 || !utf8_identifier_continue_raw(source, index, width) { return (255, index, index) }
                                         index = index + width as u64
                                     } else {
                                         index = index + 1
@@ -390,18 +390,7 @@ utf8_width_raw :: fn (source : *u8, source_length : u64, index : u64) u8 {
 }
 
 utf8_identifier_start_raw :: fn (source : *u8, index : u64, width : u8) bool {
-    codepoint : u64 = 0
-    if width == 2 {
-        codepoint = (source[index] as u64 % 32) * 64 + source[index + 1] as u64 % 64
-    } else {
-        if width == 3 {
-            codepoint = (source[index] as u64 % 16) * 4096 + (source[index + 1] as u64 % 64) * 64 + source[index + 2] as u64 % 64
-        } else {
-            if width == 4 {
-                codepoint = (source[index] as u64 % 8) * 262144 + (source[index + 1] as u64 % 64) * 4096 + (source[index + 2] as u64 % 64) * 64 + source[index + 3] as u64 % 64
-            } else { return false }
-        }
-    }
+    codepoint := utf8_codepoint_raw(source, index, width)
     if codepoint >= 192 && codepoint <= 767 { return codepoint != 215 && codepoint != 247 }
     if codepoint >= 880 && codepoint <= 1327 { return true }
     if codepoint >= 1329 && codepoint <= 1416 { return true }
@@ -417,6 +406,63 @@ utf8_identifier_start_raw :: fn (source : *u8, index : u64, width : u8) bool {
     if codepoint >= 63744 && codepoint <= 64255 { return true }
     if codepoint >= 65536 && codepoint <= 126975 { return true }
     false
+}
+
+utf8_identifier_continue_raw :: fn (source : *u8, index : u64, width : u8) bool {
+    codepoint := utf8_codepoint_raw(source, index, width)
+    if utf8_identifier_start_raw(source, index, width) { return true }
+    if codepoint >= 768 && codepoint <= 879 { return true }
+    if codepoint >= 1155 && codepoint <= 1161 { return true }
+    if codepoint >= 1425 && codepoint <= 1469 { return true }
+    if codepoint >= 1552 && codepoint <= 1562 { return true }
+    if codepoint >= 1611 && codepoint <= 1631 { return true }
+    if codepoint >= 1750 && codepoint <= 1773 { return true }
+    if codepoint >= 2305 && codepoint <= 2307 { return true }
+    if codepoint >= 2364 && codepoint <= 2381 { return true }
+    if codepoint >= 768 && codepoint <= 879 { return true }
+    if codepoint >= 6832 && codepoint <= 6911 { return true }
+    if codepoint >= 7616 && codepoint <= 7679 { return true }
+    if codepoint >= 8400 && codepoint <= 8447 { return true }
+    if codepoint >= 65056 && codepoint <= 65071 { return true }
+    if codepoint >= 65024 && codepoint <= 65039 { return true }
+    if codepoint >= 1632 && codepoint <= 1641 { return true }
+    if codepoint >= 1776 && codepoint <= 1785 { return true }
+    if codepoint >= 1984 && codepoint <= 1993 { return true }
+    if codepoint >= 2406 && codepoint <= 2415 { return true }
+    if codepoint >= 2534 && codepoint <= 2543 { return true }
+    if codepoint >= 2662 && codepoint <= 2671 { return true }
+    if codepoint >= 2790 && codepoint <= 2799 { return true }
+    if codepoint >= 2918 && codepoint <= 2927 { return true }
+    if codepoint >= 3046 && codepoint <= 3055 { return true }
+    if codepoint >= 3174 && codepoint <= 3183 { return true }
+    if codepoint >= 3302 && codepoint <= 3311 { return true }
+    if codepoint >= 3430 && codepoint <= 3439 { return true }
+    if codepoint >= 3664 && codepoint <= 3673 { return true }
+    if codepoint >= 3792 && codepoint <= 3801 { return true }
+    if codepoint >= 3872 && codepoint <= 3881 { return true }
+    if codepoint >= 4160 && codepoint <= 4169 { return true }
+    if codepoint >= 4240 && codepoint <= 4249 { return true }
+    if codepoint >= 4969 && codepoint <= 4977 { return true }
+    if codepoint >= 6112 && codepoint <= 6121 { return true }
+    if codepoint >= 6160 && codepoint <= 6169 { return true }
+    if codepoint >= 65296 && codepoint <= 65305 { return true }
+    false
+}
+
+utf8_codepoint_raw :: fn (source : *u8, index : u64, width : u8) u64 {
+    codepoint : u64 = 0
+    if width == 2 {
+        codepoint = (source[index] as u64 % 32) * 64 + source[index + 1] as u64 % 64
+    } else {
+        if width == 3 {
+            codepoint = (source[index] as u64 % 16) * 4096 + (source[index + 1] as u64 % 64) * 64 + source[index + 2] as u64 % 64
+        } else {
+            if width == 4 {
+                codepoint = (source[index] as u64 % 8) * 262144 + (source[index + 1] as u64 % 64) * 4096 + (source[index + 2] as u64 % 64) * 64 + source[index + 3] as u64 % 64
+            } else { return 0 }
+        }
+    }
+    codepoint
 }
 
 pub decoded_string_len :: fn (source : []u8, start : u64, end : u64) u64 {

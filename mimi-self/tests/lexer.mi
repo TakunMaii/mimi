@@ -43,6 +43,10 @@ main :: fn () i32 {
     if lexer.next_token("continue", 0).0 != 177 { return 42 }
     unicode_name := lexer.next_token("变量", 0)
     if unicode_name.0 != 1 || unicode_name.1 != 0 || unicode_name.2 != 6 { return 43 }
+    combining_name := lexer.next_token("á", 0)
+    if combining_name.0 != 1 || combining_name.2 != 3 { return 69 }
+    emoji_continuation := lexer.next_token("a😀", 0)
+    if emoji_continuation.0 != 255 || emoji_continuation.1 != 1 { return 70 }
     escaped := lexer.next_token("\"a\\nb\"", 0)
     if escaped.0 != 3 || lexer.decoded_string_len("\"a\\nb\"", escaped.1, escaped.2) != 3 { return 44 }
     if lexer.decoded_string_byte("\"a\\nb\"", escaped.1, escaped.2, 0) != 97 { return 45 }
