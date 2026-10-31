@@ -147,7 +147,16 @@ fn emit_instruction(
 ) -> Result<(), String> {
     match instruction {
         LirInstruction::LoadImmediate { register, value } => {
-            assembly.push_str(&format!("    movabs rax, 0x{:x}\n", *value as u64));
+            let bits = *value as u64;
+            if bits == 0 {
+                assembly.push_str("    xor eax, eax\n");
+            } else if bits <= u32::MAX as u64 {
+                assembly.push_str(&format!("    mov eax, 0x{bits:x}\n"));
+            } else if let Ok(value) = i32::try_from(*value) {
+                assembly.push_str(&format!("    mov rax, {value}\n"));
+            } else {
+                assembly.push_str(&format!("    movabs rax, 0x{bits:x}\n"));
+            }
             store_value(assembly, function, *register, "rax")?;
         }
         LirInstruction::LoadAddress {

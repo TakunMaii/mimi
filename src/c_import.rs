@@ -265,6 +265,7 @@ pub(crate) fn expand_with_shims(
     include_paths: &[std::path::PathBuf],
     defines: &[String],
     sysroot: Option<&std::path::Path>,
+    cache_dir: Option<&std::path::Path>,
 ) -> Result<(Vec<ASTNode>, Vec<String>), String> {
     let mut output = nodes.to_vec();
     let mut generated_sources = Vec::new();
@@ -283,7 +284,7 @@ pub(crate) fn expand_with_shims(
     defines.extend(source_defines);
     for (alias, path) in &imports {
         let (declarations, shims) =
-            import_header_with_shims(path, target, include_paths, &defines, sysroot)?;
+            import_header_with_shims(path, target, include_paths, &defines, sysroot, cache_dir)?;
         generated_sources.extend(
             shims
                 .into_iter()
@@ -363,6 +364,36 @@ pub(crate) fn expand_with_shims(
     rewrite_c_aliases(&mut output, &aliases);
     prepare_aggregate_callback_adapters(&mut output, &mut generated_sources, &imports)?;
     Ok((output, generated_sources))
+}
+
+pub(crate) fn cache_fingerprint(
+    nodes: &[ASTNode],
+    target: TargetArch,
+    include_paths: &[std::path::PathBuf],
+    defines: &[String],
+    sysroot: Option<&std::path::Path>,
+) -> Result<u64, String> {
+    use std::hash::{Hash, Hasher};
+    let mut source_defines = Vec::new();
+    let mut imports = Vec::new();
+    for node in nodes {
+        if let ASTNode::CImport { alias, path } = node {
+            imports.push((alias, path));
+        }
+        if let ASTNode::CDefine { name, value } = node {
+            source_defines.push(format!("{name}={value}"));
+        }
+    }
+    let mut all_defines = defines.to_vec();
+    all_defines.extend(source_defines);
+    let clang = std::env::var_os("MIMI_CLANG").unwrap_or("clang".into());
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for (alias, path) in imports {
+        alias.hash(&mut hasher);
+        header_cache_key(&clang, path, target, include_paths, &all_defines, sysroot)?
+            .hash(&mut hasher);
+    }
+    Ok(hasher.finish())
 }
 
 fn prepare_aggregate_callback_adapters(
@@ -899,15 +930,33 @@ fn import_header_with_shims(
     include_paths: &[std::path::PathBuf],
     defines: &[String],
     sysroot: Option<&std::path::Path>,
+    cache_dir: Option<&std::path::Path>,
 ) -> Result<(Vec<ASTNode>, Vec<String>), String> {
     let clang = std::env::var_os("MIMI_CLANG").unwrap_or("clang".into());
-    let cache_key = header_cache_key(&clang, path, target, include_paths, defines, sysroot);
+    let cache_key = cache_dir
+        .and_then(|_| header_cache_key(&clang, path, target, include_paths, defines, sysroot).ok());
     static CACHE: OnceLock<Mutex<HashMap<u64, (Vec<ASTNode>, Vec<String>)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(cache) = cache.lock()
-        && let Some(imported) = cache.get(&cache_key)
+    if cache_dir.is_some()
+        && let Ok(cache) = cache.lock()
+        && let Some(imported) = cache_key.and_then(|key| cache.get(&key))
     {
         return Ok(imported.clone());
+    }
+    if let Some(cache_dir) = cache_dir
+        && let Some((ast, layouts, macros)) =
+            cache_key.and_then(|key| load_import_cache(cache_dir, key))
+    {
+        let json = JsonParser::parse(&ast)?;
+        let record_layouts = parse_record_layouts(&layouts)?;
+        let (mut declarations, generated_sources) =
+            declarations_from_ast_with_shims(&json, path, &record_layouts)?;
+        declarations.extend(parse_numeric_macros(&macros, &declarations));
+        let imported = (declarations, generated_sources);
+        if let Ok(mut cache) = cache.lock() {
+            cache.insert(cache_key.unwrap(), imported.clone());
+        }
+        return Ok(imported);
     }
     let mut command = Command::new(&clang);
     command.args(["-Xclang", "-ast-dump=json", "-fsyntax-only", "-x", "c"]);
@@ -946,25 +995,30 @@ fn import_header_with_shims(
         ));
     }
     let json = JsonParser::parse(&String::from_utf8_lossy(&result.stdout))?;
-    let record_layouts =
-        import_record_layouts(&clang, path, target, include_paths, defines, sysroot)?;
+    let layouts = run_record_layouts(&clang, path, target, include_paths, defines, sysroot)?;
+    let record_layouts = parse_record_layouts(&layouts)?;
     let (mut declarations, generated_sources) =
         declarations_from_ast_with_shims(&json, path, &record_layouts)?;
-    declarations.extend(import_numeric_macros(
-        path,
-        target,
-        include_paths,
-        defines,
-        sysroot,
-        &declarations,
-    )?);
+    let macros = run_numeric_macros(path, target, include_paths, defines, sysroot)?;
+    declarations.extend(parse_numeric_macros(&macros, &declarations));
     if declarations.is_empty() {
         return Err(format!(
             "@cimport('{path}') found no supported C declarations"
         ));
     }
-    if let Ok(mut cache) = cache.lock() {
-        cache.insert(cache_key, (declarations.clone(), generated_sources.clone()));
+    if let (Some(cache_dir), Some(key)) = (cache_dir, cache_key) {
+        store_import_cache(
+            cache_dir,
+            key,
+            result.stdout.as_slice(),
+            layouts.as_bytes(),
+            macros.as_bytes(),
+        );
+    }
+    if let Some(key) = cache_key
+        && let Ok(mut cache) = cache.lock()
+    {
+        cache.insert(key, (declarations.clone(), generated_sources.clone()));
     }
     Ok((declarations, generated_sources))
 }
@@ -976,7 +1030,7 @@ fn header_cache_key(
     include_paths: &[std::path::PathBuf],
     defines: &[String],
     sysroot: Option<&std::path::Path>,
-) -> u64 {
+) -> Result<u64, String> {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     clang.hash(&mut hasher);
@@ -994,21 +1048,155 @@ fn header_cache_key(
     {
         contents.hash(&mut hasher);
     }
-    let version = Command::new(clang).arg("--version").output();
-    if let Ok(version) = version {
-        version.stdout.hash(&mut hasher);
+    let version = Command::new(clang)
+        .arg("--version")
+        .output()
+        .map_err(|error| format!("cannot identify clang for C import caching: {error}"))?;
+    if !version.status.success() {
+        return Err("cannot identify clang for C import caching".into());
     }
-    hasher.finish()
+    version.stdout.hash(&mut hasher);
+    for dependency in clang_dependencies(clang, header, target, include_paths, defines, sysroot)? {
+        dependency.hash(&mut hasher);
+        let contents = std::fs::read(&dependency).map_err(|error| {
+            format!(
+                "cannot read C import dependency '{}': {error}",
+                dependency.display()
+            )
+        })?;
+        contents.hash(&mut hasher);
+    }
+    Ok(hasher.finish())
 }
 
-fn import_numeric_macros(
+fn clang_dependencies(
+    clang: &std::ffi::OsStr,
     path: &str,
     target: TargetArch,
     include_paths: &[std::path::PathBuf],
     defines: &[String],
     sysroot: Option<&std::path::Path>,
-    existing: &[ASTNode],
-) -> Result<Vec<ASTNode>, String> {
+) -> Result<Vec<std::path::PathBuf>, String> {
+    let mut command = Command::new(clang);
+    command.args(["-M", "-MT", "mimi-cache", "-x", "c"]);
+    command.arg(match target {
+        TargetArch::Aarch64 => "--target=aarch64-apple-darwin",
+        TargetArch::X86_64 => "--target=x86_64-apple-darwin",
+    });
+    if let Some(sysroot) = sysroot {
+        command.arg("--sysroot").arg(sysroot);
+    }
+    command.arg("-include").arg(path);
+    for include in include_paths {
+        command.arg("-I").arg(include);
+    }
+    for define in defines {
+        command.arg(format!("-D{define}"));
+    }
+    command.arg("-").stdin(std::process::Stdio::piped());
+    command.stdout(std::process::Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("cannot start clang dependency scan: {error}"))?;
+    use std::io::Write;
+    child
+        .stdin
+        .as_mut()
+        .ok_or("clang stdin unavailable")?
+        .write_all(b"\n")
+        .map_err(|error| format!("cannot provide clang input: {error}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("cannot read clang dependencies: {error}"))?;
+    if !output.status.success() {
+        return Err("clang dependency scan failed".into());
+    }
+    parse_make_dependencies(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_make_dependencies(output: &str) -> Result<Vec<std::path::PathBuf>, String> {
+    let (_, dependencies) = output
+        .split_once(':')
+        .ok_or("invalid clang dependency output")?;
+    let mut paths = Vec::new();
+    let mut path = String::new();
+    let mut escaped = false;
+    for character in dependencies.chars() {
+        if escaped {
+            if character != '\n' {
+                path.push(character);
+            }
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character.is_whitespace() {
+            if !path.is_empty() {
+                paths.push(std::path::PathBuf::from(std::mem::take(&mut path)));
+            }
+        } else {
+            path.push(character);
+        }
+    }
+    if escaped {
+        path.push('\\');
+    }
+    if !path.is_empty() {
+        paths.push(std::path::PathBuf::from(path));
+    }
+    Ok(paths)
+}
+
+fn load_import_cache(cache_dir: &std::path::Path, key: u64) -> Option<(String, String, String)> {
+    let bytes = std::fs::read(cache_dir.join(format!("{key:016x}.cache"))).ok()?;
+    if bytes.get(..8)? != b"MIMICCH1" {
+        return None;
+    }
+    let mut cursor = 8;
+    let ast = read_cache_field(&bytes, &mut cursor)?;
+    let layouts = read_cache_field(&bytes, &mut cursor)?;
+    let macros = read_cache_field(&bytes, &mut cursor)?;
+    (cursor == bytes.len()).then_some((ast, layouts, macros))
+}
+
+fn read_cache_field(bytes: &[u8], cursor: &mut usize) -> Option<String> {
+    let length_bytes: [u8; 8] = bytes.get(*cursor..*cursor + 8)?.try_into().ok()?;
+    *cursor += 8;
+    let length = usize::try_from(u64::from_le_bytes(length_bytes)).ok()?;
+    let field = bytes.get(*cursor..*cursor + length)?;
+    *cursor += length;
+    String::from_utf8(field.to_vec()).ok()
+}
+
+fn store_import_cache(
+    cache_dir: &std::path::Path,
+    key: u64,
+    ast: &[u8],
+    layouts: &[u8],
+    macros: &[u8],
+) {
+    if std::fs::create_dir_all(cache_dir).is_err() {
+        return;
+    }
+    let mut bytes = Vec::with_capacity(ast.len() + layouts.len() + macros.len() + 32);
+    bytes.extend_from_slice(b"MIMICCH1");
+    for field in [ast, layouts, macros] {
+        bytes.extend_from_slice(&(field.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(field);
+    }
+    let path = cache_dir.join(format!("{key:016x}.cache"));
+    let temporary = cache_dir.join(format!("{key:016x}.{}.tmp", std::process::id()));
+    if std::fs::write(&temporary, bytes).is_ok() {
+        let _ = std::fs::rename(temporary, path);
+    }
+}
+
+fn run_numeric_macros(
+    path: &str,
+    target: TargetArch,
+    include_paths: &[std::path::PathBuf],
+    defines: &[String],
+    sysroot: Option<&std::path::Path>,
+) -> Result<String, String> {
     let mut command = Command::new(std::env::var_os("MIMI_CLANG").unwrap_or("clang".into()));
     command.args(["-dM", "-E", "-x", "c"]);
     command.arg(clang_target(target));
@@ -1045,7 +1233,11 @@ fn import_numeric_macros(
             String::from_utf8_lossy(&result.stderr).trim()
         ));
     }
-    let existing = existing
+    Ok(String::from_utf8_lossy(&result.stdout).into_owned())
+}
+
+fn parse_numeric_macros(text: &str, existing_nodes: &[ASTNode]) -> Vec<ASTNode> {
+    let existing = existing_nodes
         .iter()
         .filter_map(|node| match node {
             ASTNode::CompileTimeConstant { name, .. } => Some(name.as_str()),
@@ -1053,7 +1245,7 @@ fn import_numeric_macros(
         })
         .collect::<HashSet<_>>();
     let mut output = Vec::new();
-    for line in String::from_utf8_lossy(&result.stdout).lines() {
+    for line in text.lines() {
         let Some(rest) = line.strip_prefix("#define ") else {
             continue;
         };
@@ -1100,7 +1292,7 @@ fn import_numeric_macros(
             value: expression,
         });
     }
-    Ok(output)
+    output
 }
 
 #[derive(Clone, Debug)]
@@ -1121,6 +1313,24 @@ fn import_record_layouts(
     defines: &[String],
     sysroot: Option<&std::path::Path>,
 ) -> Result<HashMap<String, CRecordLayout>, String> {
+    parse_record_layouts(&run_record_layouts(
+        clang,
+        path,
+        target,
+        include_paths,
+        defines,
+        sysroot,
+    )?)
+}
+
+fn run_record_layouts(
+    clang: &std::ffi::OsStr,
+    path: &str,
+    target: TargetArch,
+    include_paths: &[std::path::PathBuf],
+    defines: &[String],
+    sysroot: Option<&std::path::Path>,
+) -> Result<String, String> {
     let mut command = Command::new(clang);
     command.args([
         "-Xclang",
@@ -1162,10 +1372,11 @@ fn import_record_layouts(
             String::from_utf8_lossy(&result.stderr).trim()
         ));
     }
-    let stdout = String::from_utf8_lossy(&result.stdout);
-    let stderr = String::from_utf8_lossy(&result.stderr);
-    let layouts = parse_record_layouts(&format!("{stdout}\n{stderr}"))?;
-    Ok(layouts)
+    Ok(format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    ))
 }
 
 fn parse_record_layouts(output: &str) -> Result<HashMap<String, CRecordLayout>, String> {
@@ -2087,6 +2298,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_make_dependency_paths_with_spaces_and_continuations() {
+        let paths = super::parse_make_dependencies(
+            "mimi-cache: /tmp/include\\ dir/api.h \\\n /usr/include/stdlib.h\n",
+        )
+        .unwrap();
+        assert_eq!(
+            paths,
+            [
+                std::path::PathBuf::from("/tmp/include dir/api.h"),
+                std::path::PathBuf::from("/usr/include/stdlib.h")
+            ]
+        );
+    }
+
+    #[test]
     fn maps_c_scalars_and_pointer_types() {
         assert_eq!(c_type("int", &HashMap::new()), Some(DataType::I32));
         assert_eq!(c_type("long double", &HashMap::new()), None);
@@ -2165,6 +2391,64 @@ mod tests {
                 [("tag".into(), 0), ("value".into(), expected_offset)]
             );
         }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn persists_c_import_cache_and_invalidates_transitive_header_changes() {
+        let directory =
+            std::env::temp_dir().join(format!("mimi_cimport_cache_{}", std::process::id()));
+        let cache = directory.join(".mimi").join("cimport");
+        std::fs::create_dir_all(&directory).unwrap();
+        let leaf = directory.join("leaf.h");
+        let header = directory.join("api.h");
+        std::fs::write(&leaf, "#define CACHE_VALUE 11\ntypedef int CacheInt;\n").unwrap();
+        std::fs::write(&header, "#include \"leaf.h\"\nCacheInt cache_read(void);\n").unwrap();
+        let includes = vec![directory.clone()];
+        let imported = super::import_header_with_shims(
+            header.to_str().unwrap(),
+            TargetArch::Aarch64,
+            &includes,
+            &[],
+            None,
+            Some(&cache),
+        )
+        .unwrap();
+        assert!(!imported.0.is_empty());
+        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 1);
+
+        let cached = super::import_header_with_shims(
+            header.to_str().unwrap(),
+            TargetArch::Aarch64,
+            &includes,
+            &[],
+            None,
+            Some(&cache),
+        )
+        .unwrap();
+        assert_eq!(cached, imported);
+
+        std::fs::write(&leaf, "#define CACHE_VALUE 12\ntypedef int CacheInt;\n").unwrap();
+        super::import_header_with_shims(
+            header.to_str().unwrap(),
+            TargetArch::Aarch64,
+            &includes,
+            &[],
+            None,
+            Some(&cache),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 2);
+
+        super::import_header_with_shims(
+            header.to_str().unwrap(),
+            TargetArch::Aarch64,
+            &includes,
+            &[],
+            None,
+            None,
+        )
+        .unwrap();
         std::fs::remove_dir_all(directory).unwrap();
     }
 

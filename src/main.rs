@@ -106,8 +106,11 @@ fn run_cli() -> Result<(), String> {
             let mut defines = Vec::new();
             let mut sysroot = None;
             let mut c_sources = Vec::new();
+            let mut cache_enabled = true;
             while let Some(argument) = args.next() {
-                if argument == "-o" {
+                if argument == "--no-cache" {
+                    cache_enabled = false;
+                } else if argument == "-o" {
                     output = Some(args.next().ok_or("missing output path after -o")?);
                 } else if let Some(path) = argument.strip_prefix("-I") {
                     import_paths.push(std::path::PathBuf::from(if path.is_empty() {
@@ -154,11 +157,11 @@ fn run_cli() -> Result<(), String> {
                     input = Some(argument);
                 } else {
                     return Err(
-                        "usage: mimi build <source> -o <output> [--target host|aarch64|x86_64] [-Ipath] [-Lpath] [-lname] [-Dname[=value]] [--sysroot path] [--c-source file.c]".into(),
+                        "usage: mimi build <source> -o <output> [--target host|aarch64|x86_64] [--no-cache] [-Ipath] [-Lpath] [-lname] [-Dname[=value]] [--sysroot path] [--c-source file.c]".into(),
                     );
                 }
             }
-            build_file_for_target_with_c_options(
+            build_file_for_target_with_c_options_and_cache(
                 &input.ok_or("missing source path")?,
                 &output.ok_or("missing output path")?,
                 &import_paths,
@@ -168,6 +171,7 @@ fn run_cli() -> Result<(), String> {
                 &defines,
                 sysroot.as_deref(),
                 &c_sources,
+                cache_enabled,
             )
         }
         _ => Err("usage: mimi build <source> -o <output>".into()),
@@ -234,6 +238,32 @@ fn build_file_for_target_with_c_options(
     sysroot: Option<&std::path::Path>,
     c_sources: &[std::path::PathBuf],
 ) -> Result<(), String> {
+    build_file_for_target_with_c_options_and_cache(
+        input,
+        output,
+        import_paths,
+        library_paths,
+        libraries,
+        target,
+        defines,
+        sysroot,
+        c_sources,
+        true,
+    )
+}
+
+fn build_file_for_target_with_c_options_and_cache(
+    input: &str,
+    output: &str,
+    import_paths: &[std::path::PathBuf],
+    library_paths: &[std::path::PathBuf],
+    libraries: &[String],
+    target: lir::TargetArch,
+    defines: &[String],
+    sysroot: Option<&std::path::Path>,
+    c_sources: &[std::path::PathBuf],
+    cache_enabled: bool,
+) -> Result<(), String> {
     let source = std::fs::read_to_string(input)
         .map_err(|error| format!("cannot read '{input}': {error}"))?;
     let mut import_paths = import_paths.to_vec();
@@ -243,8 +273,52 @@ fn build_file_for_target_with_c_options(
         import_paths.push(parent.to_path_buf());
     }
     let ast = parse_source(input, &source)?;
+    let build_cache_key = if cache_enabled {
+        build_cache_key(
+            input,
+            &source,
+            &ast,
+            target,
+            &import_paths,
+            library_paths,
+            libraries,
+            defines,
+            sysroot,
+            c_sources,
+        )
+        .ok()
+    } else {
+        None
+    };
+    let build_cache_path = build_cache_key.map(|key| {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join(".mimi")
+            .join("build")
+            .join(format!("{key:016x}.bin"))
+    });
+    if let Some(cache_path) = &build_cache_path
+        && cache_path.is_file()
+        && restore_build_cache(cache_path, output)
+    {
+        return Ok(());
+    }
+    let cache_dir = cache_enabled
+        .then(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|path| path.join(".mimi").join("cimport"))
+        })
+        .flatten();
     let (ast, generated_c_sources) = catch_compiler_failure(input, &source, "C import", || {
-        c_import::expand_with_shims(&ast, target, &import_paths, defines, sysroot)
+        c_import::expand_with_shims(
+            &ast,
+            target,
+            &import_paths,
+            defines,
+            sysroot,
+            cache_dir.as_deref(),
+        )
     })??;
     catch_compiler_failure(input, &source, "type check", || {
         type_checker::check_with_import_paths(&ast, &import_paths)
@@ -270,7 +344,7 @@ fn build_file_for_target_with_c_options(
     let lir = catch_compiler_failure(input, &source, "LIR lowering", || {
         lir::lower_mir(&mir, &target)
     })?;
-    catch_compiler_failure(input, &source, "code generation", || {
+    let result = catch_compiler_failure(input, &source, "code generation", || {
         codegen::compile_executable_with_options(
             &lir,
             std::path::Path::new(output),
@@ -284,7 +358,238 @@ fn build_file_for_target_with_c_options(
                 sysroot: sysroot.map(std::path::Path::to_path_buf),
             },
         )
-    })?
+    })?;
+    if result.is_ok()
+        && let Some(cache_path) = build_cache_path
+        && let Some(parent) = cache_path.parent()
+        && std::fs::create_dir_all(parent).is_ok()
+    {
+        store_build_cache(&cache_path, output);
+    }
+    result
+}
+
+fn restore_build_cache(cache_path: &std::path::Path, output: &str) -> bool {
+    use std::hash::{Hash, Hasher};
+    let Ok(bytes) = std::fs::read(cache_path) else {
+        return false;
+    };
+    if bytes.get(..8) != Some(&b"MIMIBLD1"[..]) || bytes.len() < 28 {
+        return false;
+    }
+    let length = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    let checksum = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+    let mode = u32::from_le_bytes(bytes[24..28].try_into().unwrap());
+    let executable = &bytes[28..];
+    if length != executable.len() as u64 {
+        return false;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    executable.hash(&mut hasher);
+    if checksum != hasher.finish() {
+        return false;
+    }
+    if std::fs::write(output, executable).is_err() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::set_permissions(output, std::fs::Permissions::from_mode(mode)).is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+fn store_build_cache(cache_path: &std::path::Path, output: &str) {
+    use std::hash::{Hash, Hasher};
+    let Ok(executable) = std::fs::read(output) else {
+        return;
+    };
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    executable.hash(&mut hasher);
+    let mode = std::fs::metadata(output)
+        .map(|metadata| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                metadata.permissions().mode() & 0o7777
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = metadata;
+                0
+            }
+        })
+        .unwrap_or(0);
+    let mut bytes = Vec::with_capacity(executable.len() + 28);
+    bytes.extend_from_slice(b"MIMIBLD1");
+    bytes.extend_from_slice(&(executable.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(&hasher.finish().to_le_bytes());
+    bytes.extend_from_slice(&mode.to_le_bytes());
+    bytes.extend_from_slice(&executable);
+    let temporary = cache_path.with_extension(format!("{}.tmp", std::process::id()));
+    if std::fs::write(&temporary, bytes).is_ok() {
+        let _ = std::fs::rename(temporary, cache_path);
+    }
+}
+
+fn build_cache_key(
+    input: &str,
+    source: &str,
+    nodes: &[parser::ASTNode],
+    target: lir::TargetArch,
+    import_paths: &[std::path::PathBuf],
+    library_paths: &[std::path::PathBuf],
+    libraries: &[String],
+    defines: &[String],
+    sysroot: Option<&std::path::Path>,
+    c_sources: &[std::path::PathBuf],
+) -> Result<u64, String> {
+    use std::hash::{Hash, Hasher};
+    if !c_sources.is_empty() {
+        return Err("build caching with additional C sources is not available".into());
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    env!("CARGO_PKG_VERSION").hash(&mut hasher);
+    input.hash(&mut hasher);
+    source.hash(&mut hasher);
+    format!("{target:?}").hash(&mut hasher);
+    import_paths.hash(&mut hasher);
+    library_paths.hash(&mut hasher);
+    libraries.hash(&mut hasher);
+    defines.hash(&mut hasher);
+    sysroot.hash(&mut hasher);
+    if let Ok(executable) = std::env::current_exe()
+        && let Ok(contents) = std::fs::read(executable)
+    {
+        contents.hash(&mut hasher);
+    }
+    let mut build_tools = vec![("cc", vec!["--version"]), ("ld", vec!["-v"])];
+    if cfg!(target_os = "macos") {
+        build_tools.push(("xcrun", vec!["--sdk", "macosx", "--show-sdk-version"]));
+    }
+    for (tool, arguments) in build_tools {
+        let output = std::process::Command::new(tool)
+            .args(arguments)
+            .output()
+            .map_err(|error| format!("cannot run build tool '{tool}': {error}"))?;
+        if !output.status.success() {
+            return Err(format!("cannot identify build tool '{tool}'"));
+        }
+        output.stdout.hash(&mut hasher);
+        output.stderr.hash(&mut hasher);
+    }
+    hash_imported_sources(
+        nodes,
+        import_paths,
+        target,
+        defines,
+        sysroot,
+        &mut std::collections::HashSet::new(),
+        &mut hasher,
+    )?;
+    c_import::cache_fingerprint(nodes, target, import_paths, defines, sysroot)?.hash(&mut hasher);
+    hash_link_libraries(libraries, library_paths, &mut hasher)?;
+    if let Some(sysroot) = sysroot {
+        sysroot.hash(&mut hasher);
+    }
+    Ok(hasher.finish())
+}
+
+fn hash_imported_sources(
+    nodes: &[parser::ASTNode],
+    import_paths: &[std::path::PathBuf],
+    target: lir::TargetArch,
+    defines: &[String],
+    sysroot: Option<&std::path::Path>,
+    visited: &mut std::collections::HashSet<std::path::PathBuf>,
+    hasher: &mut impl std::hash::Hasher,
+) -> Result<(), String> {
+    use std::hash::Hash;
+    for node in nodes {
+        let parser::ASTNode::Import { path, .. } = node else {
+            continue;
+        };
+        let source_path = type_checker::resolve_import_path(path, import_paths)?;
+        let canonical = source_path
+            .canonicalize()
+            .unwrap_or_else(|_| source_path.clone());
+        if !visited.insert(canonical.clone()) {
+            continue;
+        }
+        canonical.hash(hasher);
+        let source = std::fs::read_to_string(&source_path)
+            .map_err(|error| format!("cannot read '{}': {error}", source_path.display()))?;
+        source.hash(hasher);
+        let module_nodes = parse_source(&source_path.display().to_string(), &source)?;
+        let mut module_paths = import_paths.to_vec();
+        if let Some(parent) = source_path.parent()
+            && !module_paths.iter().any(|candidate| candidate == parent)
+        {
+            module_paths.push(parent.to_path_buf());
+        }
+        c_import::cache_fingerprint(&module_nodes, target, &module_paths, defines, sysroot)?
+            .hash(hasher);
+        hash_imported_sources(
+            &module_nodes,
+            &module_paths,
+            target,
+            defines,
+            sysroot,
+            visited,
+            hasher,
+        )?;
+    }
+    Ok(())
+}
+
+fn hash_link_libraries(
+    libraries: &[String],
+    library_paths: &[std::path::PathBuf],
+    hasher: &mut impl std::hash::Hasher,
+) -> Result<(), String> {
+    use std::hash::Hash;
+    let mut search_paths = library_paths.to_vec();
+    if let Ok(sdk) = std::process::Command::new("xcrun")
+        .args(["--sdk", "macosx", "--show-sdk-path"])
+        .output()
+        && sdk.status.success()
+    {
+        let sdk = String::from_utf8_lossy(&sdk.stdout).trim().to_string();
+        sdk.hash(hasher);
+        search_paths.push(std::path::PathBuf::from(sdk).join("usr/lib"));
+    }
+    search_paths.extend([
+        std::path::PathBuf::from("/opt/homebrew/lib"),
+        std::path::PathBuf::from("/usr/local/lib"),
+        std::path::PathBuf::from("/usr/lib"),
+    ]);
+    for library in libraries {
+        library.hash(hasher);
+        let candidates = [
+            format!("lib{library}.dylib"),
+            format!("lib{library}.tbd"),
+            format!("lib{library}.a"),
+            format!("lib{library}.so"),
+        ];
+        let mut found = false;
+        for path in &search_paths {
+            for candidate in &candidates {
+                let path = path.join(candidate);
+                if let Ok(contents) = std::fs::read(&path) {
+                    path.hash(hasher);
+                    contents.hash(hasher);
+                    found = true;
+                }
+            }
+        }
+        if !found {
+            return Err(format!("cannot fingerprint linked library '{library}'"));
+        }
+    }
+    Ok(())
 }
 
 fn collect_imported_functions(
@@ -860,3 +1165,40 @@ mod type_checker_tests;
 #[cfg(test)]
 #[path = "../tests/ir/mod.rs"]
 mod ir_tests;
+
+#[cfg(test)]
+mod build_cache_tests {
+    use super::{restore_build_cache, store_build_cache};
+
+    #[test]
+    fn validates_cached_executable_and_restores_its_permissions() {
+        let directory =
+            std::env::temp_dir().join(format!("mimi_build_cache_test_{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let executable = directory.join("program");
+        let cache = directory.join("program.cache");
+        let restored = directory.join("restored");
+        std::fs::write(&executable, b"executable contents").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        store_build_cache(&cache, executable.to_str().unwrap());
+        assert!(restore_build_cache(&cache, restored.to_str().unwrap()));
+        assert_eq!(std::fs::read(&restored).unwrap(), b"executable contents");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&restored).unwrap().permissions().mode() & 0o777,
+                0o755
+            );
+        }
+        let mut corrupted = std::fs::read(&cache).unwrap();
+        corrupted.pop();
+        std::fs::write(&cache, corrupted).unwrap();
+        assert!(!restore_build_cache(&cache, restored.to_str().unwrap()));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
