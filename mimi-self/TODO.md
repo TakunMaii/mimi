@@ -92,11 +92,12 @@ UTF-8 sequences, classifies common errors, returns token/error spans together,
 and handles member-number/decimal boundaries. Its Unicode identifier ranges
 are still approximate. An
 arena-backed expression parser now handles atom, prefix, binary, grouped,
-member, indexed, sliced, and call forms with precedence. Named, pointer, slice,
-and fixed-array type syntax is parsed; tuple/function/generic types and
-declaration and statement parsing remain open. The parser currently lives alongside the
-lexer because stage0 loses imported aliases inside imported module function
-bodies.
+member, indexed, sliced, and call forms with precedence. Number/string/boolean
+atoms retain source spans. Named, pointer, slice, and fixed-array type syntax
+is parsed, and binding headers expose declaration/type/initializer spans;
+tuple/function/generic types, declaration AST construction, and statement
+parsing remain open. The parser currently lives alongside the lexer because
+stage0 loses imported aliases inside imported module function bodies.
 
 Next, parse declarations, types, and statements before name resolution and
 type checking.

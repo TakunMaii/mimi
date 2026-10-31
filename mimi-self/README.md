@@ -27,9 +27,10 @@ The script builds stage1 with stage0, builds stage2 with stage1, runs the test
 suite under each stage, and reports each compiler artifact's size and SHA-256
 for reproducibility comparisons.
 
-The current milestone is the self-hosted lexer and an arena-backed expression
-parser for grouped unary/binary expressions, member/index/slice access, and
-nested calls, plus named/pointer/slice/fixed-array type syntax. The expression
+The current milestone is the self-hosted lexer, an arena-backed expression
+parser for grouped unary/binary expressions, member/index/slice access and
+nested calls, named/pointer/slice/fixed-array type syntax, and binding header
+span parsing. Literal expression nodes retain their token spans. The expression
 parser handles operator precedence and left associativity. Stage0
 is the Rust compiler. See
 [TODO.md](TODO.md) for the parity roadmap and [FEATURES.md](FEATURES.md) for
