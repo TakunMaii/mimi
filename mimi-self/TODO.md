@@ -100,8 +100,9 @@ atoms retain source spans. Named, pointer, slice, fixed-array, nested tuple,
 and nested function type syntax is parsed, and binding headers expose
 declaration/type/initializer spans. Function headers and named parameters have
 source-aware nodes; atomic tuple literals have a dedicated parser. Generic
-types, general tuple expressions and destructuring, declaration AST
-construction, control-flow statements, and type checking remain open. The
+generic declarations and parameter validation, general tuple expressions
+and destructuring, declaration AST construction, control-flow statements,
+and type checking remain open. The
 parser currently lives alongside the lexer because stage0 loses imported
 aliases inside imported module function bodies.
 

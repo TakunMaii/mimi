@@ -36,6 +36,20 @@ main :: fn () i32 {
     if lexer.expression_is_null(nested_function_type) || nested_function_type.left.kind != 277 || nested_function_type.right.kind != 272 { return 157 }
     malformed_function_type := lexer.parse_type("fn (i32,) bool", &storage)
     if !lexer.expression_is_null(malformed_function_type) { return 158 }
+    generic_type := lexer.parse_type("Pair<i32>", &storage)
+    if lexer.expression_is_null(generic_type) || generic_type.kind != 278 || generic_type.left.kind != 270 || generic_type.right.kind != 270 { return 162 }
+    if generic_type.start != 0 || generic_type.end != 9 { return 163 }
+    nested_generic_type := lexer.parse_type("Pair<Vec<i32>>", &storage)
+    if lexer.expression_is_null(nested_generic_type) || nested_generic_type.kind != 278 || nested_generic_type.right.kind != 278 { return 164 }
+    generic_value_type := lexer.parse_type("Fixed<3.5>", &storage)
+    if lexer.expression_is_null(generic_value_type) || generic_value_type.kind != 278 { return 165 }
+    if generic_value_type.right.kind != 2 { return generic_value_type.right.kind as i32 }
+    pointer_generic_type := lexer.parse_type("*Pair<i32>", &storage)
+    if lexer.expression_is_null(pointer_generic_type) || pointer_generic_type.kind != 271 || pointer_generic_type.left.kind != 278 { return 166 }
+    trailing_generic_type := lexer.parse_type("Pair<i32,>", &storage)
+    if !lexer.expression_is_null(trailing_generic_type) { return 167 }
+    unclosed_generic_type := lexer.parse_type("Pair<i32", &storage)
+    if !lexer.expression_is_null(unclosed_generic_type) { return 168 }
     singleton_tuple_type := lexer.parse_tuple_type("(i32)", &storage)
     if !lexer.expression_is_null(singleton_tuple_type) { return 131 }
     singleton_trailing_tuple_type := lexer.parse_type("(i32,)", &storage)
