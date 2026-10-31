@@ -1280,7 +1280,7 @@ pub parse_statement_block :: fn (source : []u8, offset : u64, storage : *Express
         token := next_token(source, cursor)
         if token.0 == 0 || token.0 == 255 || token.2 > closing { return mimi_buffer_empty() as *BlockNode }
         at_top_level := paren_depth == 0 && bracket_depth == 0 && brace_depth == 0
-        if at_top_level && token.1 > segment_start && (statement_starts_here(source, token) || (previous_kind == 125 && expression_starts_statement(token.0))) {
+        if at_top_level && token.1 > segment_start && (statement_starts_here(source, token) || (previous_kind == 125 && expression_starts_statement(token.0)) || (can_end_expression(previous_kind) && starts_expression_atom(token.0))) {
             previous := parse_statement_piece(source[segment_start:token.1], segment_start + offset, storage)
             if statement_node_is_null(previous) { return mimi_buffer_empty() as *BlockNode }
             if first == (mimi_buffer_empty() as *StatementNode) { first = previous } else { last.next = previous }
@@ -1326,6 +1326,14 @@ pub parse_statement_block :: fn (source : []u8, offset : u64, storage : *Express
 
 expression_starts_statement :: fn (kind : u8) bool {
     kind == 1 || kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 40 || kind == 42 || kind == 38 || kind == 45 || kind == 33
+}
+
+can_end_expression :: fn (kind : u8) bool {
+    kind == 1 || kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 41 || kind == 93 || kind == 125
+}
+
+starts_expression_atom :: fn (kind : u8) bool {
+    kind == 1 || kind == 2 || kind == 3 || kind == 4 || kind == 5
 }
 
 statement_starts_here :: fn (source : []u8, token : (u8, u64, u64)) bool {

@@ -105,6 +105,12 @@ main :: fn () i32 {
     if lexer.block_node_is_null(whitespace_composed_block) || !lexer.statement_node_is_null(whitespace_composed_block.statements) { return 316 }
     expression_composed_block := lexer.parse_statement_block("{ work() }", 0, &storage)
     if lexer.block_node_is_null(expression_composed_block) || expression_composed_block.statements.kind != 303 || expression_composed_block.statements.value.kind != 263 { return 294 }
+    adjacent_expressions := lexer.parse_statement_block("{ first() second() }", 0, &storage)
+    if lexer.block_node_is_null(adjacent_expressions) || adjacent_expressions.statements.kind != 303 || adjacent_expressions.statements.next.kind != 303 { return 340 }
+    if adjacent_expressions.statements.value.kind != 263 || adjacent_expressions.statements.next.value.kind != 263 { return 341 }
+    adjacent_atoms := lexer.parse_statement_block("{ first + 1 second 42 }", 0, &storage)
+    if lexer.block_node_is_null(adjacent_atoms) || adjacent_atoms.statements.kind != 303 || adjacent_atoms.statements.next.kind != 303 || adjacent_atoms.statements.next.next.kind != 303 { return 342 }
+    if adjacent_atoms.statements.value.kind != 43 || adjacent_atoms.statements.next.value.kind != 1 || adjacent_atoms.statements.next.next.value.kind != 2 { return 343 }
     control_composed_source := "{ if ready { return 1 } else { return 2 } return 0 }"
     control_composed_block := lexer.parse_statement_block(control_composed_source, 50, &storage)
     if lexer.block_node_is_null(control_composed_block) || control_composed_block.statements.kind != 304 { return 295 }
