@@ -686,6 +686,14 @@ pub IfNode :: struct {
     else_branch : *BlockNode,
 }
 
+pub LoopNode :: struct {
+    kind : u64,
+    start : u64,
+    end : u64,
+    condition : *ExprNode,
+    body : *BlockNode,
+}
+
 pub FunctionHeader :: struct {
     start : u64,
     end : u64,
@@ -1133,6 +1141,74 @@ pub parse_if_statement :: fn (source : []u8, storage : *ExpressionArena) *IfNode
     node.condition = condition
     node.then_branch = then_branch
     node.else_branch = else_branch
+    node
+}
+
+pub loop_node_is_null :: fn (node : *LoopNode) bool {
+    node == (mimi_buffer_empty() as *LoopNode)
+}
+
+pub parse_loop_statement :: fn (source : []u8, storage : *ExpressionArena) *LoopNode {
+    keyword := next_token(source, 0)
+    kind : u64 = 0
+    condition : *ExprNode = mimi_buffer_empty() as *ExprNode
+    block_start := source.len
+    if keyword.0 == 171 {
+        kind = 285
+        opening := next_token(source, keyword.2)
+        if opening.0 != 123 { return mimi_buffer_empty() as *LoopNode }
+        block_start = opening.1
+    } else {
+        if keyword.0 == 169 { kind = 286 } else {
+            if keyword.0 == 168 { kind = 287 } else { return mimi_buffer_empty() as *LoopNode }
+        }
+        cursor := keyword.2
+        paren_depth : u64 = 0
+        found_block := false
+        condition_end := source.len
+        while cursor < source.len && !found_block {
+            token := next_token(source, cursor)
+            if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *LoopNode }
+            cursor = token.2
+            if token.0 == 40 { paren_depth = paren_depth + 1 } else {
+                if token.0 == 41 {
+                    if paren_depth == 0 { return mimi_buffer_empty() as *LoopNode }
+                    paren_depth = paren_depth - 1
+                } else {
+                    if token.0 == 123 && paren_depth == 0 {
+                        condition_end = token.1
+                        block_start = token.1
+                        found_block = true
+                    }
+                }
+            }
+        }
+        if !found_block || condition_end <= keyword.2 { return mimi_buffer_empty() as *LoopNode }
+        condition = parse_expression(source[keyword.2:condition_end], storage)
+        if expression_is_null(condition) { return mimi_buffer_empty() as *LoopNode }
+        condition.start = condition.start + keyword.2
+        condition.end = condition.end + keyword.2
+    }
+    body := parse_block_span(source[block_start:source.len], block_start, storage)
+    if block_node_is_null(body) { return mimi_buffer_empty() as *LoopNode }
+    if kind == 287 {
+        while_token := next_token(source, body.end)
+        if while_token.0 != 169 { return mimi_buffer_empty() as *LoopNode }
+        condition_start := while_token.2
+        condition = parse_expression(source[condition_start:source.len], storage)
+        if expression_is_null(condition) { return mimi_buffer_empty() as *LoopNode }
+        condition.start = condition.start + condition_start
+        condition.end = condition.end + condition_start
+    } else {
+        if next_token(source, body.end).0 != 0 { return mimi_buffer_empty() as *LoopNode }
+    }
+    if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *LoopNode }
+    node := storage.last as *LoopNode
+    node.kind = kind
+    node.start = keyword.1
+    node.end = source.len
+    node.condition = condition
+    node.body = body
     node
 }
 

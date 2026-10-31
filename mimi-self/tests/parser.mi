@@ -100,6 +100,16 @@ main :: fn () i32 {
     if !lexer.if_node_is_null(missing_if_body) { return 206 }
     trailing_if_tokens := lexer.parse_if_statement("if ready {} extra", &storage)
     if !lexer.if_node_is_null(trailing_if_tokens) { return 207 }
+    while_statement := lexer.parse_loop_statement("while ready { work() }", &storage)
+    if lexer.loop_node_is_null(while_statement) || while_statement.kind != 286 || while_statement.condition.kind != 1 { return 209 }
+    if while_statement.body.start != 12 || while_statement.end != 24 { return 210 }
+    loop_statement := lexer.parse_loop_statement("loop { work() }", &storage)
+    if lexer.loop_node_is_null(loop_statement) || loop_statement.kind != 285 || !lexer.expression_is_null(loop_statement.condition) { return 211 }
+    do_while_statement := lexer.parse_loop_statement("do { work() } while ready", &storage)
+    if lexer.loop_node_is_null(do_while_statement) || do_while_statement.kind != 287 || do_while_statement.condition.kind != 1 { return 212 }
+    if do_while_statement.condition.start != 23 || do_while_statement.end != 28 { return 213 }
+    invalid_do_while := lexer.parse_loop_statement("do { work() }", &storage)
+    if !lexer.loop_node_is_null(invalid_do_while) { return 214 }
     parameters := lexer.parse_parameters("work :: fn (x : i32, ptr : *u8) bool {", function_header, &storage)
     if lexer.parameter_list_is_null(parameters) { return 111 }
     if parameters.name_start != 12 || parameters.name_end != 13 { return 115 }
