@@ -109,12 +109,7 @@ pub load_graph :: fn (root : []u8, graph : *ModuleGraph) bool {
                                 }
                                 resolved_path := bytes.init()
                                 if valid && import_path.len != 0 && import_path.data[0] != 47 {
-                                    directory_length : u64 = 0
-                                    path_index : u64 = 0
-                                    while path_index < current.length {
-                                        if current.data[path_index] == 47 { directory_length = path_index }
-                                        path_index = path_index + 1
-                                    }
+                                    directory_length := module_directory_length(current.data, current.length)
                                     if !path_api.join_raw(current.data, directory_length, import_path.data, import_path.len, &resolved_path) { valid = false }
                                 } else {
                                     resolved_path = import_path
@@ -153,6 +148,17 @@ pub load_graph :: fn (root : []u8, graph : *ModuleGraph) bool {
     }
     arena_api.release(&storage)
     valid
+}
+
+pub module_directory_length :: fn (path : *u8, path_length : u64) u64 {
+    directory_length : u64 = 0
+    index : u64 = 0
+    while index < path_length {
+        if path[index] == 47 { directory_length = index }
+        index = index + 1
+    }
+    if directory_length == 0 && path_length != 0 && path[0] == 47 { return 1 }
+    directory_length
 }
 
 store_module_path :: fn (storage : *arena_api.Arena, path : *u8, path_length : u64) *ModulePath {

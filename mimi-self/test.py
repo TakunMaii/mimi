@@ -313,6 +313,8 @@ def test_module_loading(compiler: Path) -> None:
         program.write_text(
             f'''source :: @import({module_path})
 main :: fn () i32 {{
+    if source.module_directory_length("/main.mi".ptr, 8) != 1 {{ return 3 }}
+    if source.module_directory_length("/tmp/main.mi".ptr, 12) != 4 {{ return 4 }}
     graph := source.module_graph_init()
     if !source.module_begin(&graph, "root.mi") {{ return 1 }}
     if !source.module_begin(&graph, "child.mi") {{ return 2 }}
@@ -374,6 +376,28 @@ main :: fn () i32 {{
             ]
         )
         run([str(graph_executable)])
+
+        root_path_program = directory / "root-path.mi"
+        root_path_executable = directory / "root-path"
+        root_path_program.write_text(
+            f'''path :: @import({mimi_quote(SELF / "src" / "path.mi")})
+bytes :: @import({mimi_quote(SELF / "src" / "bytes.mi")})
+main :: fn () i32 {{
+    output := bytes.init()
+    if !path.join_raw("/".ptr, 1, "child.mi".ptr, 8, &output) {{ return 1 }}
+    if output.len != 9 || output.data[0] != 47 || output.data[8] != 105 {{ return 2 }}
+    bytes.release(&output)
+    0
+}}
+''', encoding="utf-8"
+        )
+        run(
+            [
+                str(compiler), "build", str(root_path_program), "-o", str(root_path_executable),
+                "--c-source", str(RUNTIME), "--no-cache",
+            ]
+        )
+        run([str(root_path_executable)])
 
 
 def main() -> None:
