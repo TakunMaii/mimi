@@ -223,6 +223,12 @@ main :: fn () i32 {
     if lexer.module_node_is_null(external_module) || external_module.declaration_count != 1 || external_module.declarations.kind != 7 { return 331 }
     if !external_module.declarations.is_external || external_module.declarations.function.parameters.data_type.kind != 272 || external_module.declarations.function.return_type.kind != 270 { return 332 }
     if !lexer.block_node_is_null(external_module.declarations.function.body) || external_module.declarations.function.name_start != 7 { return 333 }
+    module_method_source := "Point :: struct { value : i32, get() :: fn (self : Self) i32 { self.value } }"
+    module_method_ast := lexer.parse_module(module_method_source, &storage)
+    if lexer.module_node_is_null(module_method_ast) || module_method_ast.declarations.struct_node.method_count != 1 { return 335 }
+    module_method := module_method_ast.declarations.struct_node.methods
+    if module_method.name_start == 0 || module_method.function.name_start != module_method.name_start { return 336 }
+    if module_method.function.body.statements.kind != 303 || module_method.function.body.statements.value.start <= module_method.name_start { return 337 }
     malformed_struct_field := lexer.parse_struct_declaration("struct { item : }", &storage)
     if !lexer.struct_node_is_null(malformed_struct_field) { return 259 }
     duplicate_struct_field := lexer.parse_struct_declaration("struct { item : i32, item : bool, }", &storage)
