@@ -199,6 +199,13 @@ main :: fn () i32 {
     if struct_node.fields.next.mutable != false || struct_node.fields.next.default_value.kind != 2 { return 256 }
     if struct_node.fields.next.next.mutable != true || struct_node.fields.next.next.default_value.kind != 2 { return 257 }
     if struct_node.fields.next.next.default_value.start != 59 || struct_node.end != struct_source.len { return 258 }
+    method_source := "struct { x : i32, getX() :: fn (self : Self) i32 { self.x } }"
+    method_struct := lexer.parse_struct_declaration(method_source, &storage)
+    if lexer.struct_node_is_null(method_struct) || method_struct.method_count != 1 || method_struct.field_count != 1 { return 318 }
+    if method_struct.methods.name_start != 18 || method_struct.methods.function.parameters.name_start != 42 { return 319 }
+    if method_struct.methods.function.return_type.kind != 270 || method_struct.methods.function.body.statements.kind != 303 { return 320 }
+    duplicate_struct_method := lexer.parse_struct_declaration("struct { get() :: fn () i32 { 1 } get() :: fn () i32 { 2 } }", &storage)
+    if !lexer.struct_node_is_null(duplicate_struct_method) { return 321 }
     malformed_struct_field := lexer.parse_struct_declaration("struct { item : }", &storage)
     if !lexer.struct_node_is_null(malformed_struct_field) { return 259 }
     duplicate_struct_field := lexer.parse_struct_declaration("struct { item : i32, item : bool, }", &storage)

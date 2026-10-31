@@ -72,8 +72,8 @@ two consecutive stages.
 - [x] Parse enum `if let` variant tests with optional bindings.
 - [x] Parse generic parameter lists and reject duplicate names.
 - [x] Parse enum variants and optional payload types into declaration nodes.
-- [x] Parse struct fields, defaults, mutability, and generic parameters; reject
-  duplicate struct fields and enum variants.
+- [x] Parse struct fields, defaults, mutability, generic parameters, and methods;
+  reject duplicate struct fields, methods, and enum variants.
 - [x] Parse tuple destructuring names with atomic tuple literal initializers.
 - [x] Build function definition nodes with balanced block source spans.
 - [x] Reject duplicate function parameter names.
@@ -128,9 +128,8 @@ fixed-array, nested tuple, nested function, and generic application type syntax
 is parsed. Binding headers and declaration AST nodes preserve names, optional
 types, initializers, and source spans. Function headers and named parameters
 have source-aware nodes; callback types are supported in parameter lists.
-Generic parameter lists, enum variant declarations with payload types, and
-struct field declarations with defaults/mutability are parsed; struct methods
-remain pending.
+Generic parameter lists, enum variant declarations with payload types, struct
+field declarations with defaults/mutability, and struct methods are parsed.
 Function definitions contain source-aware body statement lists.
 `parse_statement_block` composes binding, tuple destructuring, assignment,
 transfer, defer, expression, if/if-let, loop, for, and match statements into
