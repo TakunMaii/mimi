@@ -54,6 +54,10 @@ Use that output to replace the generated table block in `mimi-self/runtime.c`;
 do not append it, since the runtime already contains the generated definitions.
 `lexer.expression_payload` returns the original source spelling for identifier,
 number, and string literal nodes; string escapes remain encoded in that view.
+`lexer.parse_module` builds a source-spanned declaration list for bindings,
+functions, structs, enums, extern functions, `@import`, `@cimport`, and
+`@cDefine`. Extern functions use a `FunctionNode` with a null body; ordinary
+function and struct method bodies contain recursively composed statement lists.
 
 `source.render` writes a diagnostic with its path, one-based line and column,
 source line, and byte-span underline to standard error. `source.load_graph`
