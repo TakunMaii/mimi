@@ -2528,6 +2528,11 @@ pub parse_struct_literal :: fn (source : []u8, storage : *ExpressionArena) *Stru
         name := next_token(field_source, 0)
         equal := next_token(field_source, name.2)
         if name.0 != 1 || equal.0 != 61 { return mimi_buffer_empty() as *StructLiteralNode }
+        existing := first
+        while existing != (mimi_buffer_empty() as *StructLiteralFieldNode) {
+            if source_names_equal(source, existing.name_start, existing.name_end, name.1 + segment_start, name.2 + segment_start) { return mimi_buffer_empty() as *StructLiteralNode }
+            existing = existing.next
+        }
         value := parse_expression(field_source[equal.2:field_source.len], storage)
         if expression_is_null(value) { return mimi_buffer_empty() as *StructLiteralNode }
         value.start = value.start + equal.2 + segment_start
