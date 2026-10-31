@@ -2905,6 +2905,20 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                                 stacks.nodes[stacks.node_count - 1].end = token.2
                                 expecting_operand = false
                             } else {
+                                if token.0 == 174 && !expecting_operand {
+                                    if stacks.node_count == 0 { return mimi_buffer_empty() as *ExprNode }
+                                    type_end := cast_type_end(source, cursor)
+                                    if type_end == cursor { return mimi_buffer_empty() as *ExprNode }
+                                    data_type := parse_type(source[cursor:type_end], storage)
+                                    if expression_is_null(data_type) { return data_type }
+                                    data_type.start = data_type.start + cursor
+                                    data_type.end = data_type.end + cursor
+                                    value := stacks.nodes[stacks.node_count - 1]
+                                    cast := allocate_expr(storage, 293, value.start, data_type.end, value, data_type)
+                                    if expression_is_null(cast) { return cast }
+                                    stacks.nodes[stacks.node_count - 1] = cast
+                                    cursor = type_end
+                                } else {
                                 if expecting_operand {
                                     if token.0 != 45 && token.0 != 33 && token.0 != 38 && token.0 != 42 { return mimi_buffer_empty() as *ExprNode }
                                     stacks.operators[stacks.operator_count] = ExprOperator { kind = 250 + token.0 as u64, start = token.1, base_count = 0, argument_count = 0 }
@@ -2924,6 +2938,7 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                                     expecting_operand = true
                                     }
                                 }
+                                }
                             }
                         }
                     }
@@ -2942,6 +2957,43 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
     }
     if stacks.node_count != 1 { return mimi_buffer_empty() as *ExprNode }
     stacks.nodes[0]
+}
+
+cast_type_end :: fn (source : []u8, start : u64) u64 {
+    cursor := start
+    paren_depth : u64 = 0
+    bracket_depth : u64 = 0
+    angle_depth : u64 = 0
+    saw_name := false
+    while cursor < source.len {
+        token := next_token(source, cursor)
+        if token.0 == 0 || token.0 == 255 { break }
+        if paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 {
+            if token.0 == 174 || token.0 == 43 || token.0 == 45 || token.0 == 47 || token.0 == 37 || token.0 == 128 || token.0 == 129 || token.0 == 130 || token.0 == 131 || token.0 == 132 || token.0 == 133 || token.0 == 44 || token.0 == 41 || token.0 == 93 { break }
+            if token.0 == 42 && saw_name { break }
+        }
+        cursor = token.2
+        if token.0 == 1 || token.0 == 4 || token.0 == 5 { saw_name = true }
+        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
+            if token.0 == 41 {
+                if paren_depth == 0 { return start }
+                paren_depth = paren_depth - 1
+            } else {
+                if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
+                    if token.0 == 93 {
+                        if bracket_depth == 0 { return start }
+                        bracket_depth = bracket_depth - 1
+                    } else {
+                        if token.0 == 60 { angle_depth = angle_depth + 1 } else {
+                            if token.0 == 62 && angle_depth > 0 { angle_depth = angle_depth - 1 }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if paren_depth != 0 || bracket_depth != 0 || angle_depth != 0 { return start }
+    cursor
 }
 
 allocate_expr :: fn (storage : *ExpressionArena, kind : u64, start : u64, end : u64, left : *ExprNode, right : *ExprNode) *ExprNode {

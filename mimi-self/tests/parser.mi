@@ -190,6 +190,16 @@ main :: fn () i32 {
     if lexer.expression_is_null(pointer_cast) || pointer_cast.kind != 293 || pointer_cast.right.kind != 271 { return 275 }
     grouped_cast := lexer.parse_expression("(left + right) as i64", &fresh_storage)
     if lexer.expression_is_null(grouped_cast) || grouped_cast.kind != 293 || grouped_cast.left.kind != 43 { return 276 }
+    cast_before_binary := lexer.parse_expression("left as i32 + right", &fresh_storage)
+    if lexer.expression_is_null(cast_before_binary) || cast_before_binary.kind != 43 || cast_before_binary.left.kind != 293 || cast_before_binary.right.kind != 1 { return 282 }
+    cast_after_binary := lexer.parse_expression("left + right as i32", &fresh_storage)
+    if lexer.expression_is_null(cast_after_binary) || cast_after_binary.kind != 43 || cast_after_binary.left.kind != 1 || cast_after_binary.right.kind != 293 { return 283 }
+    pointer_cast_before_binary := lexer.parse_expression("address as *u8 + offset", &fresh_storage)
+    if lexer.expression_is_null(pointer_cast_before_binary) || pointer_cast_before_binary.kind != 43 || pointer_cast_before_binary.left.kind != 293 || pointer_cast_before_binary.left.right.kind != 271 { return 284 }
+    generic_cast_before_binary := lexer.parse_expression("value as Pair<i32> + offset", &fresh_storage)
+    if lexer.expression_is_null(generic_cast_before_binary) || generic_cast_before_binary.kind != 43 || generic_cast_before_binary.left.kind != 293 || generic_cast_before_binary.left.right.kind != 278 { return 285 }
+    tuple_cast_before_binary := lexer.parse_expression("value as (i32, u8) + offset", &fresh_storage)
+    if lexer.expression_is_null(tuple_cast_before_binary) || tuple_cast_before_binary.kind != 43 || tuple_cast_before_binary.left.kind != 293 || tuple_cast_before_binary.left.right.kind != 275 { return 286 }
     malformed_cast := lexer.parse_expression("value as", &fresh_storage)
     if !lexer.expression_is_null(malformed_cast) { return 277 }
     malformed_struct_literal := lexer.parse_expression("Point { x }", &fresh_storage)

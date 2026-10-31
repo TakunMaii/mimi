@@ -79,7 +79,7 @@ two consecutive stages.
 - [x] Extend tuple literal parsing to arbitrary expressions and parse tuple
   types and destructuring bindings.
 - [x] Parse `value as Type` casts for scalar, pointer, and grouped values.
-- [ ] Match cast precedence inside unparenthesized binary expressions.
+- [x] Match cast precedence inside unparenthesized binary expressions.
 - [x] Parse simple-name struct literal fields and nested values.
 - [x] Parse generic struct literal type applications.
 - [x] Validate tuple destructuring initializer arity when it is a tuple literal.
@@ -133,6 +133,8 @@ assignment and both expression/block forms of `defer` are parsed as statement
 nodes; deferred block contents are not yet recursively parsed. Atomic tuple
 destructuring is represented by a dedicated name-list/value node; tuple literal
 initializer arity is checked, while element types require semantic analysis.
+Scalar, pointer, generic, and tuple casts bind to the preceding operand in
+unparenthesized binary expressions.
 Generic declarations and
 parameter validation, statement blocks, and remaining control-flow
 statements remain open. `if` statements and expressions retain conditions and
