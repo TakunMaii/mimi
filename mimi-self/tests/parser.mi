@@ -116,6 +116,16 @@ main :: fn () i32 {
     if if_expression.end != 28 { return 219 }
     else_if_expression := lexer.parse_if_expression("if first { one } else if second { two } else { three }", &storage)
     if lexer.expression_is_null(else_if_expression) || else_if_expression.right.right.kind != 288 { return 225 }
+    match_source := "match choice { some(value) => value, none => 0, }"
+    match_node := lexer.parse_match_expression(match_source, &storage)
+    if lexer.match_node_is_null(match_node) || match_node.value.kind != 1 || match_node.arm_count != 2 { return 231 }
+    if match_node.arms.variant_start != 15 || match_node.arms.binding_start != 20 || match_node.arms.value.kind != 1 { return 232 }
+    if lexer.expression_is_null(match_node.arms.next) || match_node.arms.next.variant_start != 36 || match_node.arms.next.value.kind != 2 { return 233 }
+    if match_node.end != match_source.len { return 234 }
+    empty_match := lexer.parse_match_expression("match value {}", &storage)
+    if !lexer.match_node_is_null(empty_match) { return 235 }
+    missing_match_arrow := lexer.parse_match_expression("match value { some(x) x }", &storage)
+    if !lexer.match_node_is_null(missing_match_arrow) { return 236 }
     while_statement := lexer.parse_loop_statement("while ready { work() }", &storage)
     if lexer.loop_node_is_null(while_statement) || while_statement.kind != 286 || while_statement.condition.kind != 1 { return 209 }
     if while_statement.body.start != 12 || while_statement.end != 24 { return 210 }

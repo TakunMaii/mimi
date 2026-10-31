@@ -707,6 +707,25 @@ pub ForNode :: struct {
     body : *BlockNode,
 }
 
+pub MatchArmNode :: struct {
+    start : u64,
+    end : u64,
+    variant_start : u64,
+    variant_end : u64,
+    binding_start : u64,
+    binding_end : u64,
+    value : *ExprNode,
+    next : *MatchArmNode,
+}
+
+pub MatchNode :: struct {
+    start : u64,
+    end : u64,
+    value : *ExprNode,
+    arm_count : u64,
+    arms : *MatchArmNode,
+}
+
 pub FunctionHeader :: struct {
     start : u64,
     end : u64,
@@ -1339,6 +1358,164 @@ pub parse_for_statement :: fn (source : []u8, storage : *ExpressionArena) *ForNo
     node.range_start = range_start
     node.range_end = range_end
     node.body = body
+    node
+}
+
+pub match_node_is_null :: fn (node : *MatchNode) bool {
+    node == (mimi_buffer_empty() as *MatchNode)
+}
+
+pub parse_match_expression :: fn (source : []u8, storage : *ExpressionArena) *MatchNode {
+    keyword := next_token(source, 0)
+    if keyword.0 != 162 { return mimi_buffer_empty() as *MatchNode }
+    cursor := keyword.2
+    paren_depth : u64 = 0
+    bracket_depth : u64 = 0
+    opening_start := source.len
+    opening_end := source.len
+    found_open := false
+    while cursor < source.len && !found_open {
+        token := next_token(source, cursor)
+        if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *MatchNode }
+        cursor = token.2
+        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
+            if token.0 == 41 {
+                if paren_depth == 0 { return mimi_buffer_empty() as *MatchNode }
+                paren_depth = paren_depth - 1
+            } else {
+                if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
+                    if token.0 == 93 {
+                        if bracket_depth == 0 { return mimi_buffer_empty() as *MatchNode }
+                        bracket_depth = bracket_depth - 1
+                    } else {
+                        if token.0 == 123 && paren_depth == 0 && bracket_depth == 0 {
+                            opening_start = token.1
+                            opening_end = token.2
+                            found_open = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !found_open || opening_start <= keyword.2 { return mimi_buffer_empty() as *MatchNode }
+    match_value := parse_expression(source[keyword.2:opening_start], storage)
+    if expression_is_null(match_value) { return mimi_buffer_empty() as *MatchNode }
+    match_value.start = match_value.start + keyword.2
+    match_value.end = match_value.end + keyword.2
+    cursor = opening_end
+    arm_count : u64 = 0
+    first : *MatchArmNode = mimi_buffer_empty() as *MatchArmNode
+    last : *MatchArmNode = mimi_buffer_empty() as *MatchArmNode
+    close_end := source.len
+    while cursor < source.len {
+        if next_token(source, cursor).0 == 125 {
+            close := next_token(source, cursor)
+            if arm_count == 0 || next_token(source, close.2).0 != 0 { return mimi_buffer_empty() as *MatchNode }
+            close_end = close.2
+            break
+        }
+        arm_start := cursor
+        segment_end := source.len
+        local_paren : u64 = 0
+        local_bracket : u64 = 0
+        local_brace : u64 = 0
+        found_separator := false
+        while cursor < source.len && !found_separator {
+            token := next_token(source, cursor)
+            if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *MatchNode }
+            cursor = token.2
+            if token.0 == 40 { local_paren = local_paren + 1 } else {
+                if token.0 == 41 {
+                    if local_paren == 0 { return mimi_buffer_empty() as *MatchNode }
+                    local_paren = local_paren - 1
+                } else {
+                    if token.0 == 91 { local_bracket = local_bracket + 1 } else {
+                        if token.0 == 93 {
+                            if local_bracket == 0 { return mimi_buffer_empty() as *MatchNode }
+                            local_bracket = local_bracket - 1
+                        } else {
+                            if token.0 == 123 { local_brace = local_brace + 1 } else {
+                                if token.0 == 125 {
+                                    if local_brace > 0 { local_brace = local_brace - 1 } else {
+                                        if local_paren == 0 && local_bracket == 0 {
+                                            segment_end = token.1
+                                            close_end = token.2
+                                            found_separator = true
+                                        }
+                                    }
+                                } else {
+                                    if token.0 == 44 && local_paren == 0 && local_bracket == 0 && local_brace == 0 {
+                                        segment_end = token.1
+                                        found_separator = true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !found_separator || local_paren != 0 || local_bracket != 0 || local_brace != 0 { return mimi_buffer_empty() as *MatchNode }
+        arrow_start := segment_end
+        scan := arm_start
+        while scan < segment_end && arrow_start == segment_end {
+            token := next_token(source, scan)
+            if token.0 == 134 {
+                arrow_start = token.1
+                scan = token.2
+            } else { scan = token.2 }
+        }
+        if arrow_start == segment_end { return mimi_buffer_empty() as *MatchNode }
+        pattern := source[arm_start:arrow_start]
+        variant := next_token(pattern, 0)
+        if variant.0 != 1 { return mimi_buffer_empty() as *MatchNode }
+        after_variant := next_token(pattern, variant.2)
+        binding_start : u64 = 0
+        binding_end : u64 = 0
+        if after_variant.0 == 40 {
+            binding := next_token(pattern, after_variant.2)
+            binding_close := next_token(pattern, binding.2)
+            if binding.0 != 1 || binding_close.0 != 41 || next_token(pattern, binding_close.2).0 != 0 { return mimi_buffer_empty() as *MatchNode }
+            binding_start = binding.1 + arm_start
+            binding_end = binding.2 + arm_start
+        } else {
+            if after_variant.0 != 0 { return mimi_buffer_empty() as *MatchNode }
+        }
+        value_start := scan
+        arm_value := parse_expression(source[value_start:segment_end], storage)
+        if expression_is_null(arm_value) { return mimi_buffer_empty() as *MatchNode }
+        arm_value.start = arm_value.start + value_start
+        arm_value.end = arm_value.end + value_start
+        if mimi_arena_allocate(storage, 56, 8) == 0 { return mimi_buffer_empty() as *MatchNode }
+        arm := storage.last as *MatchArmNode
+        arm.start = arm_start
+        arm.end = segment_end
+        arm.variant_start = variant.1 + arm_start
+        arm.variant_end = variant.2 + arm_start
+        arm.binding_start = binding_start
+        arm.binding_end = binding_end
+        arm.value = arm_value
+        arm.next = mimi_buffer_empty() as *MatchArmNode
+        if last == (mimi_buffer_empty() as *MatchArmNode) { first = arm } else { last.next = arm }
+        last = arm
+        arm_count = arm_count + 1
+        separator := next_token(source, segment_end)
+        if separator.0 == 125 {
+            close_end = separator.2
+            break
+        }
+        if separator.0 != 44 { return mimi_buffer_empty() as *MatchNode }
+        cursor = separator.2
+    }
+    if close_end == source.len || next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *MatchNode }
+    if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *MatchNode }
+    node := storage.last as *MatchNode
+    node.start = keyword.1
+    node.end = close_end
+    node.value = match_value
+    node.arm_count = arm_count
+    node.arms = first
     node
 }
 

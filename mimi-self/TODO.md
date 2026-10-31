@@ -67,6 +67,7 @@ two consecutive stages.
 - [x] Parse `while`, `loop`, and `do-while` condition/body spans.
 - [x] Parse collection and integer-range `for` headers with body spans.
 - [x] Parse plain `if/else` expressions into expression nodes.
+- [x] Parse match values, variant arms, optional bindings, and result spans.
 - [x] Parse tuple destructuring names with atomic tuple literal initializers.
 - [x] Build function definition nodes with balanced block source spans.
 - [ ] Validate generic function type parameters and parse statement blocks.
@@ -118,7 +119,9 @@ Atomic tuple destructuring is represented by a dedicated name-list/value node.
 Generic declarations and parameter validation, general tuple expressions and
 destructuring type checks, statement blocks, and remaining control-flow
 statements remain open. `if` statements and expressions retain conditions and
-then/else-if/else branch spans; block statement composition is not implemented.
+then/else-if/else branch spans. Match nodes preserve the scrutinee and variant
+arm/binding/result spans. Block statement composition, enum exhaustiveness,
+and semantic validation are not implemented.
 While/loop/do-while and collection/range for loops retain their header and
 body spans. Name
 resolution and type checking remain open. The parser currently lives alongside
