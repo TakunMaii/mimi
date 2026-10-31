@@ -2024,6 +2024,11 @@ pub parse_match_expression :: fn (source : []u8, storage : *ExpressionArena) *Ma
         pattern := source[arm_start:arrow_start]
         variant := next_token(pattern, 0)
         if variant.0 != 1 { return mimi_buffer_empty() as *MatchNode }
+        existing_arm := first
+        while existing_arm != (mimi_buffer_empty() as *MatchArmNode) {
+            if source_names_equal(source, existing_arm.variant_start, existing_arm.variant_end, variant.1 + arm_start, variant.2 + arm_start) { return mimi_buffer_empty() as *MatchNode }
+            existing_arm = existing_arm.next
+        }
         after_variant := next_token(pattern, variant.2)
         binding_start : u64 = 0
         binding_end : u64 = 0

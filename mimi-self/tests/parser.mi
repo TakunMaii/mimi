@@ -170,6 +170,8 @@ main :: fn () i32 {
     if match_node.end != match_source.len { return 234 }
     empty_match := lexer.parse_match_expression("match value {}", &storage)
     if !lexer.match_node_is_null(empty_match) { return 235 }
+    duplicate_match_arm := lexer.parse_match_expression("match value { some(x) => x, some(y) => y, }", &storage)
+    if !lexer.match_node_is_null(duplicate_match_arm) { return 317 }
     missing_match_arrow := lexer.parse_match_expression("match value { some(x) x }", &storage)
     if !lexer.match_node_is_null(missing_match_arrow) { return 236 }
     generic_parameters := lexer.parse_generic_parameters("<T, U>", &storage)
