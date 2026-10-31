@@ -739,6 +739,19 @@ pub IfLetNode :: struct {
     else_branch : *BlockNode,
 }
 
+pub GenericParameterNode :: struct {
+    start : u64,
+    end : u64,
+    next : *GenericParameterNode,
+}
+
+pub GenericParameterList :: struct {
+    start : u64,
+    end : u64,
+    count : u64,
+    first : *GenericParameterNode,
+}
+
 pub FunctionHeader :: struct {
     start : u64,
     end : u64,
@@ -1631,6 +1644,58 @@ pub parse_match_expression :: fn (source : []u8, storage : *ExpressionArena) *Ma
     node.arm_count = arm_count
     node.arms = first
     node
+}
+
+pub generic_parameter_list_is_null :: fn (parameters : *GenericParameterList) bool {
+    parameters == (mimi_buffer_empty() as *GenericParameterList)
+}
+
+pub parse_generic_parameters :: fn (source : []u8, storage : *ExpressionArena) *GenericParameterList {
+    opening := next_token(source, 0)
+    if opening.0 != 60 { return mimi_buffer_empty() as *GenericParameterList }
+    cursor := opening.2
+    first : *GenericParameterNode = mimi_buffer_empty() as *GenericParameterNode
+    last : *GenericParameterNode = mimi_buffer_empty() as *GenericParameterNode
+    count : u64 = 0
+    while true {
+        name := next_token(source, cursor)
+        if name.0 != 1 { return mimi_buffer_empty() as *GenericParameterList }
+        current := first
+        while current != (mimi_buffer_empty() as *GenericParameterNode) {
+            if current.end - current.start == name.2 - name.1 {
+                duplicate := true
+                index : u64 = 0
+                while index < name.2 - name.1 && duplicate {
+                    if source[current.start + index] != source[name.1 + index] { duplicate = false }
+                    index = index + 1
+                }
+                if duplicate { return mimi_buffer_empty() as *GenericParameterList }
+            }
+            current = current.next
+        }
+        if mimi_arena_allocate(storage, 24, 8) == 0 { return mimi_buffer_empty() as *GenericParameterList }
+        item := storage.last as *GenericParameterNode
+        item.start = name.1
+        item.end = name.2
+        item.next = mimi_buffer_empty() as *GenericParameterNode
+        if last == (mimi_buffer_empty() as *GenericParameterNode) { first = item } else { last.next = item }
+        last = item
+        count = count + 1
+        separator := next_token(source, name.2)
+        if separator.0 == 62 {
+            if next_token(source, separator.2).0 != 0 { return mimi_buffer_empty() as *GenericParameterList }
+            if mimi_arena_allocate(storage, 32, 8) == 0 { return mimi_buffer_empty() as *GenericParameterList }
+            result := storage.last as *GenericParameterList
+            result.start = opening.1
+            result.end = separator.2
+            result.count = count
+            result.first = first
+            return result
+        }
+        if separator.0 != 44 { return mimi_buffer_empty() as *GenericParameterList }
+        cursor = separator.2
+    }
+    mimi_buffer_empty() as *GenericParameterList
 }
 
 pub function_node_is_null :: fn (function : *FunctionNode) bool {
