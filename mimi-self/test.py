@@ -183,6 +183,17 @@ main :: fn () i32 {{
     if !path.file_size({file_text}, &size) || size != 3 {{ return 8 }}
     if path.file_size({missing_text}, &size) {{ return 9 }}
     if path.exists([{nul_path}]) {{ return 10 }}
+    joined := bytes.init()
+    if !path.join("folder", "file", &joined) {{ return 11 }}
+    if joined.len != 11 || joined.data[6] != 47 || joined.data[10] != 101 {{ return 12 }}
+    bytes.release(&joined)
+    joined_slash := bytes.init()
+    if !path.join("folder/", "file", &joined_slash) {{ return 13 }}
+    if joined_slash.len != 11 || joined_slash.data[6] != 47 || joined_slash.data[7] != 102 {{ return 14 }}
+    bytes.release(&joined_slash)
+    joined_empty := bytes.init()
+    if !path.join("folder", "", &joined_empty) || joined_empty.len != 7 || joined_empty.data[6] != 47 {{ return 15 }}
+    bytes.release(&joined_empty)
     0
 }}
 ''',
