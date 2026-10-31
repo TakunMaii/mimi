@@ -16,6 +16,17 @@ When `--compiler` is set, the suite also compares accepted/rejected smoke
 cases and their first diagnostic against the Rust stage0 compiler. Pass
 `--reference-compiler /path/to/stage0` to select a different reference binary.
 
+Once a self-hosted compiler source is available, build and test both bootstrap
+stages with:
+
+```sh
+python3 mimi-self/bootstrap.py mimi-self/src/compiler.mi --output-dir /tmp/mimi-bootstrap
+```
+
+The script builds stage1 with stage0, builds stage2 with stage1, runs the test
+suite under each stage, and reports each compiler artifact's size and SHA-256
+for reproducibility comparisons.
+
 The current milestone is the self-hosted lexer and an arena-backed expression
 parser for grouped unary/binary expressions, member/index/slice access, and
 nested calls, plus named/pointer/slice/fixed-array type syntax. The expression

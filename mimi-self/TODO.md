@@ -16,8 +16,8 @@ two consecutive stages.
   stdout/stderr, and temporary project setup.
 - [x] Make the Python suite selectable by compiler executable so the same
   tests can run against stage0, stage1, and stage2.
-- [ ] Establish stage0/stage1/stage2 build commands and artifact comparison
-  after the self-hosted compiler can compile programs.
+- [ ] Run the stage0/stage1/stage2 bootstrap script against the self-hosted
+  compiler source and review the generated artifact hashes.
 
 ## T1: Language support needed by a compiler
 
