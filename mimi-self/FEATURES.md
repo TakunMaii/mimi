@@ -13,7 +13,7 @@ the Python suite covers it through the self-hosted compiler.
 | Identifiers, numbers, strings, punctuation | Supported | Slice and raw-buffer token APIs with token spans, escape decoding, decimal/member-number distinction; valid UTF-8 and common Unicode letters, full identifier properties pending | `tests/lexer.mi`, module graph integration |
 | Comments and lexical errors | Supported | Line/block comments, categorized errors, and one result with exact token/error byte spans | `tests/lexer.mi` |
 | Source spans and diagnostics | Supported | Span records and source line/caret rendering | Python source model integration test |
-| Declarations, functions, modules | Supported | Not implemented | Pending |
+| Declarations, functions, modules | Supported | Variable/constant binding headers and type/initializer source spans parsed for `:=`, `: Type =`, and `::`; declaration AST and function declarations pending | `tests/parser.mi` |
 | Scalar, pointer, array, slice, tuple, function types | Supported | Named, pointer, slice, and fixed-array type syntax parsed into arena nodes; tuple/function/generic types pending | `tests/parser.mi` |
 | Expressions, casts, calls, member/index/slice access | Supported | Number/string/boolean atoms, grouped unary/binary expressions with precedence, negation, logical not, address/dereference, member access, indexing, slices, and nested calls; casts pending | `tests/parser.mi` |
 | If/match, loops, ranges, break/continue, defer | Supported | Not implemented | Pending |

@@ -569,6 +569,18 @@ pub ExprNode :: struct {
     right : *ExprNode,
 }
 
+pub BindingHeader :: struct {
+    start : u64,
+    end : u64,
+    name_start : u64,
+    name_end : u64,
+    binding_kind : u64,
+    type_start : u64,
+    type_end : u64,
+    value_start : u64,
+    value_end : u64,
+}
+
 ExprOperator :: struct {
     kind : u64,
     start : u64,
@@ -595,6 +607,67 @@ pub expression_arena_release :: fn (storage : *ExpressionArena) void {
 
 pub expression_is_null :: fn (node : *ExprNode) bool {
     node == (mimi_buffer_empty() as *ExprNode)
+}
+
+pub binding_header_is_null :: fn (header : *BindingHeader) bool {
+    header == (mimi_buffer_empty() as *BindingHeader)
+}
+
+pub parse_binding_header :: fn (source : []u8, storage : *ExpressionArena) *BindingHeader {
+    name := next_token(source, 0)
+    if name.0 != 1 { return mimi_buffer_empty() as *BindingHeader }
+    colon := next_token(source, name.2)
+    if colon.0 != 58 { return mimi_buffer_empty() as *BindingHeader }
+    marker := next_token(source, colon.2)
+    binding_kind : u64 = 0
+    type_start : u64 = 0
+    type_end : u64 = 0
+    value_start : u64 = marker.2
+    if marker.0 == 58 {
+        binding_kind = 2
+    } else {
+        if marker.0 == 61 {
+            binding_kind = 0
+        } else {
+            binding_kind = 1
+            type_start = marker.1
+            cursor := marker.1
+            nesting : u64 = 0
+            found_equal := false
+            while cursor < source.len && !found_equal {
+                token := next_token(source, cursor)
+                if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *BindingHeader }
+                cursor = token.2
+                if token.0 == 91 { nesting = nesting + 1 } else {
+                    if token.0 == 93 && nesting > 0 { nesting = nesting - 1 } else {
+                        if token.0 == 61 && nesting == 0 {
+                            type_end = token.1
+                            value_start = token.2
+                            found_equal = true
+                        }
+                    }
+                }
+            }
+            if !found_equal || nesting != 0 { return mimi_buffer_empty() as *BindingHeader }
+            parsed_type := parse_type(source[type_start:type_end], storage)
+            if expression_is_null(parsed_type) { return mimi_buffer_empty() as *BindingHeader }
+        }
+    }
+    if next_token(source, value_start).0 == 0 || next_token(source, value_start).0 == 255 {
+        return mimi_buffer_empty() as *BindingHeader
+    }
+    if mimi_arena_allocate(storage, 72, 8) == 0 { return mimi_buffer_empty() as *BindingHeader }
+    header := storage.last as *BindingHeader
+    header.start = name.1
+    header.end = source.len
+    header.name_start = name.1
+    header.name_end = name.2
+    header.binding_kind = binding_kind
+    header.type_start = type_start
+    header.type_end = type_end
+    header.value_start = value_start
+    header.value_end = source.len
+    header
 }
 
 pub parse_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {

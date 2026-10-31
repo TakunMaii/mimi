@@ -16,6 +16,19 @@ main :: fn () i32 {
     if !lexer.expression_is_null(invalid_type) { return 53 }
     trailing_type := lexer.parse_type("i32 extra", &storage)
     if !lexer.expression_is_null(trailing_type) { return 54 }
+    inferred_header := lexer.parse_binding_header("count := 1 + 2", &storage)
+    if lexer.binding_header_is_null(inferred_header) || inferred_header.binding_kind != 0 { return 89 }
+    if inferred_header.name_start != 0 || inferred_header.name_end != 5 || inferred_header.value_end != 14 { return 90 }
+    typed_header := lexer.parse_binding_header("items : []*u8 = make()", &storage)
+    if lexer.binding_header_is_null(typed_header) { return 91 }
+    if typed_header.binding_kind != 1 { return 95 }
+    if typed_header.type_start != 8 { return 96 }
+    if typed_header.type_end != 14 { return typed_header.type_end as i32 }
+    if typed_header.value_start != 15 { return typed_header.value_start as i32 }
+    constant_header := lexer.parse_binding_header("answer :: 42", &storage)
+    if lexer.binding_header_is_null(constant_header) || constant_header.binding_kind != 2 || constant_header.value_start != 9 { return 93 }
+    missing_initializer := lexer.parse_binding_header("count :=", &storage)
+    if !lexer.binding_header_is_null(missing_initializer) { return 94 }
     atom := lexer.parse_expression("1", &storage)
     if lexer.expression_is_null(atom) { return 1 }
     if atom.kind != 2 { return atom.kind as i32 }
