@@ -283,15 +283,13 @@ int mimi_path_join(const uint8_t *base, uint64_t base_length, const uint8_t *par
 }
 
 int mimi_path_canonicalize(const uint8_t *path, uint64_t path_length, MimiByteBuffer *output) {
-    if (path == NULL || output == NULL || output->released || path_length >= SIZE_MAX) {
+    if (output == NULL || output->released) {
         return 0;
     }
-    char *input = malloc((size_t)path_length + 1);
+    char *input = mimi_path_copy(path, path_length);
     if (input == NULL) {
         return 0;
     }
-    memcpy(input, path, (size_t)path_length);
-    input[path_length] = '\0';
     char canonical[PATH_MAX];
     if (realpath(input, canonical) == NULL) {
         free(input);

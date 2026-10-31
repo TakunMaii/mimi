@@ -222,6 +222,9 @@ main :: fn () i32 {{
     if !path.file_size({file_text}, &size) || size != 3 {{ return 8 }}
     if path.file_size({missing_text}, &size) {{ return 9 }}
     if path.exists([{nul_path}]) {{ return 10 }}
+    canonical := bytes.init()
+    if path.canonicalize([{nul_path}], &canonical) {{ return 16 }}
+    bytes.release(&canonical)
     joined := bytes.init()
     if !path.join("folder", "file", &joined) {{ return 11 }}
     if joined.len != 11 || joined.data[6] != 47 || joined.data[10] != 101 {{ return 12 }}
