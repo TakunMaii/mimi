@@ -2122,6 +2122,16 @@ pub enum_node_is_null :: fn (node : *EnumNode) bool {
     node == (mimi_buffer_empty() as *EnumNode)
 }
 
+source_names_equal :: fn (source : []u8, left_start : u64, left_end : u64, right_start : u64, right_end : u64) bool {
+    if left_end - left_start != right_end - right_start { return false }
+    index : u64 = 0
+    while index < left_end - left_start {
+        if source[left_start + index] != source[right_start + index] { return false }
+        index = index + 1
+    }
+    true
+}
+
 pub parse_enum_declaration :: fn (source : []u8, storage : *ExpressionArena) *EnumNode {
     keyword := next_token(source, 0)
     if keyword.0 != 162 { return mimi_buffer_empty() as *EnumNode }
@@ -2194,6 +2204,11 @@ pub parse_enum_declaration :: fn (source : []u8, storage : *ExpressionArena) *En
         variant_source := source[segment_start:segment_end]
         name := next_token(variant_source, 0)
         if name.0 != 1 { return mimi_buffer_empty() as *EnumNode }
+        existing := first
+        while existing != (mimi_buffer_empty() as *EnumVariantNode) {
+            if source_names_equal(source, existing.name_start, existing.name_end, name.1 + segment_start, name.2 + segment_start) { return mimi_buffer_empty() as *EnumNode }
+            existing = existing.next
+        }
         payload : *ExprNode = mimi_buffer_empty() as *ExprNode
         after_name := next_token(variant_source, name.2)
         if after_name.0 == 40 {
@@ -2338,6 +2353,11 @@ pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *
         name := next_token(field_source, 0)
         colon := next_token(field_source, name.2)
         if name.0 != 1 || colon.0 != 58 { return mimi_buffer_empty() as *StructNode }
+        existing := first
+        while existing != (mimi_buffer_empty() as *StructFieldNode) {
+            if source_names_equal(source, existing.name_start, existing.name_end, name.1 + segment_start, name.2 + segment_start) { return mimi_buffer_empty() as *StructNode }
+            existing = existing.next
+        }
         scan := colon.2
         local_paren : u64 = 0
         local_bracket : u64 = 0

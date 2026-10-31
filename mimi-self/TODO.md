@@ -72,7 +72,8 @@ two consecutive stages.
 - [x] Parse enum `if let` variant tests with optional bindings.
 - [x] Parse generic parameter lists and reject duplicate names.
 - [x] Parse enum variants and optional payload types into declaration nodes.
-- [x] Parse struct fields, defaults, mutability, and generic parameters.
+- [x] Parse struct fields, defaults, mutability, and generic parameters; reject
+  duplicate struct fields and enum variants.
 - [x] Parse tuple destructuring names with atomic tuple literal initializers.
 - [x] Build function definition nodes with balanced block source spans.
 - [x] Reject duplicate function parameter names.
