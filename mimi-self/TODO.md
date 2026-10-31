@@ -45,7 +45,7 @@ two consecutive stages.
   escapes, and unterminated strings/comments.
 - [x] Expose token kind, source span, and lexical error code in one result.
 - [x] Reject Unicode symbol codepoints such as emoji at identifier start.
-- [ ] Match Rust's complete Unicode Alphabetic/Alphanumeric identifier
+- [x] Match Rust's complete Unicode Alphabetic/Alphanumeric identifier
   properties, including combining marks and all scripts.
 - [x] Port the lexer, including UTF-8 identifiers, exact spans, escape
   validation, and useful lexical errors to the self-hosted compiler API.

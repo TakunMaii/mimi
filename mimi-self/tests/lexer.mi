@@ -44,7 +44,13 @@ main :: fn () i32 {
     unicode_name := lexer.next_token("变量", 0)
     if unicode_name.0 != 1 || unicode_name.1 != 0 || unicode_name.2 != 6 { return 43 }
     combining_name := lexer.next_token("á", 0)
-    if combining_name.0 != 1 || combining_name.2 != 3 { return 69 }
+    if combining_name.0 != 255 || combining_name.1 != 1 { return 69 }
+    mathematical_symbol := lexer.next_token("∀", 0)
+    if mathematical_symbol.0 != 255 || mathematical_symbol.1 != 0 { return 71 }
+    supplementary_letter := lexer.next_token("𐐀name", 0)
+    if supplementary_letter.0 != 1 || supplementary_letter.2 != 8 { return 72 }
+    unicode_numeric_continuation := lexer.next_token("value١", 0)
+    if unicode_numeric_continuation.0 != 1 || unicode_numeric_continuation.2 != 7 { return 73 }
     emoji_continuation := lexer.next_token("a😀", 0)
     if emoji_continuation.0 != 255 || emoji_continuation.1 != 1 { return 70 }
     escaped := lexer.next_token("\"a\\nb\"", 0)

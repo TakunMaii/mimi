@@ -391,62 +391,12 @@ utf8_width_raw :: fn (source : *u8, source_length : u64, index : u64) u8 {
 
 utf8_identifier_start_raw :: fn (source : *u8, index : u64, width : u8) bool {
     codepoint := utf8_codepoint_raw(source, index, width)
-    if codepoint >= 192 && codepoint <= 767 { return codepoint != 215 && codepoint != 247 }
-    if codepoint >= 880 && codepoint <= 1327 { return true }
-    if codepoint >= 1329 && codepoint <= 1416 { return true }
-    if codepoint >= 1488 && codepoint <= 1514 { return true }
-    if codepoint >= 1568 && codepoint <= 1610 { return true }
-    if codepoint >= 1646 && codepoint <= 1747 { return true }
-    if codepoint >= 2308 && codepoint <= 8191 { return true }
-    if codepoint >= 11264 && codepoint <= 11775 { return true }
-    if codepoint >= 12353 && codepoint <= 12543 { return true }
-    if codepoint >= 12549 && codepoint <= 12591 { return true }
-    if codepoint >= 13312 && codepoint <= 40959 { return true }
-    if codepoint >= 44032 && codepoint <= 55203 { return true }
-    if codepoint >= 63744 && codepoint <= 64255 { return true }
-    if codepoint >= 65536 && codepoint <= 126975 { return true }
-    false
+    return mimi_unicode_alphabetic(codepoint) != 0
 }
 
 utf8_identifier_continue_raw :: fn (source : *u8, index : u64, width : u8) bool {
     codepoint := utf8_codepoint_raw(source, index, width)
-    if utf8_identifier_start_raw(source, index, width) { return true }
-    if codepoint >= 768 && codepoint <= 879 { return true }
-    if codepoint >= 1155 && codepoint <= 1161 { return true }
-    if codepoint >= 1425 && codepoint <= 1469 { return true }
-    if codepoint >= 1552 && codepoint <= 1562 { return true }
-    if codepoint >= 1611 && codepoint <= 1631 { return true }
-    if codepoint >= 1750 && codepoint <= 1773 { return true }
-    if codepoint >= 2305 && codepoint <= 2307 { return true }
-    if codepoint >= 2364 && codepoint <= 2381 { return true }
-    if codepoint >= 768 && codepoint <= 879 { return true }
-    if codepoint >= 6832 && codepoint <= 6911 { return true }
-    if codepoint >= 7616 && codepoint <= 7679 { return true }
-    if codepoint >= 8400 && codepoint <= 8447 { return true }
-    if codepoint >= 65056 && codepoint <= 65071 { return true }
-    if codepoint >= 65024 && codepoint <= 65039 { return true }
-    if codepoint >= 1632 && codepoint <= 1641 { return true }
-    if codepoint >= 1776 && codepoint <= 1785 { return true }
-    if codepoint >= 1984 && codepoint <= 1993 { return true }
-    if codepoint >= 2406 && codepoint <= 2415 { return true }
-    if codepoint >= 2534 && codepoint <= 2543 { return true }
-    if codepoint >= 2662 && codepoint <= 2671 { return true }
-    if codepoint >= 2790 && codepoint <= 2799 { return true }
-    if codepoint >= 2918 && codepoint <= 2927 { return true }
-    if codepoint >= 3046 && codepoint <= 3055 { return true }
-    if codepoint >= 3174 && codepoint <= 3183 { return true }
-    if codepoint >= 3302 && codepoint <= 3311 { return true }
-    if codepoint >= 3430 && codepoint <= 3439 { return true }
-    if codepoint >= 3664 && codepoint <= 3673 { return true }
-    if codepoint >= 3792 && codepoint <= 3801 { return true }
-    if codepoint >= 3872 && codepoint <= 3881 { return true }
-    if codepoint >= 4160 && codepoint <= 4169 { return true }
-    if codepoint >= 4240 && codepoint <= 4249 { return true }
-    if codepoint >= 4969 && codepoint <= 4977 { return true }
-    if codepoint >= 6112 && codepoint <= 6121 { return true }
-    if codepoint >= 6160 && codepoint <= 6169 { return true }
-    if codepoint >= 65296 && codepoint <= 65305 { return true }
-    false
+    return mimi_unicode_alphanumeric(codepoint) != 0
 }
 
 utf8_codepoint_raw :: fn (source : *u8, index : u64, width : u8) u64 {
@@ -601,6 +551,8 @@ extern mimi_arena_empty : fn() *void
 extern mimi_arena_allocate : fn(arena : *ExpressionArena, size : u64, alignment : u64) i32
 extern mimi_arena_release : fn(arena : *ExpressionArena) void
 extern mimi_buffer_empty : fn() *void
+extern mimi_unicode_alphabetic : fn(value : u64) i32
+extern mimi_unicode_alphanumeric : fn(value : u64) i32
 
 pub ExpressionArena :: struct {
     head : *void,
