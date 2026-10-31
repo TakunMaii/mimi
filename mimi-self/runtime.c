@@ -137,6 +137,9 @@ void mimi_diagnostic_print(
 }
 
 static char *mimi_path_copy(const uint8_t *path, uint64_t length) {
+    if (length >= SIZE_MAX || (length != 0 && (path == NULL || memchr(path, 0, (size_t)length) != NULL))) {
+        return NULL;
+    }
     char *copy = malloc((size_t)length + 1);
     if (copy == NULL) {
         return NULL;

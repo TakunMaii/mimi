@@ -104,6 +104,7 @@ def test_path_api(compiler: Path) -> None:
         directory_text = mimi_quote(directory)
         file_text = mimi_quote(file_path)
         missing_text = mimi_quote(missing_path)
+        nul_path = ", ".join(str(byte) for byte in directory.as_posix().encode() + b"\x00ignored")
         source_path = Path(temporary) / "paths.mi"
         executable = Path(temporary) / "paths"
         module_path = SELF / "src" / "path.mi"
@@ -123,6 +124,7 @@ main :: fn () i32 {{
     size : u64 = 0
     if !path.file_size({file_text}, &size) || size != 3 {{ return 8 }}
     if path.file_size({missing_text}, &size) {{ return 9 }}
+    if path.exists([{nul_path}]) {{ return 10 }}
     0
 }}
 ''',
