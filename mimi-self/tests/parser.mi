@@ -90,6 +90,17 @@ main :: fn () i32 {
     if function_definition.parameters.data_type.kind != 270 || function_definition.return_type.kind != 270 { return 198 }
     if function_definition.body.start != 27 || function_definition.body.end != function_definition_source.len { return 199 }
     if function_definition.body.content_start != 28 || function_definition.body.content_end + 1 != function_definition.body.end { return 200 }
+    composed_block_source := "{ first := 1 first = first + 1 return first }"
+    composed_block := lexer.parse_statement_block(composed_block_source, 100, &storage)
+    if lexer.block_node_is_null(composed_block) || composed_block.statements.kind != 285 { return 288 }
+    if composed_block.statements.binding.name_start != 102 || composed_block.statements.binding.initializer.start != 111 { return 289 }
+    if composed_block.statements.next.kind != 284 || composed_block.statements.next.start != 112 { return 290 }
+    if composed_block.statements.next.next.kind != 280 || composed_block.statements.next.next.start != 134 { return 291 }
+    if composed_block.statements.next.next.value.start != 141 || composed_block.statements.next.next.end != 146 { return 292 }
+    empty_composed_block := lexer.parse_statement_block("{}", 0, &storage)
+    if lexer.block_node_is_null(empty_composed_block) || !lexer.statement_node_is_null(empty_composed_block.statements) { return 293 }
+    expression_composed_block := lexer.parse_statement_block("{ work() }", 0, &storage)
+    if lexer.block_node_is_null(expression_composed_block) || expression_composed_block.statements.kind != 303 || expression_composed_block.statements.value.kind != 263 { return 294 }
     unclosed_function_definition := lexer.parse_function_definition("work :: fn () i32 { return 1", &storage)
     if !lexer.function_node_is_null(unclosed_function_definition) { return 201 }
     if_statement_source := "if ready { left := 1 } else { right := 2 }"
