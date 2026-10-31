@@ -59,6 +59,8 @@ two consecutive stages.
 - [x] Parse bounded and open-ended slices using `:` and `..` separators.
 - [x] Build variable/constant declaration AST nodes from binding headers,
   parsed types, and initializer expressions.
+- [x] Parse `return`, `break`, and `continue` into source-aware statement
+  nodes.
 - [ ] Validate generic function type parameters and parse statement blocks.
 - [ ] Extend tuple literal parsing to arbitrary expressions and parse tuple
   types/destructuring.
@@ -100,9 +102,10 @@ fixed-array, nested tuple, nested function, and generic application type syntax
 is parsed. Binding headers and declaration AST nodes preserve names, optional
 types, initializers, and source spans. Function headers and named parameters
 have source-aware nodes; callback types are supported in parameter lists.
-Atomic tuple literals have a dedicated parser. Generic declarations and
-parameter validation, general tuple expressions and destructuring, statement
-blocks, control-flow statements, and type checking remain open. The parser
+Atomic tuple literals and return/break/continue statement nodes have dedicated
+parsers. Generic declarations and parameter validation, general tuple
+expressions and destructuring, statement blocks, remaining control-flow
+statements, and type checking remain open. The parser
 currently lives alongside the lexer because stage0 loses imported aliases
 inside imported module function bodies.
 

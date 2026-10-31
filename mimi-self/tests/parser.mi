@@ -241,6 +241,17 @@ main :: fn () i32 {
     if !lexer.expression_is_null(constant_declaration.data_type) || constant_declaration.initializer.start != 10 { return 146 }
     malformed_declaration := lexer.parse_binding_declaration("value := 1 +", &storage)
     if !lexer.binding_node_is_null(malformed_declaration) { return 147 }
+    return_value_statement := lexer.parse_transfer_statement("return 42", &storage)
+    if lexer.statement_node_is_null(return_value_statement) || return_value_statement.kind != 280 { return 176 }
+    if return_value_statement.value.kind != 2 || return_value_statement.value.start != 7 || return_value_statement.end != 9 { return 177 }
+    return_void_statement := lexer.parse_transfer_statement("return", &storage)
+    if lexer.statement_node_is_null(return_void_statement) || !lexer.expression_is_null(return_void_statement.value) { return 178 }
+    break_statement := lexer.parse_transfer_statement("break", &storage)
+    if lexer.statement_node_is_null(break_statement) || break_statement.kind != 281 || break_statement.end != 5 { return 179 }
+    continue_statement := lexer.parse_transfer_statement("continue", &storage)
+    if lexer.statement_node_is_null(continue_statement) || continue_statement.kind != 282 || continue_statement.end != 8 { return 180 }
+    invalid_break := lexer.parse_transfer_statement("break 1", &storage)
+    if !lexer.statement_node_is_null(invalid_break) { return 181 }
     lexer.expression_arena_release(&storage)
     0
 }

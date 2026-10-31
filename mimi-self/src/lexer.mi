@@ -639,6 +639,14 @@ pub BindingNode :: struct {
     initializer : *ExprNode,
 }
 
+pub StatementNode :: struct {
+    kind : u64,
+    start : u64,
+    end : u64,
+    value : *ExprNode,
+    next : *StatementNode,
+}
+
 pub FunctionHeader :: struct {
     start : u64,
     end : u64,
@@ -780,6 +788,39 @@ pub parse_binding_declaration :: fn (source : []u8, storage : *ExpressionArena) 
     binding.data_type = data_type
     binding.initializer = initializer
     binding
+}
+
+pub statement_node_is_null :: fn (statement : *StatementNode) bool {
+    statement == (mimi_buffer_empty() as *StatementNode)
+}
+
+pub parse_transfer_statement :: fn (source : []u8, storage : *ExpressionArena) *StatementNode {
+    keyword := next_token(source, 0)
+    kind : u64 = 0
+    value : *ExprNode = mimi_buffer_empty() as *ExprNode
+    if keyword.0 == 175 {
+        kind = 280
+        next := next_token(source, keyword.2)
+        if next.0 != 0 {
+            value = parse_expression(source[keyword.2:source.len], storage)
+            if expression_is_null(value) { return mimi_buffer_empty() as *StatementNode }
+            value.start = value.start + keyword.2
+            value.end = value.end + keyword.2
+        }
+    } else {
+        if keyword.0 == 176 { kind = 281 } else {
+            if keyword.0 == 177 { kind = 282 } else { return mimi_buffer_empty() as *StatementNode }
+        }
+        if next_token(source, keyword.2).0 != 0 { return mimi_buffer_empty() as *StatementNode }
+    }
+    if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+    statement := storage.last as *StatementNode
+    statement.kind = kind
+    statement.start = keyword.1
+    statement.end = source.len
+    statement.value = value
+    statement.next = mimi_buffer_empty() as *StatementNode
+    statement
 }
 
 pub function_header_is_null :: fn (header : *FunctionHeader) bool {
