@@ -93,6 +93,9 @@ def test_compiler_parity(reference: Path, candidate: Path) -> None:
         ("accepted-zero", "main :: fn () i32 { 0 }", 0, None),
         ("accepted-arithmetic", "main :: fn () i32 { value := 6 * 7 if value != 42 { return 1 } 0 }", 0, None),
         ("accepted-control", "main :: fn () i32 { value := 3 if value == 3 { return 0 } return 1 }", 0, None),
+        ("accepted-cast", "main :: fn () i32 { value := 41 as i32 value + 1 - 42 }", 0, None),
+        ("accepted-tuple-destructure", "main :: fn () i32 { first, second := (20, 22) first + second - 42 }", 0, None),
+        ("accepted-struct-method", "point :: struct { x : i32, get() :: fn (self : Self) i32 { self.x } } main :: fn () i32 { value := point { x = 42 } value.get() - 42 }", 0, None),
         ("parse-error", "main :: fn () i32 { 1 + }", 1, "error[parse]"),
         ("lex-error", "main :: fn () i32 { 1 | 2 }", 1, "error[lex]"),
         (

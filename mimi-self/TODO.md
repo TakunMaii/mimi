@@ -101,6 +101,8 @@ two consecutive stages.
   lexical, parse, and type errors against the Rust stage0 compiler.
 - [x] Use Python tests to compare accepted/rejected programs and diagnostics
   against the Rust compiler.
+- [x] Include casts, tuple destructuring, and struct methods in the differential
+  accepted-program suite.
 
 ## T3: Self-hosted code generation
 
