@@ -109,6 +109,8 @@ main :: fn () i32 {
     if control_composed_block.statements.if_statement.condition.start != 55 || control_composed_block.statements.if_statement.then_branch.start != 61 { return 296 }
     if control_composed_block.statements.if_statement.else_branch.start != 80 || control_composed_block.statements.next.kind != 280 { return 297 }
     if control_composed_block.statements.if_statement.then_branch.statements.kind != 280 || control_composed_block.statements.if_statement.else_branch.statements.kind != 280 { return 302 }
+    expression_after_control := lexer.parse_statement_block("{ if ready {} work() }", 0, &storage)
+    if lexer.block_node_is_null(expression_after_control) || expression_after_control.statements.kind != 304 || expression_after_control.statements.next.kind != 303 { return 314 }
     loop_composed_block := lexer.parse_statement_block("{ while ready { break } return 0 }", 20, &storage)
     if lexer.block_node_is_null(loop_composed_block) || loop_composed_block.statements.kind != 306 || loop_composed_block.statements.loop_statement.kind != 286 { return 298 }
     if loop_composed_block.statements.loop_statement.body.start != 36 || loop_composed_block.statements.next.kind != 280 { return 299 }
