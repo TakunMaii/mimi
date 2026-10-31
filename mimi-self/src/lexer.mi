@@ -2636,6 +2636,21 @@ pub parse_parameters :: fn (source : []u8, header : *FunctionHeader, storage : *
             if token.2 > header.parameters_end { segment_end = header.parameters_end }
             parameter := parse_parameter(source[segment_start:segment_end], segment_start, storage)
             if parameter == (mimi_buffer_empty() as *ParameterNode) { return parameter }
+            previous := first
+            duplicate := false
+            while previous != (mimi_buffer_empty() as *ParameterNode) && !duplicate {
+                if previous.name_end - previous.name_start == parameter.name_end - parameter.name_start {
+                    equal := true
+                    index : u64 = 0
+                    while index < parameter.name_end - parameter.name_start && equal {
+                        if source[previous.name_start + index] != source[parameter.name_start + index] { equal = false }
+                        index = index + 1
+                    }
+                    if equal { duplicate = true }
+                }
+                previous = previous.next
+            }
+            if duplicate { return mimi_buffer_empty() as *ParameterNode }
             if parameter_list_is_null(first) { first = parameter } else { last.next = parameter }
             last = parameter
             segment_start = token.2

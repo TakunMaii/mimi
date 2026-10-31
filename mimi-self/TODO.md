@@ -75,6 +75,7 @@ two consecutive stages.
 - [x] Parse struct fields, defaults, mutability, and generic parameters.
 - [x] Parse tuple destructuring names with atomic tuple literal initializers.
 - [x] Build function definition nodes with balanced block source spans.
+- [x] Reject duplicate function parameter names.
 - [ ] Validate generic function type parameters.
 - [x] Compose binding, tuple destructuring, assignment, transfer, defer, and
   expression statements into block statement lists.

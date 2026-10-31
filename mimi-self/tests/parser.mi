@@ -263,6 +263,10 @@ main :: fn () i32 {
     if lexer.parameter_list_is_null(parameters.next) || parameters.next.name_start != 21 || parameters.next.data_type.kind != 271 { return 113 }
     if parameters.next.data_type.start != 27 { return 116 }
     if parameters.next.data_type.end != 30 { return 114 }
+    duplicate_parameter_source := "work :: fn (value : i32, value : bool) {"
+    duplicate_parameter_header := lexer.parse_function_header(duplicate_parameter_source, &storage)
+    duplicate_parameters := lexer.parse_parameters(duplicate_parameter_source, duplicate_parameter_header, &storage)
+    if !lexer.parameter_list_is_null(duplicate_parameters) { return 311 }
     tuple_node := lexer.parse_tuple_literal("(left, 2, \"x\",)", &storage)
     if lexer.expression_is_null(tuple_node) { return 117 }
     if tuple_node.kind != 268 { return tuple_node.kind as i32 }
