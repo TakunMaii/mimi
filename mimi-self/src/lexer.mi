@@ -694,7 +694,7 @@ pub parse_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
                 if close.0 != 93 { return mimi_buffer_empty() as *ExprNode }
                 count_node := allocate_expr(storage, 2, next.1, next.2, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
                 if expression_is_null(count_node) { return count_node }
-                prefixes[prefix_count] = ExprOperator { kind = 273, start = token.1, base_count = 0, argument_count = count_node.start }
+                prefixes[prefix_count] = ExprOperator { kind = 273, start = token.1, base_count = count_node.start, argument_count = count_node.end }
                 prefix_count = prefix_count + 1
                 cursor = close.2
             }
@@ -717,7 +717,7 @@ pub parse_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
                     if next.0 != 2 { return mimi_buffer_empty() as *ExprNode }
                     close := next_token(source, next.2)
                     if close.0 != 93 { return mimi_buffer_empty() as *ExprNode }
-                    prefixes[prefix_count] = ExprOperator { kind = 273, start = token.1, base_count = 0, argument_count = next.1 }
+                    prefixes[prefix_count] = ExprOperator { kind = 273, start = token.1, base_count = next.1, argument_count = next.2 }
                     prefix_count = prefix_count + 1
                     cursor = close.2
                 }
@@ -734,7 +734,7 @@ pub parse_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
         prefix_count = prefix_count - 1
         prefix := prefixes[prefix_count]
         if prefix.kind == 273 {
-            count := allocate_expr(storage, 2, prefix.argument_count, prefix.argument_count, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+            count := allocate_expr(storage, 2, prefix.base_count, prefix.argument_count, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
             if expression_is_null(count) { return count }
             node = allocate_expr(storage, prefix.kind, prefix.start, node.end, node, count)
         } else {

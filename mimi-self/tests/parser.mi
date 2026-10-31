@@ -12,6 +12,7 @@ main :: fn () i32 {
     if lexer.expression_is_null(slice_type) || slice_type.kind != 272 || slice_type.left.kind != 272 || slice_type.left.left.kind != 270 { return 51 }
     array_type := lexer.parse_type("[12]*Item", &storage)
     if lexer.expression_is_null(array_type) || array_type.kind != 273 || array_type.left.kind != 271 || array_type.right.kind != 2 { return 52 }
+    if array_type.right.start != 1 || array_type.right.end != 3 { return 97 }
     invalid_type := lexer.parse_type("[]", &storage)
     if !lexer.expression_is_null(invalid_type) { return 53 }
     trailing_type := lexer.parse_type("i32 extra", &storage)
