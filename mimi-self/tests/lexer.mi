@@ -1,0 +1,22 @@
+lexer :: @import("../src/lexer.mi")
+
+main :: fn () i32 {
+    first := lexer.next_token("abc + 12", 0)
+    if first.0 != 1 || first.1 != 0 || first.2 != 3 { return 11 }
+    second := lexer.next_token("abc + 12", first.2)
+    if second.0 != 4 || second.1 != 4 || second.2 != 5 { return 12 }
+    third := lexer.next_token("abc + 12", second.2)
+    if third.0 != 2 || third.1 != 6 || third.2 != 8 { return 13 }
+    if lexer.next_token("abc + 12", third.2).0 != 0 { return 14 }
+    if lexer.token_count("") != 0 { return 1 }
+    if lexer.token_count("alpha_2 := 123") != 4 { return 2 }
+    if lexer.token_count("f :: fn (x : i32) bool { x >= 1 && x != 2 }") != 19 { return 3 }
+    if lexer.token_count("items[1..4] // ignored tokens\n") != 6 { return 4 }
+    if lexer.token_count("/* comment */ value = \"a\\\"b\"") != 3 { return 5 }
+    if lexer.token_count("unterminated /* comment") != -1 { return 6 }
+    if lexer.token_count("\"unterminated") != -1 { return 7 }
+    if lexer.token_count("a | b") != -1 { return 8 }
+    if lexer.token_count("ratio := 1.") != 4 { return 9 }
+    if lexer.token_count("\"bad\\q\"") != -1 { return 10 }
+    0
+}
