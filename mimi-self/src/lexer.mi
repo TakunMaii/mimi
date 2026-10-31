@@ -2770,7 +2770,8 @@ pub parse_module :: fn (source : []u8, storage : *ExpressionArena) *ModuleNode {
     bracket_depth : u64 = 0
     while cursor < source.len {
         token := next_token(source, cursor)
-        if token.0 == 0 || token.0 == 255 { break }
+        if token.0 == 255 { return mimi_buffer_empty() as *ModuleNode }
+        if token.0 == 0 { break }
         at_top := brace_depth == 0 && paren_depth == 0 && bracket_depth == 0
         if at_top && token.1 > segment_start && module_declaration_starts(source, token) {
             declaration := parse_module_declaration(source[segment_start:token.1], segment_start, storage)

@@ -231,6 +231,8 @@ main :: fn () i32 {
     if module_method.function.body.statements.kind != 303 || module_method.function.body.statements.value.start <= module_method.name_start { return 337 }
     duplicate_module_name := lexer.parse_module("value :: 1 value :: 2", &storage)
     if !lexer.module_node_is_null(duplicate_module_name) { return 338 }
+    malformed_module := lexer.parse_module("value :: 1 @", &storage)
+    if !lexer.module_node_is_null(malformed_module) { return 339 }
     malformed_struct_field := lexer.parse_struct_declaration("struct { item : }", &storage)
     if !lexer.struct_node_is_null(malformed_struct_field) { return 259 }
     duplicate_struct_field := lexer.parse_struct_declaration("struct { item : i32, item : bool, }", &storage)
