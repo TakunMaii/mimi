@@ -42,6 +42,10 @@ pub read_file :: fn (path : []u8, buffer : *ByteBuffer) bool {
     mimi_read_file(path.ptr, path.len, buffer) != 0
 }
 
+pub read_file_raw :: fn (path : *u8, path_length : u64, buffer : *ByteBuffer) bool {
+    mimi_read_file(path, path_length, buffer) != 0
+}
+
 pub write_file :: fn (path : []u8, buffer : *ByteBuffer) bool {
     mimi_write_file(path.ptr, path.len, buffer.data, buffer.len) != 0
 }

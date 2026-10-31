@@ -30,6 +30,6 @@ the corresponding half-open byte range in the source. `lexer.lex_next` combines
 the token kind, span, and error code in one `LexResult`.
 
 `source.render` writes a diagnostic with its path, one-based line and column,
-source line, and byte-span underline to standard error. `ModuleGraph` tracks
-loading and loaded paths for cycle detection; automatic import discovery is
-still pending.
+source line, and byte-span underline to standard error. `source.load_graph`
+discovers string-literal `@import` paths, resolves them relative to each module,
+and traverses the graph iteratively while detecting import cycles.

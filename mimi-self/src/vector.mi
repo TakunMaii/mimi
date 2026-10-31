@@ -6,14 +6,17 @@ extern mimi_buffer_empty : fn() *void
 
 pub U64Vector :: struct {
     handle : *void,
+    len : u64,
 }
 
 pub init :: fn () U64Vector {
-    U64Vector { handle = mimi_vector_new() }
+    U64Vector { handle = mimi_vector_new(), len = 0 }
 }
 
 pub push :: fn (vector : *U64Vector, value : u64) bool {
-    mimi_vector_push(vector.handle, value) != 0
+    if mimi_vector_push(vector.handle, value) == 0 { return false }
+    vector.len = vector.len + 1
+    true
 }
 
 pub get :: fn (vector : *U64Vector, index : u64, value : *u64) bool {
@@ -23,4 +26,5 @@ pub get :: fn (vector : *U64Vector, index : u64, value : *u64) bool {
 pub release :: fn (vector : *U64Vector) void {
     mimi_vector_release(vector.handle)
     vector.handle = mimi_buffer_empty()
+    vector.len = 0
 }

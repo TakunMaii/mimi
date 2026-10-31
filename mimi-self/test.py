@@ -150,6 +150,7 @@ main :: fn () i32 {{
             ]
         )
         run([str(executable)])
+
         if output_path.read_bytes() != expected:
             raise AssertionError("Mimi file write did not preserve the input bytes")
 
@@ -206,7 +207,6 @@ main :: fn () i32 {{
             ]
         )
         run([str(executable)])
-
 
 def test_source_model(compiler: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="mimi-self-source-") as temporary:
@@ -291,6 +291,48 @@ main :: fn () i32 {{
             ]
         )
         run([str(executable)])
+
+        root_module = directory / "graph root.mi"
+        left_module = directory / "left.mi"
+        right_module = directory / "right.mi"
+        shared_module = directory / "shared.mi"
+        cycle_a = directory / "cycle-a.mi"
+        cycle_b = directory / "cycle-b.mi"
+        (directory / "sub").mkdir()
+        root_module.write_text(
+            'left :: @import("left.mi")\nright :: @import("right.mi")\n'
+            'shared :: @import("./shared.mi")\n', encoding="utf-8"
+        )
+        left_module.write_text('shared :: @import("shared.mi")\n', encoding="utf-8")
+        right_module.write_text('shared :: @import("sub/../shared.mi")\n', encoding="utf-8")
+        shared_module.write_text("value :: 1\n", encoding="utf-8")
+        cycle_a.write_text('next :: @import("cycle-b.mi")\n', encoding="utf-8")
+        cycle_b.write_text('next :: @import("./cycle-a.mi")\n', encoding="utf-8")
+        graph_program = directory / "graph traversal.mi"
+        graph_executable = directory / "graph-traversal"
+        graph_program.write_text(
+            f'''source :: @import({module_path})
+main :: fn () i32 {{
+    graph := source.module_graph_init()
+    if !source.load_graph({mimi_quote(root_module)}, &graph) {{ return 1 }}
+    state : u64 = 0
+    if !source.module_state(&graph, {mimi_quote(root_module.resolve())}, &state) || state != 2 {{ return 2 }}
+    if !source.module_state(&graph, {mimi_quote(shared_module.resolve())}, &state) || state != 2 {{ return 3 }}
+    source.module_graph_release(&graph)
+    cycle_graph := source.module_graph_init()
+    if source.load_graph({mimi_quote(cycle_a)}, &cycle_graph) {{ return 4 }}
+    source.module_graph_release(&cycle_graph)
+    0
+}}
+''', encoding="utf-8"
+        )
+        run(
+            [
+                str(compiler), "build", str(graph_program), "-o", str(graph_executable),
+                "--c-source", str(RUNTIME),
+            ]
+        )
+        run([str(graph_executable)])
 
 
 def main() -> None:

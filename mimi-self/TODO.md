@@ -29,8 +29,8 @@ two consecutive stages.
   unusable until explicitly reinitialized.
 - [x] Add `Result`/`Option` conventions and error propagation suitable for
   parser and type-checker code.
-- [ ] Complete source file/module loading for the self-hosted compiler,
-  including import resolution and recursive traversal.
+- [x] Complete source file/module loading for the self-hosted compiler,
+  including relative import resolution and iterative depth-first traversal.
 - [x] Track loading/loaded module states and reject cycles in a module graph.
 - [x] Define source spans and render diagnostics with source context.
 
@@ -47,7 +47,7 @@ two consecutive stages.
 - [x] Reject Unicode symbol codepoints such as emoji at identifier start.
 - [ ] Match Rust's complete Unicode Alphabetic/Alphanumeric identifier
   properties, including combining marks and all scripts.
-- [ ] Port the lexer, including UTF-8 identifiers, exact spans, escape
+- [x] Port the lexer, including UTF-8 identifiers, exact spans, escape
   validation, and useful lexical errors to the self-hosted compiler API.
 - [ ] Implement the parser and AST for declarations, types, expressions,
   statements, imports, generics, and control flow.
@@ -56,11 +56,12 @@ two consecutive stages.
 - [x] Parse chained named and numeric member access in expressions.
 - [x] Parse indexed expressions with full binary expression precedence.
 - [x] Parse nested calls and comma-separated arguments.
+- [x] Parse bounded and open-ended slices using `:` and `..` separators.
 - [ ] Implement name resolution, type checking, generic specialization, and
   diagnostics.
 - [x] Add a Python differential smoke suite for accepted programs and
   lexical, parse, and type errors against the Rust stage0 compiler.
-- [ ] Use Python tests to compare accepted/rejected programs and diagnostics
+- [x] Use Python tests to compare accepted/rejected programs and diagnostics
   against the Rust compiler.
 
 ## T3: Self-hosted code generation
@@ -83,8 +84,7 @@ two consecutive stages.
 ## Current milestone
 
 T1 containers, runtime, Result/Option, source file records, source-aware
-diagnostic rendering, and module state/cycle tracking are in place. Source
-import resolution and recursive traversal are still open. The T2 lexer
+diagnostic rendering, and iterative module import traversal are in place. The T2 lexer
 returns token kinds and byte spans, decodes supported escapes, validates
 UTF-8 sequences, classifies common errors, returns token/error spans together,
 and handles member-number/decimal boundaries. Its Unicode identifier ranges

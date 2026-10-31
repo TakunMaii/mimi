@@ -1,20 +1,20 @@
-pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
+pub next_token_raw :: fn (source : *u8, source_length : u64, cursor : u64) (u8, u64, u64) {
     index := cursor
-    while index < source.len {
+    while index < source_length {
         byte := source[index]
         if byte == 32 || byte == 9 || byte == 10 || byte == 13 {
             index = index + 1
         } else {
-            if byte == 47 && index + 1 < source.len && source[index + 1] == 47 {
+            if byte == 47 && index + 1 < source_length && source[index + 1] == 47 {
                 index = index + 2
-                while index < source.len && source[index] != 10 {
+                while index < source_length && source[index] != 10 {
                     index = index + 1
                 }
             } else {
-                if byte == 47 && index + 1 < source.len && source[index + 1] == 42 {
+                if byte == 47 && index + 1 < source_length && source[index + 1] == 42 {
                     index = index + 2
                     closed := false
-                    while index + 1 < source.len && !closed {
+                    while index + 1 < source_length && !closed {
                         if source[index] == 42 && source[index + 1] == 47 {
                             index = index + 2
                             closed = true
@@ -30,9 +30,9 @@ pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
                     if byte == 34 {
                         index = index + 1
                         closed := false
-                        while index < source.len && !closed {
+                        while index < source_length && !closed {
                             if source[index] == 92 {
-                                        if index + 1 >= source.len {
+                                        if index + 1 >= source_length {
                                             return (255, index, index)
                                         }
                                         escaped := source[index + 1]
@@ -57,17 +57,17 @@ pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
                     } else {
                         if (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || byte == 95 || byte >= 128 {
                             if byte >= 128 {
-                                width := utf8_width(source, index)
-                                if width == 0 || !utf8_identifier_start(source, index, width) { return (255, index, index) }
+                                width := utf8_width_raw(source, source_length, index)
+                                if width == 0 || !utf8_identifier_start_raw(source, index, width) { return (255, index, index) }
                                 index = index + width as u64
                             } else {
                                 index = index + 1
                             }
-                            while index < source.len {
+                            while index < source_length {
                                 next := source[index]
                                 if (next >= 65 && next <= 90) || (next >= 97 && next <= 122) || (next >= 48 && next <= 57) || next == 95 || next >= 128 {
                                     if next >= 128 {
-                                        width := utf8_width(source, index)
+                                        width := utf8_width_raw(source, source_length, index)
                                         if width == 0 { return (255, index, index) }
                                         index = index + width as u64
                                     } else {
@@ -77,7 +77,7 @@ pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
                                     break
                                 }
                             }
-                            return (identifier_kind(source, start, index), start, index)
+                            return (identifier_kind_raw(source, start, index), start, index)
                         } else {
                             if byte >= 48 && byte <= 57 {
                                 previous := index
@@ -89,22 +89,22 @@ pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
                                     after_member_dot = true
                                 }
                                 index = index + 1
-                                while index < source.len && source[index] >= 48 && source[index] <= 57 {
+                                while index < source_length && source[index] >= 48 && source[index] <= 57 {
                                     index = index + 1
                                 }
-                                if !after_member_dot && index < source.len && source[index] == 46 && (index + 1 >= source.len || source[index + 1] != 46) {
+                                if !after_member_dot && index < source_length && source[index] == 46 && (index + 1 >= source_length || source[index + 1] != 46) {
                                     index = index + 1
-                                    while index < source.len && source[index] >= 48 && source[index] <= 57 {
+                                    while index < source_length && source[index] >= 48 && source[index] <= 57 {
                                         index = index + 1
                                     }
-                                    if index < source.len && source[index] == 46 && (index + 1 >= source.len || source[index + 1] != 46) {
+                                    if index < source_length && source[index] == 46 && (index + 1 >= source_length || source[index + 1] != 46) {
                                         return (255, index, index)
                                     }
                                 }
                                 return (2, start, index)
                             } else {
                                 next_byte : u8 = 0
-                                if index + 1 < source.len {
+                                if index + 1 < source_length {
                                     next_byte = source[index + 1]
                                 }
                                 kind := paired_kind(byte, next_byte)
@@ -125,7 +125,11 @@ pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
             }
         }
     }
-    (0, source.len, source.len)
+    (0, source_length, source_length)
+}
+
+pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
+    next_token_raw(source.ptr, source.len, cursor)
 }
 
 pub LexResult :: struct {
@@ -355,6 +359,66 @@ utf8_identifier_start :: fn (source : []u8, index : u64, width : u8) bool {
     false
 }
 
+utf8_width_raw :: fn (source : *u8, source_length : u64, index : u64) u8 {
+    first := source[index]
+    if first >= 194 && first <= 223 {
+        if index + 1 >= source_length { return 0 }
+        second := source[index + 1]
+        if second < 128 || second > 191 { return 0 }
+        return 2
+    }
+    if first >= 224 && first <= 239 {
+        if index + 2 >= source_length { return 0 }
+        second := source[index + 1]
+        third := source[index + 2]
+        if second < 128 || second > 191 || third < 128 || third > 191 { return 0 }
+        if first == 224 && second < 160 { return 0 }
+        if first == 237 && second >= 160 { return 0 }
+        return 3
+    }
+    if first >= 240 && first <= 244 {
+        if index + 3 >= source_length { return 0 }
+        second := source[index + 1]
+        third := source[index + 2]
+        fourth := source[index + 3]
+        if second < 128 || second > 191 || third < 128 || third > 191 || fourth < 128 || fourth > 191 { return 0 }
+        if first == 240 && second < 144 { return 0 }
+        if first == 244 && second > 143 { return 0 }
+        return 4
+    }
+    0
+}
+
+utf8_identifier_start_raw :: fn (source : *u8, index : u64, width : u8) bool {
+    codepoint : u64 = 0
+    if width == 2 {
+        codepoint = (source[index] as u64 % 32) * 64 + source[index + 1] as u64 % 64
+    } else {
+        if width == 3 {
+            codepoint = (source[index] as u64 % 16) * 4096 + (source[index + 1] as u64 % 64) * 64 + source[index + 2] as u64 % 64
+        } else {
+            if width == 4 {
+                codepoint = (source[index] as u64 % 8) * 262144 + (source[index + 1] as u64 % 64) * 4096 + (source[index + 2] as u64 % 64) * 64 + source[index + 3] as u64 % 64
+            } else { return false }
+        }
+    }
+    if codepoint >= 192 && codepoint <= 767 { return codepoint != 215 && codepoint != 247 }
+    if codepoint >= 880 && codepoint <= 1327 { return true }
+    if codepoint >= 1329 && codepoint <= 1416 { return true }
+    if codepoint >= 1488 && codepoint <= 1514 { return true }
+    if codepoint >= 1568 && codepoint <= 1610 { return true }
+    if codepoint >= 1646 && codepoint <= 1747 { return true }
+    if codepoint >= 2308 && codepoint <= 8191 { return true }
+    if codepoint >= 11264 && codepoint <= 11775 { return true }
+    if codepoint >= 12353 && codepoint <= 12543 { return true }
+    if codepoint >= 12549 && codepoint <= 12591 { return true }
+    if codepoint >= 13312 && codepoint <= 40959 { return true }
+    if codepoint >= 44032 && codepoint <= 55203 { return true }
+    if codepoint >= 63744 && codepoint <= 64255 { return true }
+    if codepoint >= 65536 && codepoint <= 126975 { return true }
+    false
+}
+
 pub decoded_string_len :: fn (source : []u8, start : u64, end : u64) u64 {
     index := start + 1
     length : u64 = 0
@@ -364,6 +428,16 @@ pub decoded_string_len :: fn (source : []u8, start : u64, end : u64) u64 {
         } else {
             index = index + 1
         }
+        length = length + 1
+    }
+    length
+}
+
+pub decoded_string_len_raw :: fn (source : *u8, start : u64, end : u64) u64 {
+    index := start + 1
+    length : u64 = 0
+    while index + 1 < end {
+        if source[index] == 92 { index = index + 2 } else { index = index + 1 }
         length = length + 1
     }
     length
@@ -391,7 +465,27 @@ pub decoded_string_byte :: fn (source : []u8, start : u64, end : u64, position :
     0
 }
 
-identifier_kind :: fn (source : []u8, start : u64, end : u64) u8 {
+pub decoded_string_byte_raw :: fn (source : *u8, start : u64, end : u64, position : u64) u8 {
+    index := start + 1
+    decoded : u64 = 0
+    while index + 1 < end {
+        value := source[index]
+        if value == 92 {
+            escaped := source[index + 1]
+            if escaped == 110 { value = 10 } else {
+                if escaped == 114 { value = 13 } else {
+                    if escaped == 116 { value = 9 } else { value = escaped }
+                }
+            }
+            index = index + 2
+        } else { index = index + 1 }
+        if decoded == position { return value }
+        decoded = decoded + 1
+    }
+    0
+}
+
+identifier_kind_raw :: fn (source : *u8, start : u64, end : u64) u8 {
     hash : u64 = 0
     index := start
     while index < end {

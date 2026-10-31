@@ -3,6 +3,7 @@ extern mimi_path_is_directory : fn(path : *u8, path_length : u64) i32
 extern mimi_path_create_directory : fn(path : *u8, path_length : u64) i32
 extern mimi_path_file_size : fn(path : *u8, path_length : u64, size : *u64) i32
 extern mimi_path_join : fn(base : *u8, base_length : u64, part : *u8, part_length : u64, output : *bytes.ByteBuffer) i32
+extern mimi_path_canonicalize : fn(path : *u8, path_length : u64, output : *bytes.ByteBuffer) i32
 
 pub exists :: fn (path : []u8) bool {
     mimi_path_exists(path.ptr, path.len) != 0
@@ -22,6 +23,18 @@ pub file_size :: fn (path : []u8, size : *u64) bool {
 
 pub join :: fn (base : []u8, part : []u8, output : *bytes.ByteBuffer) bool {
     mimi_path_join(base.ptr, base.len, part.ptr, part.len, output) != 0
+}
+
+pub join_raw :: fn (base : *u8, base_length : u64, part : *u8, part_length : u64, output : *bytes.ByteBuffer) bool {
+    mimi_path_join(base, base_length, part, part_length, output) != 0
+}
+
+pub canonicalize :: fn (path : []u8, output : *bytes.ByteBuffer) bool {
+    mimi_path_canonicalize(path.ptr, path.len, output) != 0
+}
+
+pub canonicalize_raw :: fn (path : *u8, path_length : u64, output : *bytes.ByteBuffer) bool {
+    mimi_path_canonicalize(path, path_length, output) != 0
 }
 
 bytes :: @import("bytes.mi")

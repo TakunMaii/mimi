@@ -1,5 +1,7 @@
+#define _XOPEN_SOURCE 700
 #include <stdint.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -277,6 +279,34 @@ int mimi_path_join(const uint8_t *base, uint64_t base_length, const uint8_t *par
     if (separator) output->data[base_length] = '/';
     if (part_length != 0) memcpy(output->data + base_length + separator, part, (size_t)part_length);
     output->len = needed;
+    return 1;
+}
+
+int mimi_path_canonicalize(const uint8_t *path, uint64_t path_length, MimiByteBuffer *output) {
+    if (path == NULL || output == NULL || output->released || path_length >= SIZE_MAX) {
+        return 0;
+    }
+    char *input = malloc((size_t)path_length + 1);
+    if (input == NULL) {
+        return 0;
+    }
+    memcpy(input, path, (size_t)path_length);
+    input[path_length] = '\0';
+    char canonical[PATH_MAX];
+    if (realpath(input, canonical) == NULL) {
+        free(input);
+        return 0;
+    }
+    free(input);
+    size_t canonical_length = strlen(canonical);
+    if (canonical_length > output->capacity) {
+        if (!mimi_buffer_resize(output, canonical_length)) {
+            return 0;
+        }
+        output->capacity = canonical_length;
+    }
+    memcpy(output->data, canonical, canonical_length);
+    output->len = canonical_length;
     return 1;
 }
 

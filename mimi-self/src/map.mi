@@ -16,8 +16,16 @@ pub set :: fn (map : *StringMap, key : []u8, value : u64) bool {
     mimi_map_set(map.handle, key.ptr, key.len, value) != 0
 }
 
+pub set_raw :: fn (map : *StringMap, key : *u8, key_length : u64, value : u64) bool {
+    mimi_map_set(map.handle, key, key_length, value) != 0
+}
+
 pub get :: fn (map : *StringMap, key : []u8, value : *u64) bool {
     mimi_map_get(map.handle, key.ptr, key.len, value) != 0
+}
+
+pub get_raw :: fn (map : *StringMap, key : *u8, key_length : u64, value : *u64) bool {
+    mimi_map_get(map.handle, key, key_length, value) != 0
 }
 
 pub release :: fn (map : *StringMap) void {

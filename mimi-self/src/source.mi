@@ -1,6 +1,17 @@
 bytes :: @import("bytes.mi")
 maps :: @import("map.mi")
+arena_api :: @import("arena.mi")
+lexer :: @import("lexer.mi")
+path_api :: @import("path.mi")
 extern mimi_diagnostic_print : fn(code : *u8, code_length : u64, message : *u8, message_length : u64, path : *u8, path_length : u64, source : *u8, source_length : u64, start : u64, end : u64) void
+extern mimi_buffer_empty : fn() *void
+
+ModulePath :: struct {
+    data : *u8,
+    length : u64,
+    next : *ModulePath,
+    cursor : u64,
+}
 
 pub SourceFile :: struct {
     path : []u8,
@@ -53,6 +64,145 @@ pub module_graph_release :: fn (graph : *ModuleGraph) void {
     states := graph.states
     maps.release(&states)
     graph.states = maps.init()
+}
+
+pub load_graph :: fn (root : []u8, graph : *ModuleGraph) bool {
+    storage := arena_api.init()
+    canonical_root := bytes.init()
+    if !path_api.canonicalize(root, &canonical_root) {
+        bytes.release(&canonical_root)
+        arena_api.release(&storage)
+        return false
+    }
+    first := store_module_path(&storage, canonical_root.data, canonical_root.len)
+    bytes.release(&canonical_root)
+    if first == (mimi_buffer_empty() as *ModulePath) || !module_begin_raw(graph, first.data, first.length) {
+        arena_api.release(&storage)
+        return false
+    }
+    current := first
+    valid := true
+    while current != (mimi_buffer_empty() as *ModulePath) && valid {
+        contents := bytes.init()
+        if !bytes.read_file_raw(current.data, current.length, &contents) { valid = false } else {
+            found_dependency := false
+            while current.cursor < contents.len && valid && !found_dependency {
+                token := lexer.next_token_raw(contents.data, contents.len, current.cursor)
+                if token.0 == 255 { valid = false } else {
+                    current.cursor = token.2
+                    if token.0 == 64 {
+                        name := lexer.next_token_raw(contents.data, contents.len, current.cursor)
+                        if name.0 == 1 && source_range_equals(contents.data, name.1, name.2, "import") {
+                            open := lexer.next_token_raw(contents.data, contents.len, name.2)
+                            literal := lexer.next_token_raw(contents.data, contents.len, open.2)
+                            close := lexer.next_token_raw(contents.data, contents.len, literal.2)
+                            if open.0 != 40 || literal.0 != 3 || close.0 != 41 {
+                                valid = false
+                            } else {
+                                current.cursor = close.2
+                                import_path := bytes.init()
+                                decoded_length := lexer.decoded_string_len_raw(contents.data, literal.1, literal.2)
+                                decoded_index : u64 = 0
+                                while decoded_index < decoded_length && valid {
+                                    if !bytes.push(&import_path, lexer.decoded_string_byte_raw(contents.data, literal.1, literal.2, decoded_index)) { valid = false }
+                                    decoded_index = decoded_index + 1
+                                }
+                                resolved_path := bytes.init()
+                                if valid && import_path.len != 0 && import_path.data[0] != 47 {
+                                    directory_length : u64 = 0
+                                    path_index : u64 = 0
+                                    while path_index < current.length {
+                                        if current.data[path_index] == 47 { directory_length = path_index }
+                                        path_index = path_index + 1
+                                    }
+                                    if !path_api.join_raw(current.data, directory_length, import_path.data, import_path.len, &resolved_path) { valid = false }
+                                } else {
+                                    resolved_path = import_path
+                                    import_path = bytes.init()
+                                }
+                                canonical_path := bytes.init()
+                                if valid && !path_api.canonicalize_raw(resolved_path.data, resolved_path.len, &canonical_path) { valid = false }
+                                if valid {
+                                    state : u64 = 0
+                                    if module_state_raw(graph, canonical_path.data, canonical_path.len, &state) {
+                                        if state == 1 { valid = false }
+                                    } else {
+                                        dependency := store_module_path(&storage, canonical_path.data, canonical_path.len)
+                                        if dependency == (mimi_buffer_empty() as *ModulePath) || !module_begin_raw(graph, dependency.data, dependency.length) { valid = false } else {
+                                            dependency.next = current
+                                            current = dependency
+                                            found_dependency = true
+                                        }
+                                    }
+                                }
+                                bytes.release(&canonical_path)
+                                bytes.release(&resolved_path)
+                                bytes.release(&import_path)
+                            }
+                        }
+                    }
+                }
+            }
+            bytes.release(&contents)
+            if valid && !found_dependency {
+                if !module_finish_raw(graph, current.data, current.length) { valid = false } else {
+                    current = current.next
+                }
+            }
+        }
+    }
+    arena_api.release(&storage)
+    valid
+}
+
+store_module_path :: fn (storage : *arena_api.Arena, path : *u8, path_length : u64) *ModulePath {
+    if !arena_api.allocate(storage, 32, 8) { return mimi_buffer_empty() as *ModulePath }
+    module_path := arena_api.last_byte(storage) as *ModulePath
+    module_path.next = mimi_buffer_empty() as *ModulePath
+    module_path.cursor = 0
+    if !arena_api.allocate(storage, path_length, 1) { return mimi_buffer_empty() as *ModulePath }
+    path_copy := arena_api.last_byte(storage)
+    index : u64 = 0
+    while index < path_length {
+        path_copy[index] = path[index]
+        index = index + 1
+    }
+    module_path.data = path_copy
+    module_path.length = path_length
+    module_path
+}
+
+module_begin_raw :: fn (graph : *ModuleGraph, path : *u8, path_length : u64) bool {
+    states := graph.states
+    value : u64 = 0
+    if maps.get_raw(&states, path, path_length, &value) { return false }
+    if !maps.set_raw(&states, path, path_length, 1) { return false }
+    graph.states = states
+    true
+}
+
+module_state_raw :: fn (graph : *ModuleGraph, path : *u8, path_length : u64, state : *u64) bool {
+    states := graph.states
+    maps.get_raw(&states, path, path_length, state)
+}
+
+module_finish_raw :: fn (graph : *ModuleGraph, path : *u8, path_length : u64) bool {
+    states := graph.states
+    value : u64 = 0
+    if !maps.get_raw(&states, path, path_length, &value) || value != 1 { return false }
+    if !maps.set_raw(&states, path, path_length, 2) { return false }
+    graph.states = states
+    true
+}
+
+source_range_equals :: fn (source : *u8, start : u64, end : u64, expected : []u8) bool {
+    if end - start != expected.len { return false }
+    index : u64 = 0
+    while index < expected.len {
+        if source[start + index] != expected[index] { return false }
+        index = index + 1
+    }
+    true
 }
 
 
