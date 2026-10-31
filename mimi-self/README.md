@@ -18,7 +18,8 @@ cases and their first diagnostic against the Rust stage0 compiler. Pass
 
 The current milestone is the self-hosted lexer and an arena-backed expression
 parser for grouped unary/binary expressions, member/index/slice access, and
-nested calls. The parser handles operator precedence and left associativity. Stage0
+nested calls, plus named/pointer/slice/fixed-array type syntax. The expression
+parser handles operator precedence and left associativity. Stage0
 is the Rust compiler. See
 [TODO.md](TODO.md) for the parity roadmap and [FEATURES.md](FEATURES.md) for
 the feature matrix.

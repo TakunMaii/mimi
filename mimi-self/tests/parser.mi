@@ -2,6 +2,18 @@ lexer :: @import("../src/lexer.mi")
 
 main :: fn () i32 {
     storage := lexer.expression_arena_init()
+    scalar_type := lexer.parse_type("i32", &storage)
+    if lexer.expression_is_null(scalar_type) || scalar_type.kind != 270 || scalar_type.start != 0 || scalar_type.end != 3 { return 49 }
+    pointer_type := lexer.parse_type("**MyType", &storage)
+    if lexer.expression_is_null(pointer_type) || pointer_type.kind != 271 || pointer_type.left.kind != 271 || pointer_type.left.left.kind != 270 { return 50 }
+    slice_type := lexer.parse_type("[][]u8", &storage)
+    if lexer.expression_is_null(slice_type) || slice_type.kind != 272 || slice_type.left.kind != 272 || slice_type.left.left.kind != 270 { return 51 }
+    array_type := lexer.parse_type("[12]*Item", &storage)
+    if lexer.expression_is_null(array_type) || array_type.kind != 273 || array_type.left.kind != 271 || array_type.right.kind != 2 { return 52 }
+    invalid_type := lexer.parse_type("[]", &storage)
+    if !lexer.expression_is_null(invalid_type) { return 53 }
+    trailing_type := lexer.parse_type("i32 extra", &storage)
+    if !lexer.expression_is_null(trailing_type) { return 54 }
     atom := lexer.parse_expression("1", &storage)
     if lexer.expression_is_null(atom) { return 1 }
     if atom.kind != 2 { return atom.kind as i32 }

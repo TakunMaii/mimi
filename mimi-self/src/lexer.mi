@@ -597,6 +597,81 @@ pub expression_is_null :: fn (node : *ExprNode) bool {
     node == (mimi_buffer_empty() as *ExprNode)
 }
 
+pub parse_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
+    if source.len > 1000000000000000000 { return mimi_buffer_empty() as *ExprNode }
+    if mimi_arena_allocate(storage, source.len * 16 + 16, 8) == 0 { return mimi_buffer_empty() as *ExprNode }
+    prefixes := storage.last as *ExprOperator
+    prefix_count : u64 = 0
+    cursor : u64 = 0
+    token := next_token(source, cursor)
+    if token.0 == 42 {
+        prefixes[prefix_count] = ExprOperator { kind = 271, start = token.1, base_count = 0, argument_count = 0 }
+        prefix_count = prefix_count + 1
+        cursor = token.2
+    } else {
+        if token.0 == 91 {
+            next := next_token(source, token.2)
+            if next.0 == 93 {
+                prefixes[prefix_count] = ExprOperator { kind = 272, start = token.1, base_count = 0, argument_count = 0 }
+                prefix_count = prefix_count + 1
+                cursor = next.2
+            } else {
+                if next.0 != 2 { return mimi_buffer_empty() as *ExprNode }
+                close := next_token(source, next.2)
+                if close.0 != 93 { return mimi_buffer_empty() as *ExprNode }
+                count_node := allocate_expr(storage, 2, next.1, next.2, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+                if expression_is_null(count_node) { return count_node }
+                prefixes[prefix_count] = ExprOperator { kind = 273, start = token.1, base_count = 0, argument_count = count_node.start }
+                prefix_count = prefix_count + 1
+                cursor = close.2
+            }
+        }
+    }
+    while true {
+        token = next_token(source, cursor)
+        if token.0 == 42 {
+            prefixes[prefix_count] = ExprOperator { kind = 271, start = token.1, base_count = 0, argument_count = 0 }
+            prefix_count = prefix_count + 1
+            cursor = token.2
+        } else {
+            if token.0 == 91 {
+                next := next_token(source, token.2)
+                if next.0 == 93 {
+                    prefixes[prefix_count] = ExprOperator { kind = 272, start = token.1, base_count = 0, argument_count = 0 }
+                    prefix_count = prefix_count + 1
+                    cursor = next.2
+                } else {
+                    if next.0 != 2 { return mimi_buffer_empty() as *ExprNode }
+                    close := next_token(source, next.2)
+                    if close.0 != 93 { return mimi_buffer_empty() as *ExprNode }
+                    prefixes[prefix_count] = ExprOperator { kind = 273, start = token.1, base_count = 0, argument_count = next.1 }
+                    prefix_count = prefix_count + 1
+                    cursor = close.2
+                }
+            } else { break }
+        }
+    }
+    name := next_token(source, cursor)
+    if name.0 != 1 && name.0 != 4 && name.0 != 5 { return mimi_buffer_empty() as *ExprNode }
+    next_token_result := next_token(source, name.2)
+    if next_token_result.0 != 0 { return mimi_buffer_empty() as *ExprNode }
+    node := allocate_expr(storage, 270, name.1, name.2, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+    if expression_is_null(node) { return node }
+    while prefix_count > 0 {
+        prefix_count = prefix_count - 1
+        prefix := prefixes[prefix_count]
+        if prefix.kind == 273 {
+            count := allocate_expr(storage, 2, prefix.argument_count, prefix.argument_count, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+            if expression_is_null(count) { return count }
+            node = allocate_expr(storage, prefix.kind, prefix.start, node.end, node, count)
+        } else {
+            node = allocate_expr(storage, prefix.kind, prefix.start, node.end, node, mimi_buffer_empty() as *ExprNode)
+        }
+        if expression_is_null(node) { return node }
+    }
+    node
+}
+
 pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     // Bound the stack-size calculations below before multiplying source.len.
     if source.len > 1000000000000000000 { return mimi_buffer_empty() as *ExprNode }
