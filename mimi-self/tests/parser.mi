@@ -113,6 +113,13 @@ main :: fn () i32 {
     callback_header := lexer.parse_function_header("visit :: fn (callback : fn (i32) bool) []u8 {", &storage)
     if lexer.function_header_is_null(callback_header) || callback_header.parameters_end != 37 { return 109 }
     if callback_header.return_type_start != 39 || callback_header.return_type_end != 43 { return 110 }
+    nested_callback_source := "visit :: fn (callback : fn (i32, *u8) bool, value : []u8) bool {"
+    nested_callback_header := lexer.parse_function_header(nested_callback_source, &storage)
+    if lexer.function_header_is_null(nested_callback_header) { return 169 }
+    nested_callback_parameters := lexer.parse_parameters(nested_callback_source, nested_callback_header, &storage)
+    if lexer.parameter_list_is_null(nested_callback_parameters) || nested_callback_parameters.data_type.kind != 277 { return 170 }
+    if nested_callback_parameters.data_type.left.kind != 276 || lexer.parameter_list_is_null(nested_callback_parameters.next) { return 171 }
+    if nested_callback_parameters.next.data_type.kind != 272 { return 172 }
     atom := lexer.parse_expression("1", &storage)
     if lexer.expression_is_null(atom) { return 1 }
     if atom.kind != 2 { return atom.kind as i32 }
