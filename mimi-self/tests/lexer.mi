@@ -67,5 +67,13 @@ main :: fn () i32 {
     if lexer.error_code("\"bad\\q\"", 4) != 4 { return 52 }
     if lexer.error_code([240, 128, 128, 128], 0) != 5 { return 53 }
     if lexer.error_message("\"bad\\q\"", 4)[0] != 105 { return 54 }
+    unexpected_span := lexer.error_span("a | b", 2)
+    if unexpected_span.0 != 2 || unexpected_span.1 != 3 { return 61 }
+    comment_span := lexer.error_span("/* unfinished", 13)
+    if comment_span.0 != 0 || comment_span.1 != 13 { return 62 }
+    string_span := lexer.error_span("\"unfinished", 11)
+    if string_span.0 != 0 || string_span.1 != 11 { return 63 }
+    escape_span := lexer.error_span("\"bad\\q\"", 4)
+    if escape_span.0 != 4 || escape_span.1 != 6 { return 64 }
     0
 }

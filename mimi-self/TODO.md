@@ -41,6 +41,8 @@ two consecutive stages.
 - [x] Decode the supported string escapes and reject malformed UTF-8 in
   identifiers.
 - [x] Classify common lexer failures with stable error codes and messages.
+- [x] Return exact half-open byte spans for unexpected bytes, malformed
+  escapes, and unterminated strings/comments.
 - [x] Reject Unicode symbol codepoints such as emoji at identifier start.
 - [ ] Match Rust's complete Unicode Alphabetic/Alphanumeric identifier
   properties, including combining marks and all scripts.

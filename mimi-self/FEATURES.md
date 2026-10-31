@@ -11,7 +11,7 @@ the Python suite covers it through the self-hosted compiler.
 | Result and Option | Rust `Result`/`Option` | Generic enum conventions with explicit `match` propagation | `tests/result.mi` |
 | Source files and diagnostics | Compiler source map and diagnostics | File loading, module state/cycle tracking, source spans, and rendered diagnostics; import resolution/traversal pending | Python source model and module cycle integration tests |
 | Identifiers, numbers, strings, punctuation | Supported | Token kinds/spans, escape decoding, decimal/member-number distinction; valid UTF-8 and common Unicode letters, full identifier properties pending | `tests/lexer.mi` |
-| Comments and lexical errors | Supported | Line/block comments and categorized lexer error codes/messages | `tests/lexer.mi` |
+| Comments and lexical errors | Supported | Line/block comments, categorized errors, and exact error byte spans | `tests/lexer.mi` |
 | Source spans and diagnostics | Supported | Span records and source line/caret rendering | Python source model integration test |
 | Declarations, functions, modules | Supported | Not implemented | Pending |
 | Scalar, pointer, array, slice, tuple, function types | Supported | Not implemented | Pending |
