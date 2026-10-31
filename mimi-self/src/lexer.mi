@@ -639,6 +639,29 @@ pub FunctionNode :: struct {
     body : *BlockNode,
 }
 
+pub ModuleNode :: struct {
+    start : u64,
+    end : u64,
+    declaration_count : u64,
+    declarations : *ModuleDeclarationNode,
+}
+
+pub ModuleDeclarationNode :: struct {
+    kind : u64,
+    is_public : bool,
+    start : u64,
+    end : u64,
+    name_start : u64,
+    name_end : u64,
+    path_start : u64,
+    path_end : u64,
+    binding : *BindingNode,
+    function : *FunctionNode,
+    struct_node : *StructNode,
+    enum_node : *EnumNode,
+    next : *ModuleDeclarationNode,
+}
+
 pub IfNode :: struct {
     start : u64,
     end : u64,
@@ -2695,7 +2718,8 @@ parse_cast_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNod
     cast_end := source.len
     while cursor < source.len {
         token := next_token(source, cursor)
-        if token.0 == 0 || token.0 == 255 { break }
+        if token.0 == 255 { return mimi_buffer_empty() as *ModuleNode }
+        if token.0 == 0 { break }
         cursor = token.2
         if token.0 == 40 { paren_depth = paren_depth + 1 } else {
             if token.0 == 41 && paren_depth > 0 { paren_depth = paren_depth - 1 } else {
@@ -2726,6 +2750,271 @@ parse_cast_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNod
 
 pub function_node_is_null :: fn (function : *FunctionNode) bool {
     function == (mimi_buffer_empty() as *FunctionNode)
+}
+
+pub module_node_is_null :: fn (module : *ModuleNode) bool {
+    module == (mimi_buffer_empty() as *ModuleNode)
+}
+
+pub parse_module :: fn (source : []u8, storage : *ExpressionArena) *ModuleNode {
+    first : *ModuleDeclarationNode = mimi_buffer_empty() as *ModuleDeclarationNode
+    last : *ModuleDeclarationNode = mimi_buffer_empty() as *ModuleDeclarationNode
+    count : u64 = 0
+    segment_start := next_token(source, 0).1
+    cursor : u64 = 0
+    brace_depth : u64 = 0
+    paren_depth : u64 = 0
+    bracket_depth : u64 = 0
+    while cursor < source.len {
+        token := next_token(source, cursor)
+        if token.0 == 0 || token.0 == 255 { break }
+        at_top := brace_depth == 0 && paren_depth == 0 && bracket_depth == 0
+        if at_top && token.1 > segment_start && module_declaration_starts(source, token) {
+            declaration := parse_module_declaration(source[segment_start:token.1], segment_start, storage)
+            if declaration == (mimi_buffer_empty() as *ModuleDeclarationNode) { return mimi_buffer_empty() as *ModuleNode }
+            if first == (mimi_buffer_empty() as *ModuleDeclarationNode) { first = declaration } else { last.next = declaration }
+            last = declaration
+            count = count + 1
+            segment_start = token.1
+        }
+        cursor = token.2
+        if token.0 == 123 { brace_depth = brace_depth + 1 } else {
+            if token.0 == 125 {
+                if brace_depth == 0 { return mimi_buffer_empty() as *ModuleNode }
+                brace_depth = brace_depth - 1
+            } else {
+                if token.0 == 40 { paren_depth = paren_depth + 1 } else {
+                    if token.0 == 41 && paren_depth > 0 { paren_depth = paren_depth - 1 } else {
+                        if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
+                            if token.0 == 93 && bracket_depth > 0 { bracket_depth = bracket_depth - 1 }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if brace_depth != 0 || paren_depth != 0 || bracket_depth != 0 { return mimi_buffer_empty() as *ModuleNode }
+    trailing := next_token(source, segment_start)
+    if trailing.0 != 0 {
+        declaration := parse_module_declaration(source[segment_start:source.len], segment_start, storage)
+        if declaration == (mimi_buffer_empty() as *ModuleDeclarationNode) { return mimi_buffer_empty() as *ModuleNode }
+        if first == (mimi_buffer_empty() as *ModuleDeclarationNode) { first = declaration } else { last.next = declaration }
+        last = declaration
+        count = count + 1
+    }
+    if mimi_arena_allocate(storage, 32, 8) == 0 { return mimi_buffer_empty() as *ModuleNode }
+    module := storage.last as *ModuleNode
+    module.start = 0
+    module.end = source.len
+    module.declaration_count = count
+    module.declarations = first
+    module
+}
+
+module_declaration_starts :: fn (source : []u8, token : (u8, u64, u64)) bool {
+    if token.0 == 166 {
+        name := next_token(source, token.2)
+        colon1 := next_token(source, name.2)
+        colon2 := next_token(source, colon1.2)
+        return name.0 == 1 && colon1.0 == 58 && colon2.0 == 58
+    }
+    if token.0 != 1 { return false }
+    colon1 := next_token(source, token.2)
+    colon2 := next_token(source, colon1.2)
+    if colon1.0 != 58 { return false }
+    if colon2.0 == 58 || colon2.0 == 61 { return true }
+    scan := colon2.2
+    parens : u64 = 0
+    brackets : u64 = 0
+    angles : u64 = 0
+    while scan < source.len {
+        part := next_token(source, scan)
+        if part.0 == 0 || part.0 == 255 { return false }
+        if part.0 == 123 || part.0 == 125 { return false }
+        if part.0 == 40 { parens = parens + 1 } else {
+            if part.0 == 41 && parens > 0 { parens = parens - 1 } else {
+                if part.0 == 91 { brackets = brackets + 1 } else {
+                    if part.0 == 93 && brackets > 0 { brackets = brackets - 1 } else {
+                        if part.0 == 60 { angles = angles + 1 } else {
+                            if part.0 == 62 && angles > 0 { angles = angles - 1 }
+                        }
+                    }
+                }
+            }
+        }
+        if part.0 == 61 && parens == 0 && brackets == 0 && angles == 0 { return true }
+        scan = part.2
+    }
+    false
+}
+
+parse_module_declaration :: fn (source : []u8, offset : u64, storage : *ExpressionArena) *ModuleDeclarationNode {
+    first := next_token(source, 0)
+    is_public := first.0 == 166
+    name := first
+    if is_public { name = next_token(source, first.2) }
+    colon1 := next_token(source, name.2)
+    colon2 := next_token(source, colon1.2)
+    if name.0 != 1 || colon1.0 != 58 || colon2.0 != 58 { return mimi_buffer_empty() as *ModuleDeclarationNode }
+    declaration := next_token(source, colon2.2)
+    kind : u64 = 0
+    binding : *BindingNode = mimi_buffer_empty() as *BindingNode
+    function : *FunctionNode = mimi_buffer_empty() as *FunctionNode
+    struct_node : *StructNode = mimi_buffer_empty() as *StructNode
+    enum_node : *EnumNode = mimi_buffer_empty() as *EnumNode
+    path_start : u64 = 0
+    path_end : u64 = 0
+    end := source.len
+    if declaration.0 == 160 {
+        function = parse_function_definition(source[(if is_public { name.1 } else { 0 }):source.len], storage)
+        if function_node_is_null(function) { return mimi_buffer_empty() as *ModuleDeclarationNode }
+        function.start = function.start + offset + (if is_public { name.1 } else { 0 })
+        function.end = function.end + offset + (if is_public { name.1 } else { 0 })
+        shift_function_contents(function, offset + (if is_public { name.1 } else { 0 }))
+        kind = 1
+        end = function.end - offset
+    } else {
+        if declaration.0 == 161 {
+            struct_node = parse_struct_declaration(source[declaration.1:source.len], storage)
+            if struct_node_is_null(struct_node) { return mimi_buffer_empty() as *ModuleDeclarationNode }
+            kind = 2
+            end = declaration.1 + struct_node.end
+            shift_struct_declaration(struct_node, offset + declaration.1)
+        } else {
+            if declaration.0 == 162 {
+                enum_node = parse_enum_declaration(source[declaration.1:source.len], storage)
+                if enum_node_is_null(enum_node) { return mimi_buffer_empty() as *ModuleDeclarationNode }
+                kind = 3
+                end = declaration.1 + enum_node.end
+                shift_enum_declaration(enum_node, offset + declaration.1)
+            } else {
+                if declaration.0 == 58 {
+                    at := next_token(source, declaration.2)
+                    import_name := next_token(source, at.2)
+                    open := next_token(source, import_name.2)
+                    path := next_token(source, open.2)
+                    close := next_token(source, path.2)
+                    if at.0 != 64 || import_name.0 != 1 || path.0 != 3 || close.0 != 41 || next_token(source, close.2).0 != 0 { return mimi_buffer_empty() as *ModuleDeclarationNode }
+                    is_import := source_name_equals(source, import_name.1, import_name.2, "import")
+                    is_cimport := source_name_equals(source, import_name.1, import_name.2, "cimport")
+                    if !is_import && !is_cimport { return mimi_buffer_empty() as *ModuleDeclarationNode }
+                    kind = 4
+                    if is_cimport { kind = 6 }
+                    path_start = path.1 + offset
+                    path_end = path.2 + offset
+                } else {
+                    binding = parse_binding_declaration(source[name.1:source.len], storage)
+                    if binding_node_is_null(binding) { return mimi_buffer_empty() as *ModuleDeclarationNode }
+                    kind = 5
+                    shift_binding_node(binding, offset + name.1)
+                    end = name.1 + binding.end - offset - name.1
+                }
+            }
+        }
+    }
+    if mimi_arena_allocate(storage, 104, 8) == 0 { return mimi_buffer_empty() as *ModuleDeclarationNode }
+    node := storage.last as *ModuleDeclarationNode
+    node.kind = kind
+    node.is_public = is_public
+    node.start = first.1 + offset
+    node.end = end + offset
+    node.name_start = name.1 + offset
+    node.name_end = name.2 + offset
+    node.path_start = path_start
+    node.path_end = path_end
+    node.binding = binding
+    node.function = function
+    node.struct_node = struct_node
+    node.enum_node = enum_node
+    node.next = mimi_buffer_empty() as *ModuleDeclarationNode
+    node
+}
+
+source_name_equals :: fn (source : []u8, start : u64, end : u64, expected : []u8) bool {
+    if end - start != expected.len { return false }
+    index : u64 = 0
+    while index < expected.len {
+        if source[start + index] != expected[index] { return false }
+        index = index + 1
+    }
+    true
+}
+
+shift_function_contents :: fn (function : *FunctionNode, offset : u64) void {
+    parameter := function.parameters
+    while !parameter_list_is_null(parameter) {
+        parameter.name_start = parameter.name_start + offset
+        parameter.name_end = parameter.name_end + offset
+        shift_expression_tree(parameter.data_type, offset)
+        parameter = parameter.next
+    }
+    shift_expression_tree(function.return_type, offset)
+    shift_block_span(function.body, offset)
+}
+
+shift_binding_node :: fn (binding : *BindingNode, offset : u64) void {
+    binding.start = binding.start + offset
+    binding.end = binding.end + offset
+    binding.name_start = binding.name_start + offset
+    binding.name_end = binding.name_end + offset
+    if !expression_is_null(binding.data_type) { shift_expression_tree(binding.data_type, offset) }
+    shift_expression_tree(binding.initializer, offset)
+}
+
+shift_generic_parameters :: fn (parameters : *GenericParameterList, offset : u64) void {
+    if generic_parameter_list_is_null(parameters) { return }
+    parameters.start = parameters.start + offset
+    parameters.end = parameters.end + offset
+    current := parameters.first
+    while current != (mimi_buffer_empty() as *GenericParameterNode) {
+        current.start = current.start + offset
+        current.end = current.end + offset
+        current = current.next
+    }
+}
+
+shift_struct_declaration :: fn (node : *StructNode, offset : u64) void {
+    node.start = node.start + offset
+    node.end = node.end + offset
+    shift_generic_parameters(node.parameters, offset)
+    field := node.fields
+    while field != (mimi_buffer_empty() as *StructFieldNode) {
+        field.start = field.start + offset
+        field.end = field.end + offset
+        field.name_start = field.name_start + offset
+        field.name_end = field.name_end + offset
+        shift_expression_tree(field.data_type, offset)
+        if !expression_is_null(field.default_value) { shift_expression_tree(field.default_value, offset) }
+        field = field.next
+    }
+    method := node.methods
+    while method != (mimi_buffer_empty() as *StructMethodNode) {
+        method.start = method.start + offset
+        method.end = method.end + offset
+        method.name_start = method.name_start + offset
+        method.name_end = method.name_end + offset
+        method.function.start = method.function.start + offset
+        method.function.end = method.function.end + offset
+        method.function.name_start = method.function.name_start + offset
+        method.function.name_end = method.function.name_end + offset
+        shift_function_contents(method.function, offset)
+        method = method.next
+    }
+}
+
+shift_enum_declaration :: fn (node : *EnumNode, offset : u64) void {
+    node.start = node.start + offset
+    node.end = node.end + offset
+    shift_generic_parameters(node.parameters, offset)
+    variant := node.variants
+    while variant != (mimi_buffer_empty() as *EnumVariantNode) {
+        variant.start = variant.start + offset
+        variant.end = variant.end + offset
+        variant.name_start = variant.name_start + offset
+        variant.name_end = variant.name_end + offset
+        if !expression_is_null(variant.payload_type) { shift_expression_tree(variant.payload_type, offset) }
+        variant = variant.next
+    }
 }
 
 pub parse_function_definition :: fn (source : []u8, storage : *ExpressionArena) *FunctionNode {

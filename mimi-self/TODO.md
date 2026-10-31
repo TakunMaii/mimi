@@ -49,8 +49,9 @@ two consecutive stages.
   properties, including combining marks and all scripts.
 - [x] Port the lexer, including UTF-8 identifiers, exact spans, escape
   validation, and useful lexical errors to the self-hosted compiler API.
-- [ ] Implement the parser and AST for declarations, types, expressions,
-  statements, imports, generics, and control flow.
+- [x] Parse the supported declaration, type, expression, statement, import,
+  generic, and control-flow syntax into source-aware AST nodes.
+- [ ] Parse `extern` functions and C define/import declarations into module ASTs.
 - [x] Parse grouped unary and binary expressions with operator precedence into
   arena-backed AST nodes.
 - [x] Parse chained named and numeric member access in expressions.
@@ -74,6 +75,8 @@ two consecutive stages.
 - [x] Parse enum variants and optional payload types into declaration nodes.
 - [x] Parse struct fields, defaults, mutability, generic parameters, and methods;
   reject duplicate struct fields, methods, and enum variants.
+- [x] Compose module declarations for bindings, functions, structs, enums,
+  `@import`, and `@cimport`, including public declarations.
 - [x] Parse tuple destructuring names with atomic tuple literal initializers.
 - [x] Build function definition nodes with balanced block source spans.
 - [x] Reject duplicate function parameter names.

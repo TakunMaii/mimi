@@ -206,6 +206,18 @@ main :: fn () i32 {
     if method_struct.methods.function.return_type.kind != 270 || method_struct.methods.function.body.statements.kind != 303 { return 320 }
     duplicate_struct_method := lexer.parse_struct_declaration("struct { get() :: fn () i32 { 1 } get() :: fn () i32 { 2 } }", &storage)
     if !lexer.struct_node_is_null(duplicate_struct_method) { return 321 }
+    module_source := "math :: @import(\"math.mi\") c :: @cimport(\"stdio.h\") Pair :: struct <T> { value : T } add :: fn (left : i32, right : i32) i32 { left + right } answer : *[4]i32 = null main :: fn () i32 { 0 }"
+    parsed_module := lexer.parse_module(module_source, &storage)
+    if lexer.module_node_is_null(parsed_module) || parsed_module.declaration_count != 6 { return 322 }
+    if parsed_module.declarations.kind != 4 || parsed_module.declarations.name_start != 0 || parsed_module.declarations.path_start != 16 { return 323 }
+    if parsed_module.declarations.next.kind != 6 || parsed_module.declarations.next.path_end != 51 { return 324 }
+    if parsed_module.declarations.next.next.kind != 2 || parsed_module.declarations.next.next.struct_node.field_count != 1 { return 325 }
+    if parsed_module.declarations.next.next.next.kind != 1 || parsed_module.declarations.next.next.next.function.parameters.name_start != 107 { return 326 }
+    if parsed_module.declarations.next.next.next.next.kind != 5 || parsed_module.declarations.next.next.next.next.binding.data_type.kind != 271 { return 327 }
+    if parsed_module.declarations.next.next.next.next.next.kind != 1 || parsed_module.end != module_source.len { return 328 }
+    public_module := lexer.parse_module("pub answer :: 42", &storage)
+    if lexer.module_node_is_null(public_module) || public_module.declarations.kind != 5 || !public_module.declarations.is_public { return 329 }
+    if public_module.declarations.start != 0 || public_module.declarations.name_start != 4 || public_module.declarations.binding.initializer.start != 13 { return 330 }
     malformed_struct_field := lexer.parse_struct_declaration("struct { item : }", &storage)
     if !lexer.struct_node_is_null(malformed_struct_field) { return 259 }
     duplicate_struct_field := lexer.parse_struct_declaration("struct { item : i32, item : bool, }", &storage)
