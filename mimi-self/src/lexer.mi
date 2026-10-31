@@ -562,7 +562,30 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                         if stacks.node_count == 0 { return mimi_buffer_empty() as *ExprNode }
                         stacks.operators[stacks.operator_count] = ExprOperator { kind = 91, start = token.1, base_count = stacks.node_count, argument_count = 0 }
                         stacks.operator_count = stacks.operator_count + 1
+                        expecting_operand = true
                     } else {
+                        if token.0 == 58 || token.0 == 135 {
+                            found_index := false
+                            while stacks.operator_count > 0 && !found_index {
+                                top := stacks.operators[stacks.operator_count - 1]
+                                if top.kind == 91 {
+                                    found_index = true
+                                } else {
+                                    if top.kind == 40 || top.kind == 300 || !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
+                                }
+                            }
+                            if !found_index || stacks.operators[stacks.operator_count - 1].argument_count != 0 { return mimi_buffer_empty() as *ExprNode }
+                            marker := stacks.operators[stacks.operator_count - 1]
+                            if expecting_operand {
+                                if stacks.node_count != marker.base_count { return mimi_buffer_empty() as *ExprNode }
+                                marker.argument_count = 1
+                            } else {
+                                if stacks.node_count != marker.base_count + 1 { return mimi_buffer_empty() as *ExprNode }
+                                marker.argument_count = 3
+                            }
+                            stacks.operators[stacks.operator_count - 1] = marker
+                            expecting_operand = true
+                        } else {
                         if token.0 == 44 {
                             if expecting_operand || stacks.operator_count == 0 { return mimi_buffer_empty() as *ExprNode }
                             while stacks.operator_count > 0 && stacks.operators[stacks.operator_count - 1].kind != 300 {
@@ -589,25 +612,51 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                             expecting_operand = true
                         } else {
                         if token.0 == 93 {
-                            if expecting_operand { return mimi_buffer_empty() as *ExprNode }
                             found_index := false
+                            marker := ExprOperator { kind = 0, start = 0, base_count = 0, argument_count = 0 }
                             while stacks.operator_count > 0 && !found_index {
                                 top := stacks.operators[stacks.operator_count - 1]
                                 if top.kind == 91 {
+                                    marker = top
                                     stacks.operator_count = stacks.operator_count - 1
                                     found_index = true
                                 } else {
-                                    if top.kind == 40 || !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
+                                    if top.kind == 40 || top.kind == 300 || !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
                                 }
                             }
-                            if !found_index || stacks.node_count < 2 { return mimi_buffer_empty() as *ExprNode }
-                            index_node := stacks.nodes[stacks.node_count - 1]
-                            receiver := stacks.nodes[stacks.node_count - 2]
-                            stacks.node_count = stacks.node_count - 2
-                            access := allocate_expr(storage, 261, receiver.start, token.2, receiver, index_node)
-                            if expression_is_null(access) { return access }
-                            stacks.nodes[stacks.node_count] = access
-                            stacks.node_count = stacks.node_count + 1
+                            if !found_index || marker.base_count == 0 { return mimi_buffer_empty() as *ExprNode }
+                            if marker.argument_count == 0 {
+                                if expecting_operand || stacks.node_count != marker.base_count + 1 { return mimi_buffer_empty() as *ExprNode }
+                                index_node := stacks.nodes[marker.base_count]
+                                receiver := stacks.nodes[marker.base_count - 1]
+                                access := allocate_expr(storage, 261, receiver.start, token.2, receiver, index_node)
+                                if expression_is_null(access) { return access }
+                                stacks.node_count = marker.base_count
+                                stacks.nodes[stacks.node_count - 1] = access
+                            } else {
+                                has_start := marker.argument_count == 3
+                                has_end := !expecting_operand
+                                expected_count := marker.base_count
+                                if has_start { expected_count = expected_count + 1 }
+                                if has_end { expected_count = expected_count + 1 }
+                                if stacks.node_count != expected_count { return mimi_buffer_empty() as *ExprNode }
+                                start_node : *ExprNode = mimi_buffer_empty() as *ExprNode
+                                end_node : *ExprNode = mimi_buffer_empty() as *ExprNode
+                                if has_start { start_node = stacks.nodes[marker.base_count] }
+                                if has_end {
+                                    end_index := marker.base_count
+                                    if has_start { end_index = end_index + 1 }
+                                    end_node = stacks.nodes[end_index]
+                                }
+                                receiver := stacks.nodes[marker.base_count - 1]
+                                bounds := allocate_expr(storage, 265, token.1, token.1, start_node, end_node)
+                                if expression_is_null(bounds) { return bounds }
+                                slice := allocate_expr(storage, 264, receiver.start, token.2, receiver, bounds)
+                                if expression_is_null(slice) { return slice }
+                                stacks.node_count = marker.base_count - 1
+                                stacks.nodes[stacks.node_count] = slice
+                                stacks.node_count = stacks.node_count + 1
+                            }
                             expecting_operand = false
                         } else {
                             if token.0 == 41 && stacks.operator_count > 0 && stacks.operators[stacks.operator_count - 1].kind == 300 {
@@ -681,6 +730,7 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                 }
             }
         }
+    }
     }
     }
 

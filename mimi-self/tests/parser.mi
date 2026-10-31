@@ -69,6 +69,23 @@ main :: fn () i32 {
     if !lexer.expression_is_null(repeated_argument_comma) { return 38 }
     mismatched_call_delimiter := lexer.parse_expression("f(1]", &storage)
     if !lexer.expression_is_null(mismatched_call_delimiter) { return 39 }
+    bounded_slice := lexer.parse_expression("items[1 + 2:limit * 2]", &storage)
+    if lexer.expression_is_null(bounded_slice) || bounded_slice.kind != 264 { return 40 }
+    if bounded_slice.right.kind != 265 || bounded_slice.right.left.kind != 43 || bounded_slice.right.right.kind != 42 { return 41 }
+    range_slice := lexer.parse_expression("items[2..5]", &storage)
+    if lexer.expression_is_null(range_slice) || range_slice.kind != 264 || range_slice.right.left.kind != 2 || range_slice.right.right.kind != 2 { return 42 }
+    open_slices := lexer.parse_expression("items[..5]", &storage)
+    if lexer.expression_is_null(open_slices) || !lexer.expression_is_null(open_slices.right.left) || open_slices.right.right.kind != 2 { return 43 }
+    open_slices = lexer.parse_expression("items[2:]", &storage)
+    if lexer.expression_is_null(open_slices) || open_slices.right.left.kind != 2 || !lexer.expression_is_null(open_slices.right.right) { return 44 }
+    open_slices = lexer.parse_expression("items[..]", &storage)
+    if lexer.expression_is_null(open_slices) || !lexer.expression_is_null(open_slices.right.left) || !lexer.expression_is_null(open_slices.right.right) { return 45 }
+    chained_slice := lexer.parse_expression("items[1..4][0]", &storage)
+    if lexer.expression_is_null(chained_slice) || chained_slice.kind != 261 || chained_slice.left.kind != 264 { return 46 }
+    empty_index := lexer.parse_expression("items[]", &storage)
+    if !lexer.expression_is_null(empty_index) { return 47 }
+    duplicate_slice_separator := lexer.parse_expression("items[1:2:3]", &storage)
+    if !lexer.expression_is_null(duplicate_slice_separator) { return 48 }
     missing_index := lexer.parse_expression("items[]", &storage)
     if !lexer.expression_is_null(missing_index) { return 25 }
     unclosed_index := lexer.parse_expression("items[1", &storage)

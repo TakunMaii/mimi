@@ -15,7 +15,7 @@ the Python suite covers it through the self-hosted compiler.
 | Source spans and diagnostics | Supported | Span records and source line/caret rendering | Python source model integration test |
 | Declarations, functions, modules | Supported | Not implemented | Pending |
 | Scalar, pointer, array, slice, tuple, function types | Supported | Not implemented | Pending |
-| Expressions, casts, calls, member/index/slice access | Supported | Grouped unary/binary expressions with precedence, member access, indexing, and nested calls; casts/slices pending | `tests/parser.mi` |
+| Expressions, casts, calls, member/index/slice access | Supported | Grouped unary/binary expressions with precedence, member access, indexing, slices, and nested calls; casts pending | `tests/parser.mi` |
 | If/match, loops, ranges, break/continue, defer | Supported | Not implemented | Pending |
 | Structs, enums, generics, closures | Supported | Not implemented | Pending |
 | Name resolution and type checking | Supported | Not implemented | Pending |

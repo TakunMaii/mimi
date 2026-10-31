@@ -90,10 +90,10 @@ UTF-8 sequences, classifies common errors, returns token/error spans together,
 and handles member-number/decimal boundaries. Its Unicode identifier ranges
 are still approximate. An
 arena-backed expression parser now handles atom, prefix, binary, grouped,
-member, indexed, and call forms with precedence; declaration, type, slice,
+member, indexed, sliced, and call forms with precedence; declaration, type,
 and statement parsing remain open. The parser currently lives alongside the
 lexer because stage0 loses imported aliases inside imported module function
 bodies.
 
-Next, extend expression parsing with slice access, then parse declarations,
-types, and statements before name resolution and type checking.
+Next, parse declarations, types, and statements before name resolution and
+type checking.
