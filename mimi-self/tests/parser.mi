@@ -104,6 +104,14 @@ main :: fn () i32 {
     if !lexer.if_node_is_null(missing_if_body) { return 206 }
     trailing_if_tokens := lexer.parse_if_statement("if ready {} extra", &storage)
     if !lexer.if_node_is_null(trailing_if_tokens) { return 207 }
+    if_let_source := "if some(value) := option { value } else { 0 }"
+    if_let_node := lexer.parse_if_let_statement(if_let_source, &storage)
+    if lexer.if_let_node_is_null(if_let_node) || if_let_node.variant_start != 3 || if_let_node.variant_end != 7 { return 237 }
+    if if_let_node.binding_start != 8 || if_let_node.binding_end != 13 || if_let_node.value.kind != 1 { return 238 }
+    if if_let_node.value.start != 17 || if_let_node.then_branch.start != 24 || if_let_node.else_branch.start != 37 { return 239 }
+    if if_let_node.end != if_let_source.len { return 240 }
+    invalid_if_let := lexer.parse_if_let_statement("if some(value) option {}", &storage)
+    if !lexer.if_let_node_is_null(invalid_if_let) { return 241 }
     else_if_source := "if first { one } else if second { two } else { three }"
     else_if_node := lexer.parse_if_statement(else_if_source, &storage)
     if lexer.if_node_is_null(else_if_node) || lexer.if_node_is_null(else_if_node.else_if) { return 222 }

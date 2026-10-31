@@ -68,6 +68,7 @@ two consecutive stages.
 - [x] Parse collection and integer-range `for` headers with body spans.
 - [x] Parse plain `if/else` expressions into expression nodes.
 - [x] Parse match values, variant arms, optional bindings, and result spans.
+- [x] Parse enum `if let` variant tests with optional bindings.
 - [x] Parse tuple destructuring names with atomic tuple literal initializers.
 - [x] Build function definition nodes with balanced block source spans.
 - [ ] Validate generic function type parameters and parse statement blocks.

@@ -726,6 +726,18 @@ pub MatchNode :: struct {
     arms : *MatchArmNode,
 }
 
+pub IfLetNode :: struct {
+    start : u64,
+    end : u64,
+    variant_start : u64,
+    variant_end : u64,
+    binding_start : u64,
+    binding_end : u64,
+    value : *ExprNode,
+    then_branch : *BlockNode,
+    else_branch : *BlockNode,
+}
+
 pub FunctionHeader :: struct {
     start : u64,
     end : u64,
@@ -1194,6 +1206,90 @@ pub parse_if_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprN
     statement := parse_if_statement(source, storage)
     if if_node_is_null(statement) { return mimi_buffer_empty() as *ExprNode }
     parse_if_expression_node(statement, storage)
+}
+
+pub if_let_node_is_null :: fn (node : *IfLetNode) bool {
+    node == (mimi_buffer_empty() as *IfLetNode)
+}
+
+pub parse_if_let_statement :: fn (source : []u8, storage : *ExpressionArena) *IfLetNode {
+    keyword := next_token(source, 0)
+    if keyword.0 != 164 { return mimi_buffer_empty() as *IfLetNode }
+    variant := next_token(source, keyword.2)
+    if variant.0 != 1 { return mimi_buffer_empty() as *IfLetNode }
+    cursor := variant.2
+    binding_start : u64 = 0
+    binding_end : u64 = 0
+    next := next_token(source, cursor)
+    if next.0 == 40 {
+        binding := next_token(source, next.2)
+        close := next_token(source, binding.2)
+        if binding.0 != 1 || close.0 != 41 { return mimi_buffer_empty() as *IfLetNode }
+        binding_start = binding.1
+        binding_end = binding.2
+        cursor = close.2
+    }
+    colon := next_token(source, cursor)
+    equal := next_token(source, colon.2)
+    if colon.0 != 58 || equal.0 != 61 { return mimi_buffer_empty() as *IfLetNode }
+    cursor = equal.2
+    paren_depth : u64 = 0
+    bracket_depth : u64 = 0
+    block_start := source.len
+    found_block := false
+    while cursor < source.len && !found_block {
+        token := next_token(source, cursor)
+        if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *IfLetNode }
+        cursor = token.2
+        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
+            if token.0 == 41 {
+                if paren_depth == 0 { return mimi_buffer_empty() as *IfLetNode }
+                paren_depth = paren_depth - 1
+            } else {
+                if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
+                    if token.0 == 93 {
+                        if bracket_depth == 0 { return mimi_buffer_empty() as *IfLetNode }
+                        bracket_depth = bracket_depth - 1
+                    } else {
+                        if token.0 == 123 && paren_depth == 0 && bracket_depth == 0 {
+                            block_start = token.1
+                            found_block = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !found_block || block_start <= equal.2 { return mimi_buffer_empty() as *IfLetNode }
+    value := parse_expression(source[equal.2:block_start], storage)
+    if expression_is_null(value) { return mimi_buffer_empty() as *IfLetNode }
+    value.start = value.start + equal.2
+    value.end = value.end + equal.2
+    then_branch := parse_block_span(source[block_start:source.len], block_start, storage)
+    if block_node_is_null(then_branch) { return mimi_buffer_empty() as *IfLetNode }
+    end := then_branch.end
+    else_branch : *BlockNode = mimi_buffer_empty() as *BlockNode
+    remainder := next_token(source, end)
+    if remainder.0 != 0 {
+        if remainder.0 != 165 { return mimi_buffer_empty() as *IfLetNode }
+        opening := next_token(source, remainder.2)
+        if opening.0 != 123 { return mimi_buffer_empty() as *IfLetNode }
+        else_branch = parse_block_span(source[opening.1:source.len], opening.1, storage)
+        if block_node_is_null(else_branch) || next_token(source, else_branch.end).0 != 0 { return mimi_buffer_empty() as *IfLetNode }
+        end = else_branch.end
+    }
+    if mimi_arena_allocate(storage, 56, 8) == 0 { return mimi_buffer_empty() as *IfLetNode }
+    node := storage.last as *IfLetNode
+    node.start = keyword.1
+    node.end = end
+    node.variant_start = variant.1
+    node.variant_end = variant.2
+    node.binding_start = binding_start
+    node.binding_end = binding_end
+    node.value = value
+    node.then_branch = then_branch
+    node.else_branch = else_branch
+    node
 }
 
 parse_if_expression_node :: fn (statement : *IfNode, storage : *ExpressionArena) *ExprNode {
