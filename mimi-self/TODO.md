@@ -120,8 +120,9 @@ diagnostic rendering, and iterative module import traversal are in place. The
 T2 lexer returns token kinds and byte spans, decodes supported escapes, validates
 UTF-8 sequences, classifies common errors, returns token/error spans together,
 and handles member-number/decimal boundaries. Unicode identifier checks use
-complete Rust Alphabetic/Alphanumeric property tables. An arena-backed expression parser handles atom, prefix,
-binary, grouped, member, indexed, sliced, and call forms with precedence.
+complete Rust Alphabetic/Alphanumeric property tables. An arena-backed
+expression parser handles atom, prefix, binary, grouped, member, indexed,
+sliced, and call forms with precedence.
 Number/string/boolean atoms retain source spans. Named, pointer, slice,
 fixed-array, nested tuple, nested function, and generic application type syntax
 is parsed. Binding headers and declaration AST nodes preserve names, optional
@@ -130,10 +131,11 @@ have source-aware nodes; callback types are supported in parameter lists.
 Generic parameter lists, enum variant declarations with payload types, and
 struct field declarations with defaults/mutability are parsed; struct methods
 remain pending.
-Function definitions have balanced body spans. `parse_statement_block`
-composes binding, tuple destructuring, assignment, transfer, defer, expression, if/if-let, loop,
-for, and match statements into source-aware linked lists; nested control-flow
-and defer blocks are recursively composed.
+Function definitions contain source-aware body statement lists.
+`parse_statement_block` composes binding, tuple destructuring, assignment,
+transfer, defer, expression, if/if-let, loop, for, and match statements into
+source-aware linked lists; nested control-flow and defer blocks are recursively
+composed.
 Tuple literals accept arbitrary expressions and nested calls; simple-name
 struct literal fields and nested values are also parsed.
 Return/break/continue statement nodes have dedicated parsers. Simple
@@ -143,13 +145,15 @@ destructuring is represented by a dedicated name-list/value node; tuple literal
 initializer arity is checked, while element types require semantic analysis.
 Scalar, pointer, generic, and tuple casts bind to the preceding operand in
 unparenthesized binary expressions.
-Generic declarations and parameter validation remain open. `if` statements and expressions retain conditions and
-then/else-if/else branch spans. Match nodes preserve the scrutinee and variant
-arm/binding/result spans. Enum exhaustiveness and semantic validation are not
+Generic declarations reject duplicate names, and function parameter lists
+reject duplicate parameter names; checking type-parameter use remains open.
+`if` statements and expressions retain conditions and then/else-if/else branch
+spans. Match nodes preserve the scrutinee and variant arm/binding/result spans
+and reject duplicate arms. Enum exhaustiveness and semantic validation are not
 implemented.
 While/loop/do-while and collection/range for loops retain their header and
-body spans. Name
-resolution and type checking remain open. The parser currently lives alongside
+recursively composed bodies. Name resolution and type checking remain open.
+The parser currently lives alongside
 the lexer because stage0 loses imported aliases inside imported module function
 bodies.
 
