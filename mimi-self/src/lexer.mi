@@ -58,7 +58,7 @@ pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
                         if (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || byte == 95 || byte >= 128 {
                             if byte >= 128 {
                                 width := utf8_width(source, index)
-                                if width == 0 { return (255, index, index) }
+                                if width == 0 || !utf8_identifier_start(source, index, width) { return (255, index, index) }
                                 index = index + width as u64
                             } else {
                                 index = index + 1
@@ -231,6 +231,38 @@ utf8_width :: fn (source : []u8, index : u64) u8 {
         return 4
     }
     0
+}
+
+utf8_identifier_start :: fn (source : []u8, index : u64, width : u8) bool {
+    codepoint : u64 = 0
+    if width == 2 {
+        codepoint = (source[index] as u64 % 32) * 64 + source[index + 1] as u64 % 64
+    } else {
+        if width == 3 {
+            codepoint = (source[index] as u64 % 16) * 4096 + (source[index + 1] as u64 % 64) * 64 + source[index + 2] as u64 % 64
+        } else {
+            if width == 4 {
+                codepoint = (source[index] as u64 % 8) * 262144 + (source[index + 1] as u64 % 64) * 4096 + (source[index + 2] as u64 % 64) * 64 + source[index + 3] as u64 % 64
+            } else {
+                return false
+            }
+        }
+    }
+    if codepoint >= 192 && codepoint <= 767 { return codepoint != 215 && codepoint != 247 }
+    if codepoint >= 880 && codepoint <= 1327 { return true }
+    if codepoint >= 1329 && codepoint <= 1416 { return true }
+    if codepoint >= 1488 && codepoint <= 1514 { return true }
+    if codepoint >= 1568 && codepoint <= 1610 { return true }
+    if codepoint >= 1646 && codepoint <= 1747 { return true }
+    if codepoint >= 2308 && codepoint <= 8191 { return true }
+    if codepoint >= 11264 && codepoint <= 11775 { return true }
+    if codepoint >= 12353 && codepoint <= 12543 { return true }
+    if codepoint >= 12549 && codepoint <= 12591 { return true }
+    if codepoint >= 13312 && codepoint <= 40959 { return true }
+    if codepoint >= 44032 && codepoint <= 55203 { return true }
+    if codepoint >= 63744 && codepoint <= 64255 { return true }
+    if codepoint >= 65536 && codepoint <= 126975 { return true }
+    false
 }
 
 pub decoded_string_len :: fn (source : []u8, start : u64, end : u64) u64 {

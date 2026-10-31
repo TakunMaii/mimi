@@ -39,6 +39,9 @@ two consecutive stages.
 - [x] Decode the supported string escapes and reject malformed UTF-8 in
   identifiers.
 - [x] Classify common lexer failures with stable error codes and messages.
+- [x] Reject Unicode symbol codepoints such as emoji at identifier start.
+- [ ] Match Rust's complete Unicode Alphabetic/Alphanumeric identifier
+  properties, including combining marks and all scripts.
 - [ ] Port the lexer, including UTF-8 identifiers, exact spans, escape
   validation, and useful lexical errors to the self-hosted compiler API.
 - [ ] Implement the parser and AST for declarations, types, expressions,

@@ -49,6 +49,7 @@ main :: fn () i32 {
     if lexer.decoded_string_byte("\"a\\nb\"", escaped.1, escaped.2, 1) != 10 { return 46 }
     if lexer.decoded_string_byte("\"a\\nb\"", escaped.1, escaped.2, 2) != 98 { return 47 }
     if lexer.next_token([240, 128, 128, 128], 0).0 != 255 { return 48 }
+    if lexer.next_token([240, 159, 152, 128], 0).0 != 255 { return 59 }
     if lexer.token_count("") != 0 { return 1 }
     if lexer.token_count("alpha_2 := 123") != 4 { return 2 }
     if lexer.token_count("f :: fn (x : i32) bool { x >= 1 && x != 2 }") != 19 { return 3 }
