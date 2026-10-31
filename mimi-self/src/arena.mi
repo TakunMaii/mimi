@@ -1,0 +1,30 @@
+extern mimi_arena_empty : fn() *void
+extern mimi_arena_allocate : fn(arena : *Arena, size : u64, alignment : u64) i32
+extern mimi_arena_release : fn(arena : *Arena) void
+extern mimi_arena_is_empty : fn(arena : *Arena) i32
+
+pub Arena :: struct {
+    head : *void,
+    last : *void,
+}
+
+pub init :: fn () Arena {
+    empty := mimi_arena_empty()
+    Arena { head = empty, last = empty }
+}
+
+pub allocate :: fn (arena : *Arena, size : u64, alignment : u64) bool {
+    mimi_arena_allocate(arena, size, alignment) != 0
+}
+
+pub last_byte :: fn (arena : *Arena) *u8 {
+    arena.last as *u8
+}
+
+pub release :: fn (arena : *Arena) void {
+    mimi_arena_release(arena)
+}
+
+pub is_empty :: fn (arena : *Arena) bool {
+    mimi_arena_is_empty(arena) != 0
+}

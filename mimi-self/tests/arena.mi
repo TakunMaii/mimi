@@ -1,0 +1,17 @@
+arena_lib :: @import("../src/arena.mi")
+
+main :: fn () i32 {
+    arena := arena_lib.init()
+    if !arena_lib.allocate(&arena, 8, 8) { return 1 }
+    first := arena_lib.last_byte(&arena)
+    first[0] = 42
+    first[7] = 99
+    if !arena_lib.allocate(&arena, 1024, 64) { return 2 }
+    second := arena_lib.last_byte(&arena)
+    second[0] = 17
+    if first[0] != 42 || first[7] != 99 || second[0] != 17 { return 3 }
+    if arena_lib.allocate(&arena, 8, 3) { return 4 }
+    arena_lib.release(&arena)
+    if !arena_lib.is_empty(&arena) { return 5 }
+    0
+}

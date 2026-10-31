@@ -9,6 +9,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 SELF = ROOT / "mimi-self"
+RUNTIME = SELF / "runtime.c"
 
 
 def run(
@@ -44,7 +45,10 @@ def test_compile_diagnostics(compiler: Path) -> None:
             output_path = directory / name
             input_path.write_text(source, encoding="utf-8")
             result = run(
-                [str(compiler), "build", str(input_path), "-o", str(output_path)],
+                [
+                    str(compiler), "build", str(input_path), "-o", str(output_path),
+                    "--c-source", str(RUNTIME),
+                ],
                 expected_status=1,
             )
             if expected_diagnostic not in result.stderr:
@@ -52,6 +56,119 @@ def test_compile_diagnostics(compiler: Path) -> None:
                     f"{name}: expected {expected_diagnostic!r} in stderr, "
                     f"got:\n{result.stderr}"
                 )
+
+
+def mimi_quote(value: Path) -> str:
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def test_file_io(compiler: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="mimi-self-files-") as temporary:
+        directory = Path(temporary)
+        source_path = directory / "file-io.mi"
+        input_path = directory / "input.bin"
+        output_path = directory / "output.bin"
+        executable = directory / "file-io"
+        expected = b"Mimi\x00self-hosting\xff"
+        input_path.write_bytes(expected)
+        module_path = SELF / "src" / "bytes.mi"
+        source_path.write_text(
+            f"""bytes :: @import({mimi_quote(module_path)})
+main :: fn () i32 {{
+    buffer := bytes.init()
+    if !bytes.read_file({mimi_quote(input_path)}, &buffer) {{ return 1 }}
+    if buffer.len != {len(expected)} || buffer.data[0] != 77 || buffer.data[4] != 0 || buffer.data[17] != 255 {{ return 2 }}
+    if !bytes.write_file({mimi_quote(output_path)}, &buffer) {{ return 3 }}
+    bytes.release(&buffer)
+    0
+}}
+""",
+            encoding="utf-8",
+        )
+        run(
+            [
+                str(compiler), "build", str(source_path), "-o", str(executable),
+                "--c-source", str(RUNTIME),
+            ]
+        )
+        run([str(executable)])
+        if output_path.read_bytes() != expected:
+            raise AssertionError("Mimi file write did not preserve the input bytes")
+
+
+def test_path_api(compiler: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="mimi-self-paths-") as temporary:
+        directory = Path(temporary) / "created directory"
+        file_path = directory / "data file.bin"
+        missing_path = directory / "missing"
+        directory_text = mimi_quote(directory)
+        file_text = mimi_quote(file_path)
+        missing_text = mimi_quote(missing_path)
+        source_path = Path(temporary) / "paths.mi"
+        executable = Path(temporary) / "paths"
+        module_path = SELF / "src" / "path.mi"
+        source_path.write_text(
+            f'''path :: @import({mimi_quote(module_path)})
+bytes :: @import({mimi_quote(SELF / "src" / "bytes.mi")})
+main :: fn () i32 {{
+    if path.exists({directory_text}) {{ return 1 }}
+    if !path.create_directory({directory_text}) {{ return 2 }}
+    if !path.exists({directory_text}) || !path.is_directory({directory_text}) {{ return 3 }}
+    if path.is_directory({missing_text}) {{ return 4 }}
+    buffer := bytes.init()
+    if !bytes.push(&buffer, 65) || !bytes.push(&buffer, 0) || !bytes.push(&buffer, 255) {{ return 5 }}
+    if !bytes.write_file({file_text}, &buffer) {{ return 6 }}
+    bytes.release(&buffer)
+    if !path.exists({file_text}) || path.is_directory({file_text}) {{ return 7 }}
+    size : u64 = 0
+    if !path.file_size({file_text}, &size) || size != 3 {{ return 8 }}
+    if path.file_size({missing_text}, &size) {{ return 9 }}
+    0
+}}
+''',
+            encoding="utf-8",
+        )
+        run(
+            [
+                str(compiler), "build", str(source_path), "-o", str(executable),
+                "--c-source", str(RUNTIME),
+            ]
+        )
+        run([str(executable)])
+
+
+def test_source_model(compiler: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="mimi-self-source-") as temporary:
+        directory = Path(temporary)
+        input_path = directory / "source input.mi"
+        source_path = directory / "source-model.mi"
+        executable = directory / "source-model"
+        input_path.write_bytes(b"alpha\n\x00x\n")
+        module_path = mimi_quote(SELF / "src" / "source.mi")
+        source_path.write_text(
+            f'''source :: @import({module_path})
+main :: fn () i32 {{
+    loaded := source.init()
+    if !source.load({mimi_quote(input_path)}, &loaded) {{ return 1 }}
+    if loaded.contents.len != 9 {{ return 2 }}
+    if loaded.contents.data[0] != 97 || loaded.contents.data[8] != 10 {{ return 3 }}
+    span := source.Span {{ start = 2, end = 5 }}
+    if span.start != 2 || span.end != 5 {{ return 4 }}
+    diagnostic := source.Diagnostic {{ code = "E_TEST", message = "sample", span = span }}
+    if diagnostic.span.end - diagnostic.span.start != 3 {{ return 5 }}
+    source.release(&loaded)
+    0
+}}
+''',
+            encoding="utf-8",
+        )
+        run(
+            [
+                str(compiler), "build", str(source_path), "-o", str(executable),
+                "--c-source", str(RUNTIME),
+            ]
+        )
+        run([str(executable)])
 
 
 def main() -> None:
@@ -69,12 +186,22 @@ def main() -> None:
         compiler = arguments.compiler.resolve()
         if not compiler.is_file():
             parser.error(f"compiler does not exist: {compiler}")
-    fixture = SELF / "tests" / "lexer.mi"
+    fixtures = sorted((SELF / "tests").glob("*.mi"))
     with tempfile.TemporaryDirectory(prefix="mimi-self-") as temporary:
-        executable = Path(temporary) / "lexer-tests"
-        run([str(compiler), "build", str(fixture), "-o", str(executable)])
-        run([str(executable)])
+        directory = Path(temporary)
+        for fixture in fixtures:
+            executable = directory / fixture.stem
+            run(
+                [
+                    str(compiler), "build", str(fixture), "-o", str(executable),
+                    "--c-source", str(RUNTIME),
+                ]
+            )
+            run([str(executable)])
     test_compile_diagnostics(compiler)
+    test_file_io(compiler)
+    test_path_api(compiler)
+    test_source_model(compiler)
     print(f"mimi-self: tests passed with {compiler}")
 
 

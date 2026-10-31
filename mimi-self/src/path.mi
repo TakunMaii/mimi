@@ -1,0 +1,20 @@
+extern mimi_path_exists : fn(path : *u8, path_length : u64) i32
+extern mimi_path_is_directory : fn(path : *u8, path_length : u64) i32
+extern mimi_path_create_directory : fn(path : *u8, path_length : u64) i32
+extern mimi_path_file_size : fn(path : *u8, path_length : u64, size : *u64) i32
+
+pub exists :: fn (path : []u8) bool {
+    mimi_path_exists(path.ptr, path.len) != 0
+}
+
+pub is_directory :: fn (path : []u8) bool {
+    mimi_path_is_directory(path.ptr, path.len) != 0
+}
+
+pub create_directory :: fn (path : []u8) bool {
+    mimi_path_create_directory(path.ptr, path.len) != 0
+}
+
+pub file_size :: fn (path : []u8, size : *u64) bool {
+    mimi_path_file_size(path.ptr, path.len, size) != 0
+}

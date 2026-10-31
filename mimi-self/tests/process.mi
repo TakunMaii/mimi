@@ -1,0 +1,11 @@
+process :: @import("../src/process.mi")
+
+main :: fn () i32 {
+    arguments := process.init()
+    if !process.push(&arguments, "-c") { return 1 }
+    if !process.push(&arguments, "exit 7") { return 2 }
+    result := process.run(&arguments, "/bin/sh")
+    process.release(&arguments)
+    if result != 7 { return 3 }
+    0
+}

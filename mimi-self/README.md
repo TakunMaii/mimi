@@ -13,6 +13,7 @@ python3 mimi-self/test.py
 The same suite accepts an alternate compiler executable with
 `python3 mimi-self/test.py --compiler /path/to/mimi`.
 
-The current milestone is a Mimi implementation of a lexical scanner. It is
-compiled and executed by the Rust compiler. See [TODO.md](TODO.md) for the
-parity roadmap and [FEATURES.md](FEATURES.md) for the feature matrix.
+The current milestone is compiler infrastructure for the self-hosted front
+end: tokenization, reusable containers, file and process APIs, and source
+records. Stage0 is the Rust compiler. See [TODO.md](TODO.md) for the parity
+roadmap and [FEATURES.md](FEATURES.md) for the feature matrix.

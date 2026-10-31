@@ -1,0 +1,18 @@
+bytes :: @import("../src/bytes.mi")
+
+main :: fn () i32 {
+    buffer := bytes.init()
+    if !bytes.push(&buffer, 65) { return 1 }
+    if !bytes.push(&buffer, 66) { return 2 }
+    if !bytes.push(&buffer, 67) { return 3 }
+    if buffer.len != 3 || buffer.data[0] != 65 || buffer.data[1] != 66 || buffer.data[2] != 67 { return 4 }
+    for value in 0..40 {
+        if !bytes.push(&buffer, value as u8) { return 7 }
+    }
+    if buffer.len != 43 || buffer.capacity != 64 || buffer.data[42] != 39 { return 8 }
+    bytes.release(&buffer)
+    if buffer.len != 0 || buffer.capacity != 0 || !buffer.released { return 5 }
+    bytes.release(&buffer)
+    if bytes.push(&buffer, 1) { return 6 }
+    0
+}

@@ -1,0 +1,9 @@
+pub Result :: enum <T, E> {
+    ok(T),
+    err(E),
+}
+
+pub Option :: enum <T> {
+    some(T),
+    none,
+}

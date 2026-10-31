@@ -21,13 +21,13 @@ two consecutive stages.
 
 ## T1: Language support needed by a compiler
 
-- [ ] Add or implement reusable dynamic arrays, byte strings, maps, and
+- [x] Add or implement reusable dynamic arrays, byte strings, maps, and
   arena-style allocation for AST and IR storage.
-- [ ] Provide reliable file, path, directory, and process APIs through a
+- [x] Provide reliable file, path, directory, and process APIs through a
   minimal standard library or a small C runtime.
-- [ ] Add `Result`/`Option` conventions and error propagation suitable for
+- [x] Add `Result`/`Option` conventions and error propagation suitable for
   parser and type-checker code.
-- [ ] Define source file/module loading and diagnostics for the self-hosted
+- [x] Define source file/module loading and diagnostics for the self-hosted
   compiler.
 
 ## T2: Self-hosted front end
@@ -60,8 +60,13 @@ two consecutive stages.
 
 ## Current milestone
 
-Implement a useful Mimi lexer subset and establish the Python-driven
-compile-and-run loop. The scanner now returns token category and byte-span
-tuples, but punctuation and keywords still share broad categories and strings
-are not decoded. Extend token fidelity, then have the parser consume this
-stream.
+T1 compiler infrastructure is in place: byte vectors, a string map, arena
+allocation, file and basic path operations, process execution, generic
+`Result`/`Option` conventions, and source/diagnostic data structures. The
+Python suite builds every fixture with stage0, runs it, and checks file and
+path behavior. Stage0 currently cannot compile functions that construct a
+generic enum from inside the function body; this is tracked as a limitation
+while tests cover generic enum values at local typed declarations.
+
+Next, proceed through T2: improve lexer error reporting, then implement the
+parser and AST before name resolution and type checking.

@@ -1,0 +1,15 @@
+vectors :: @import("../src/vector.mi")
+
+main :: fn () i32 {
+    values := vectors.init()
+    for value in 0..80 {
+        if !vectors.push(&values, value as u64) { return 1 }
+    }
+    result : u64 = 0
+    if !vectors.get(&values, 0, &result) || result != 0 { return 2 }
+    if !vectors.get(&values, 39, &result) || result != 39 { return 3 }
+    if !vectors.get(&values, 79, &result) || result != 79 { return 4 }
+    if vectors.get(&values, 80, &result) { return 5 }
+    vectors.release(&values)
+    0
+}

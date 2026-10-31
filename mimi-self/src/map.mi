@@ -1,0 +1,25 @@
+extern mimi_map_new : fn() *void
+extern mimi_map_set : fn(map : *void, key : *u8, key_length : u64, value : u64) i32
+extern mimi_map_get : fn(map : *void, key : *u8, key_length : u64, value : *u64) i32
+extern mimi_map_release : fn(map : *void) void
+
+pub StringMap :: struct {
+    handle : *void,
+}
+
+pub init :: fn () StringMap {
+    StringMap { handle = mimi_map_new() }
+}
+
+pub set :: fn (map : *StringMap, key : []u8, value : u64) bool {
+    mimi_map_set(map.handle, key.ptr, key.len, value) != 0
+}
+
+pub get :: fn (map : *StringMap, key : []u8, value : *u64) bool {
+    mimi_map_get(map.handle, key.ptr, key.len, value) != 0
+}
+
+pub release :: fn (map : *StringMap) void {
+    mimi_map_release(map.handle)
+    map.handle = mimi_map_new()
+}

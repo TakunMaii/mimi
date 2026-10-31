@@ -56,16 +56,28 @@ pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
                         return (3, start, index)
                     } else {
                         if (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || byte == 95 || byte >= 128 {
-                            index = index + 1
+                            if byte >= 128 {
+                                width := utf8_width(source, index)
+                                if width == 0 { return (255, index, index) }
+                                index = index + width as u64
+                            } else {
+                                index = index + 1
+                            }
                             while index < source.len {
                                 next := source[index]
                                 if (next >= 65 && next <= 90) || (next >= 97 && next <= 122) || (next >= 48 && next <= 57) || next == 95 || next >= 128 {
-                                    index = index + 1
+                                    if next >= 128 {
+                                        width := utf8_width(source, index)
+                                        if width == 0 { return (255, index, index) }
+                                        index = index + width as u64
+                                    } else {
+                                        index = index + 1
+                                    }
                                 } else {
                                     break
                                 }
                             }
-                            return (1, start, index)
+                            return (identifier_kind(source, start, index), start, index)
                         } else {
                             if byte >= 48 && byte <= 57 {
                                 index = index + 1
@@ -80,32 +92,21 @@ pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
                                 }
                                 return (2, start, index)
                             } else {
-                                if byte == 124 && (index + 1 >= source.len || source[index + 1] != 124) {
-                                    return (255, index, index)
+                                next_byte : u8 = 0
+                                if index + 1 < source.len {
+                                    next_byte = source[index + 1]
                                 }
-                                if byte == 61 || byte == 33 || byte == 60 || byte == 62 || byte == 38 || byte == 124 {
-                                    if index + 1 < source.len {
-                                        next := source[index + 1]
-                                        if (byte == 61 && (next == 61 || next == 62)) || (byte == 33 && next == 61) || (byte == 60 && next == 61) || (byte == 62 && next == 61) || (byte == 38 && next == 38) || (byte == 124 && next == 124) {
-                                            index = index + 2
-                                        } else {
-                                            index = index + 1
-                                        }
-                                    } else {
-                                        index = index + 1
-                                    }
+                                kind := paired_kind(byte, next_byte)
+                                if kind != 0 {
+                                    index = index + 2
                                 } else {
-                                    if byte == 46 && index + 1 < source.len && source[index + 1] == 46 {
-                                        index = index + 2
-                                    } else {
-                                        if byte == 58 || byte == 44 || byte == 46 || byte == 43 || byte == 45 || byte == 42 || byte == 47 || byte == 37 || byte == 40 || byte == 41 || byte == 123 || byte == 125 || byte == 91 || byte == 93 || byte == 64 {
-                                            index = index + 1
-                                        } else {
-                                            return (255, index, index)
-                                        }
+                                    kind = single_kind(byte)
+                                    if kind == 0 {
+                                        return (255, index, index)
                                     }
+                                    index = index + 1
                                 }
-                                return (4, start, index)
+                                return (kind, start, index)
                             }
                         }
                     }
@@ -114,6 +115,121 @@ pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
         }
     }
     (0, source.len, source.len)
+}
+
+utf8_width :: fn (source : []u8, index : u64) u8 {
+    first := source[index]
+    if first >= 194 && first <= 223 {
+        if index + 1 >= source.len { return 0 }
+        second := source[index + 1]
+        if second < 128 || second > 191 { return 0 }
+        return 2
+    }
+    if first >= 224 && first <= 239 {
+        if index + 2 >= source.len { return 0 }
+        second := source[index + 1]
+        third := source[index + 2]
+        if second < 128 || second > 191 || third < 128 || third > 191 { return 0 }
+        if first == 224 && second < 160 { return 0 }
+        if first == 237 && second >= 160 { return 0 }
+        return 3
+    }
+    if first >= 240 && first <= 244 {
+        if index + 3 >= source.len { return 0 }
+        second := source[index + 1]
+        third := source[index + 2]
+        fourth := source[index + 3]
+        if second < 128 || second > 191 || third < 128 || third > 191 || fourth < 128 || fourth > 191 { return 0 }
+        if first == 240 && second < 144 { return 0 }
+        if first == 244 && second > 143 { return 0 }
+        return 4
+    }
+    0
+}
+
+pub decoded_string_len :: fn (source : []u8, start : u64, end : u64) u64 {
+    index := start + 1
+    length : u64 = 0
+    while index + 1 < end {
+        if source[index] == 92 {
+            index = index + 2
+        } else {
+            index = index + 1
+        }
+        length = length + 1
+    }
+    length
+}
+
+pub decoded_string_byte :: fn (source : []u8, start : u64, end : u64, position : u64) u8 {
+    index := start + 1
+    decoded : u64 = 0
+    while index + 1 < end {
+        value := source[index]
+        if value == 92 {
+            escaped := source[index + 1]
+            if escaped == 110 { value = 10 } else {
+                if escaped == 114 { value = 13 } else {
+                    if escaped == 116 { value = 9 } else { value = escaped }
+                }
+            }
+            index = index + 2
+        } else {
+            index = index + 1
+        }
+        if decoded == position { return value }
+        decoded = decoded + 1
+    }
+    0
+}
+
+identifier_kind :: fn (source : []u8, start : u64, end : u64) u8 {
+    hash : u64 = 0
+    index := start
+    while index < end {
+        hash = hash * 131 + source[index]
+        index = index + 1
+    }
+    if hash == 262750338 || hash == 302589253 { return 4 }
+    if hash == 13418 { return 5 }
+    if hash == 13472 { return 160 }
+    if hash == 4471061603997 { return 161 }
+    if hash == 228960337 { return 162 }
+    if hash == 32320559965 { return 163 }
+    if hash == 13857 { return 164 }
+    if hash == 228925745 { return 165 }
+    if hash == 1937457 { return 166 }
+    if hash == 3932130972132 { return 167 }
+    if hash == 13211 { return 168 }
+    if hash == 35281108217 { return 169 }
+    if hash == 1765077 { return 170 }
+    if hash == 244713352 { return 171 }
+    if hash == 29678813058 { return 172 }
+    if hash == 13865 { return 173 }
+    if hash == 12822 { return 174 }
+    if hash == 4428069113672 { return 175 }
+    if hash == 29119020707 { return 176 }
+    if hash == 66109462071000619 { return 177 }
+    1
+}
+
+paired_kind :: fn (first : u8, second : u8) u8 {
+    if first == 61 && second == 61 { return 128 }
+    if first == 33 && second == 61 { return 129 }
+    if first == 60 && second == 61 { return 130 }
+    if first == 62 && second == 61 { return 131 }
+    if first == 38 && second == 38 { return 132 }
+    if first == 124 && second == 124 { return 133 }
+    if first == 61 && second == 62 { return 134 }
+    if first == 46 && second == 46 { return 135 }
+    0
+}
+
+single_kind :: fn (byte : u8) u8 {
+    if byte == 44 || byte == 46 || byte == 58 || byte == 61 || byte == 60 || byte == 62 || byte == 38 || byte == 64 || byte == 33 || byte == 43 || byte == 45 || byte == 42 || byte == 47 || byte == 37 || byte == 40 || byte == 41 || byte == 123 || byte == 125 || byte == 91 || byte == 93 {
+        return byte
+    }
+    0
 }
 
 pub token_count :: fn (source : []u8) i32 {

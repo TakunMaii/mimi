@@ -1,0 +1,47 @@
+extern mimi_buffer_empty : fn() *void
+extern mimi_buffer_resize : fn(buffer : *ByteBuffer, size : u64) i32
+extern mimi_buffer_release : fn(buffer : *ByteBuffer) void
+extern mimi_read_file : fn(path : *u8, path_length : u64, buffer : *ByteBuffer) i32
+extern mimi_write_file : fn(path : *u8, path_length : u64, data : *u8, length : u64) i32
+
+pub ByteBuffer :: struct {
+    data : *u8,
+    len : u64,
+    capacity : u64,
+    released : bool,
+}
+
+pub init :: fn () ByteBuffer {
+    ByteBuffer { data = mimi_buffer_empty() as *u8, len = 0, capacity = 0, released = false }
+}
+
+pub push :: fn (buffer : *ByteBuffer, value : u8) bool {
+    if buffer.released { return false }
+    if buffer.len == buffer.capacity {
+        next_capacity : u64 = if buffer.capacity == 0 { 16 } else { buffer.capacity * 2 }
+        if mimi_buffer_resize(buffer, next_capacity) == 0 {
+            return false
+        }
+        buffer.capacity = next_capacity
+    }
+    buffer.data[buffer.len] = value
+    buffer.len = buffer.len + 1
+    true
+}
+
+pub release :: fn (buffer : *ByteBuffer) void {
+    if !buffer.released {
+        mimi_buffer_release(buffer)
+        buffer.len = 0
+        buffer.capacity = 0
+        buffer.released = true
+    }
+}
+
+pub read_file :: fn (path : []u8, buffer : *ByteBuffer) bool {
+    mimi_read_file(path.ptr, path.len, buffer) != 0
+}
+
+pub write_file :: fn (path : []u8, buffer : *ByteBuffer) bool {
+    mimi_write_file(path.ptr, path.len, buffer.data, buffer.len) != 0
+}

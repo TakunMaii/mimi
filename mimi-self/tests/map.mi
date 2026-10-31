@@ -1,0 +1,30 @@
+maps :: @import("../src/map.mi")
+
+main :: fn () i32 {
+    map := maps.init()
+    if !maps.set(&map, "name", 41) { return 1 }
+    if !maps.set(&map, "other", 12) { return 2 }
+    value : u64 = 0
+    if !maps.get(&map, "name", &value) || value != 41 { return 3 }
+    if !maps.set(&map, "name", 42) { return 4 }
+    if !maps.get(&map, "name", &value) || value != 42 { return 5 }
+    if maps.get(&map, "missing", &value) { return 6 }
+    if !maps.set(&map, "item0", 0) { return 7 }
+    if !maps.set(&map, "item1", 1) { return 8 }
+    if !maps.set(&map, "item2", 2) { return 9 }
+    if !maps.set(&map, "item3", 3) { return 10 }
+    if !maps.set(&map, "item4", 4) { return 11 }
+    if !maps.set(&map, "item5", 5) { return 12 }
+    if !maps.set(&map, "item6", 6) { return 13 }
+    if !maps.set(&map, "item7", 7) { return 14 }
+    if !maps.set(&map, "item8", 8) { return 15 }
+    if !maps.set(&map, "item9", 9) { return 16 }
+    if !maps.set(&map, "item10", 10) { return 17 }
+    if !maps.set(&map, "item11", 11) { return 18 }
+    if !maps.get(&map, "item11", &value) || value != 11 { return 19 }
+    maps.release(&map)
+    if !maps.set(&map, "reused", 9) { return 20 }
+    if !maps.get(&map, "reused", &value) || value != 9 { return 21 }
+    maps.release(&map)
+    0
+}

@@ -1,0 +1,25 @@
+extern mimi_vector_new : fn() *void
+extern mimi_vector_push : fn(vector : *void, value : u64) i32
+extern mimi_vector_get : fn(vector : *void, index : u64, value : *u64) i32
+extern mimi_vector_release : fn(vector : *void) void
+
+pub U64Vector :: struct {
+    handle : *void,
+}
+
+pub init :: fn () U64Vector {
+    U64Vector { handle = mimi_vector_new() }
+}
+
+pub push :: fn (vector : *U64Vector, value : u64) bool {
+    mimi_vector_push(vector.handle, value) != 0
+}
+
+pub get :: fn (vector : *U64Vector, index : u64, value : *u64) bool {
+    mimi_vector_get(vector.handle, index, value) != 0
+}
+
+pub release :: fn (vector : *U64Vector) void {
+    mimi_vector_release(vector.handle)
+    vector.handle = mimi_vector_new()
+}

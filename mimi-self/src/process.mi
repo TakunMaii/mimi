@@ -1,0 +1,25 @@
+extern mimi_process_args_new : fn() *void
+extern mimi_process_args_push : fn(arguments : *void, value : *u8, length : u64) i32
+extern mimi_process_run : fn(arguments : *void, program : *u8, length : u64) i32
+extern mimi_process_args_release : fn(arguments : *void) void
+
+pub ProcessArgs :: struct {
+    handle : *void,
+}
+
+pub init :: fn () ProcessArgs {
+    ProcessArgs { handle = mimi_process_args_new() }
+}
+
+pub push :: fn (arguments : *ProcessArgs, value : []u8) bool {
+    mimi_process_args_push(arguments.handle, value.ptr, value.len) != 0
+}
+
+pub run :: fn (arguments : *ProcessArgs, program : []u8) i32 {
+    mimi_process_run(arguments.handle, program.ptr, program.len)
+}
+
+pub release :: fn (arguments : *ProcessArgs) void {
+    mimi_process_args_release(arguments.handle)
+    arguments.handle = mimi_process_args_new()
+}

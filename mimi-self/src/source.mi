@@ -1,0 +1,38 @@
+bytes :: @import("bytes.mi")
+
+pub SourceFile :: struct {
+    path : []u8,
+    contents : bytes.ByteBuffer,
+}
+
+pub Span :: struct {
+    start : u64,
+    end : u64,
+}
+
+pub Diagnostic :: struct {
+    code : []u8,
+    message : []u8,
+    span : Span,
+}
+
+pub init :: fn () SourceFile {
+    SourceFile { path = "", contents = bytes.init() }
+}
+
+pub load :: fn (path : []u8, source : *SourceFile) bool {
+    source.path = path
+    contents := bytes.init()
+    if !bytes.read_file(path, &contents) {
+        bytes.release(&contents)
+        return false
+    }
+    source.contents = contents
+    true
+}
+
+pub release :: fn (source : *SourceFile) void {
+    contents := source.contents
+    bytes.release(&contents)
+    source.contents = contents
+}

@@ -1,0 +1,15 @@
+Result :: enum <T, E> { ok(T), err(E) }
+Option :: enum <T> { some(T), none }
+
+main :: fn () i32 {
+    success : Result<i32, i32> = ok(42)
+    failure : Result<i32, i32> = err(7)
+    present : Option<i32> = some(9)
+    absent : Option<i32> = none
+    success_value := match success { ok(value) => value, err(_) => 1 }
+    failure_value := match failure { ok(_) => 1, err(code) => code }
+    present_value := match present { some(value) => value, none => 1 }
+    absent_value := match absent { some(_) => 1, none => 0 }
+    if success_value != 42 || failure_value != 7 || present_value != 9 || absent_value != 0 { return 1 }
+    0
+}
