@@ -58,6 +58,64 @@ def test_compile_diagnostics(compiler: Path) -> None:
                 )
 
 
+def test_compiler_parity(reference: Path, candidate: Path) -> None:
+    cases = [
+        ("accepted", "main :: fn () i32 { 0 }", 0, None),
+        ("parse-error", "main :: fn () i32 { 1 + }", 1, "error[parse]"),
+        ("lex-error", "main :: fn () i32 { 1 | 2 }", 1, "error[lex]"),
+        (
+            "type-error",
+            "main :: fn () i32 { missing_name }",
+            1,
+            "error[type]",
+        ),
+    ]
+    with tempfile.TemporaryDirectory(prefix="mimi-self-parity-") as temporary:
+        directory = Path(temporary)
+        for name, source, expected_status, expected_diagnostic in cases:
+            source_path = directory / f"{name}.mi"
+            source_path.write_text(source, encoding="utf-8")
+            observations: list[tuple[bool, int | None, str | None]] = []
+            for label, compiler in (("stage0", reference), ("candidate", candidate)):
+                output_path = directory / f"{name}-{label}"
+                result = subprocess.run(
+                    [
+                        str(compiler), "build", str(source_path), "-o", str(output_path),
+                        "--c-source", str(RUNTIME),
+                    ],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                )
+                accepted = result.returncode == 0
+                if accepted != (expected_status == 0):
+                    raise AssertionError(
+                        f"{label} {name}: expected compile status {expected_status}, "
+                        f"got {result.returncode}:\n{result.stderr}"
+                    )
+                program_status = None
+                diagnostic = None
+                if accepted:
+                    program = run([str(output_path)])
+                    program_status = program.returncode
+                else:
+                    diagnostic = next(
+                        (line for line in result.stderr.splitlines() if line.startswith("error[")),
+                        None,
+                    )
+                    if expected_diagnostic not in result.stderr:
+                        raise AssertionError(
+                            f"{label} {name}: expected diagnostic {expected_diagnostic!r}, "
+                            f"got:\n{result.stderr}"
+                        )
+                observations.append((accepted, program_status, diagnostic))
+            if observations[0] != observations[1]:
+                raise AssertionError(
+                    f"compiler behavior differs for {name}: "
+                    f"stage0={observations[0]!r}, candidate={observations[1]!r}"
+                )
+
+
 def mimi_quote(value: Path) -> str:
     return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -231,6 +289,11 @@ def main() -> None:
         type=Path,
         help="compiler executable to test (defaults to the Rust stage0 compiler)",
     )
+    parser.add_argument(
+        "--reference-compiler",
+        type=Path,
+        help="Rust stage0 compiler used for parity checks with --compiler",
+    )
     arguments = parser.parse_args()
     if arguments.compiler is None:
         run(["cargo", "build", "--quiet"])
@@ -256,6 +319,15 @@ def main() -> None:
     test_path_api(compiler)
     test_source_model(compiler)
     test_module_loading(compiler)
+    if arguments.compiler is not None:
+        reference = arguments.reference_compiler
+        if reference is None:
+            reference = ROOT / "target" / "debug" / "mimi"
+        else:
+            reference = reference.resolve()
+        if not reference.is_file():
+            parser.error(f"reference compiler does not exist: {reference}")
+        test_compiler_parity(reference, compiler)
     print(f"mimi-self: tests passed with {compiler}")
 
 

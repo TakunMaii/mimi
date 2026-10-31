@@ -48,6 +48,8 @@ two consecutive stages.
   statements, imports, generics, and control flow.
 - [ ] Implement name resolution, type checking, generic specialization, and
   diagnostics.
+- [x] Add a Python differential smoke suite for accepted programs and
+  lexical, parse, and type errors against the Rust stage0 compiler.
 - [ ] Use Python tests to compare accepted/rejected programs and diagnostics
   against the Rust compiler.
 

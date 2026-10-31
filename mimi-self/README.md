@@ -12,6 +12,9 @@ python3 mimi-self/test.py
 
 The same suite accepts an alternate compiler executable with
 `python3 mimi-self/test.py --compiler /path/to/mimi`.
+When `--compiler` is set, the suite also compares accepted/rejected smoke
+cases and their first diagnostic against the Rust stage0 compiler. Pass
+`--reference-compiler /path/to/stage0` to select a different reference binary.
 
 The current milestone is the self-hosted lexer with byte spans, string escape
 decoding, UTF-8 identifier validation, and categorized errors. Stage0 is the
