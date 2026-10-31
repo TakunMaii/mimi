@@ -1862,6 +1862,32 @@ fn check_statement(
             result?;
             Ok(())
         }
+        ASTNode::ForRange {
+            binding,
+            start,
+            end,
+            body,
+        } => {
+            let start_type = infer_expression(start, scopes, functions, structs, None)?;
+            let end_type = infer_expression(end, scopes, functions, structs, Some(start_type))?;
+            if !start_type.is_signed_integer() {
+                return Err(error("range loop bounds must be signed integers"));
+            }
+            require_compatible(end_type, Some(start_type))?;
+            let mut loop_scope = loop_scope();
+            loop_scope.insert(
+                binding.clone(),
+                Symbol {
+                    data_type: start_type,
+                    mutable: false,
+                },
+            );
+            scopes.push(loop_scope);
+            let result = infer_expression(body, scopes, functions, structs, None);
+            scopes.pop();
+            result?;
+            Ok(())
+        }
         ASTNode::Loop { body } => {
             scopes.push(loop_scope());
             let result = infer_expression(body, scopes, functions, structs, None);

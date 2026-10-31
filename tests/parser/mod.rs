@@ -641,6 +641,29 @@ fn parses_control_flow_statements() {
 }
 
 #[test]
+fn parses_half_open_integer_range_loops() {
+    let nodes = parse(tokenize("for index in 2..7 { index }".chars()));
+    assert!(matches!(
+        nodes.as_slice(),
+        [ASTNode::ForRange {
+            binding,
+            start: Expression::LiteralNumber(start),
+            end: Expression::LiteralNumber(end),
+            ..
+        }] if binding == "index" && start == "2" && end == "7"
+    ));
+
+    assert!(matches!(
+        parse(tokenize("for index in lower..upper {}".chars())).as_slice(),
+        [ASTNode::ForRange {
+            start: Expression::Identifier(start),
+            end: Expression::Identifier(end),
+            ..
+        }] if start == "lower" && end == "upper"
+    ));
+}
+
+#[test]
 fn parses_break_and_continue_in_blocks() {
     let nodes = parse(tokenize("main :: fn () void { break continue }".chars()));
     assert!(matches!(

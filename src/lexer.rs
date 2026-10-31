@@ -184,9 +184,7 @@ pub(crate) fn tokenize_spanned(source: &str) -> Result<Vec<SpannedToken>, LexErr
             let mut number = String::new();
             while let Some(&ch) = chars.get(index) {
                 if ch.is_ascii_digit()
-                    || (ch == '.'
-                        && !after_member_dot
-                        && chars.get(index + 1) != Some(&'.'))
+                    || (ch == '.' && !after_member_dot && chars.get(index + 1) != Some(&'.'))
                 {
                     number.push(ch);
                     index += 1;

@@ -3531,6 +3531,10 @@ fn builds_x86_64_arrays_slices_pointers_and_loops() {
             0,
         ),
         (
+            "main :: fn () i32 { total := 0 for index in 2..7 { total = total + index } result := if total == 20 { 0 } else { 1 } result }",
+            0,
+        ),
+        (
             "sum :: fn (values : []i32) i32 { total := 0 for item in values { total = total + item } total } main :: fn () i32 { values : [4]i32 = [3, 5, 7, 9] result := if sum(values[:]) == 24 { 0 } else { 1 } result }",
             0,
         ),

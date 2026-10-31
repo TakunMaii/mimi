@@ -1889,6 +1889,14 @@ impl Builder {
                             } => {
                                 self.lower_for(binding, iterable, body)?;
                             }
+                            crate::parser::ASTNode::ForRange {
+                                binding,
+                                start,
+                                end,
+                                body,
+                            } => {
+                                self.lower_for_range(binding, start, end, body)?;
+                            }
                             crate::parser::ASTNode::Defer { body } => {
                                 self.defer_scopes.last_mut()?.push(body.clone());
                             }
@@ -3302,6 +3310,115 @@ impl Builder {
         if let Some(scale) = previous_slice_scale {
             self.slice_scales.insert(binding.to_string(), scale);
         }
+        Some(())
+    }
+
+    fn lower_for_range(
+        &mut self,
+        binding: &str,
+        start: &Expression,
+        end: &Expression,
+        body: &Expression,
+    ) -> Option<()> {
+        let binding_type = self.expression_type(start)?;
+        let start_value = self.expression_expected(start, &binding_type)?;
+        let end_value = self.expression_expected(end, &binding_type)?;
+        let index_slot = self.slot();
+        self.emit(MirInstruction::StoreSlot {
+            slot: index_slot,
+            value: start_value,
+        });
+        let end_slot = self.slot();
+        self.emit(MirInstruction::StoreSlot {
+            slot: end_slot,
+            value: end_value,
+        });
+        let zero = self.value();
+        self.emit(MirInstruction::ConstInt {
+            result: zero,
+            value: 0,
+        });
+        let saved_binding = self.bind_slot_value(binding, &binding_type, zero);
+        let condition_block = self.new_block();
+        let body_block = self.new_block();
+        let step_block = self.new_block();
+        let exit_block = self.new_block();
+        self.terminate(MirTerminator::Jump(condition_block));
+
+        self.current = condition_block;
+        let index = self.value();
+        self.emit(MirInstruction::LoadSlot {
+            result: index,
+            slot: index_slot,
+        });
+        let end = self.value();
+        self.emit(MirInstruction::LoadSlot {
+            result: end,
+            slot: end_slot,
+        });
+        let condition = self.value();
+        self.emit(MirInstruction::Compare {
+            result: condition,
+            lhs: index,
+            rhs: end,
+            kind: CompareKind::Less,
+        });
+        self.terminate(MirTerminator::Branch {
+            condition,
+            then_block: body_block,
+            else_block: exit_block,
+        });
+
+        self.loop_targets.push(LoopTargets {
+            break_block: exit_block,
+            continue_block: step_block,
+            defer_scope_depth: self.defer_scopes.len(),
+        });
+        self.current = body_block;
+        let index = self.value();
+        self.emit(MirInstruction::LoadSlot {
+            result: index,
+            slot: index_slot,
+        });
+        let Variable::Slot(binding_slot) = self.variables.get(binding).copied()? else {
+            return None;
+        };
+        self.emit(MirInstruction::StoreSlot {
+            slot: binding_slot,
+            value: index,
+        });
+        self.expression(body);
+        if self.is_open(self.current) {
+            self.terminate(MirTerminator::Jump(step_block));
+        }
+
+        self.current = step_block;
+        if self.is_open(self.current) {
+            let index = self.value();
+            self.emit(MirInstruction::LoadSlot {
+                result: index,
+                slot: index_slot,
+            });
+            let one = self.value();
+            self.emit(MirInstruction::ConstInt {
+                result: one,
+                value: 1,
+            });
+            let next_index = self.value();
+            self.emit(MirInstruction::Add {
+                result: next_index,
+                lhs: index,
+                rhs: one,
+            });
+            self.emit(MirInstruction::StoreSlot {
+                slot: index_slot,
+                value: next_index,
+            });
+            self.terminate(MirTerminator::Jump(condition_block));
+        }
+        self.loop_targets.pop();
+        self.current = exit_block;
+        self.restore_slot_binding(binding, saved_binding);
         Some(())
     }
 

@@ -213,6 +213,12 @@ pub(crate) enum ASTNode {
         iterable: Expression,
         body: Expression,
     },
+    ForRange {
+        binding: String,
+        start: Expression,
+        end: Expression,
+        body: Expression,
+    },
     Loop {
         body: Expression,
     },
@@ -626,17 +632,36 @@ where
         matches!(tokens.next(), Some(Token::In)),
         "expected 'in' after loop binding"
     );
-    let iterable = match tokens.next() {
-        Some(Token::Identifier(name)) if matches!(tokens.peek(), Some(Token::LeftBrace)) => {
-            Expression::Identifier(name)
-        }
-        Some(first) => parse_expression_from(first, tokens, 0),
+    let first = match tokens.next() {
+        Some(first) => first,
         None => panic!("expected iterable after 'in'"),
     };
-    ASTNode::For {
-        binding,
-        iterable,
-        body: parse_block_expression(tokens),
+    let iterable = match first {
+        Token::Identifier(name) if matches!(tokens.peek(), Some(Token::LeftBrace)) => {
+            Expression::Identifier(name)
+        }
+        first => parse_expression_from(first, tokens, 0),
+    };
+    if matches!(tokens.peek(), Some(Token::DotDot)) {
+        tokens.next();
+        let end = parse_expression_from_mode(
+            tokens.next().expect("expected range end after '..'"),
+            tokens,
+            0,
+            false,
+        );
+        ASTNode::ForRange {
+            binding,
+            start: iterable,
+            end,
+            body: parse_block_expression(tokens),
+        }
+    } else {
+        ASTNode::For {
+            binding,
+            iterable,
+            body: parse_block_expression(tokens),
+        }
     }
 }
 

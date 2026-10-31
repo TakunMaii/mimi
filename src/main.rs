@@ -615,6 +615,13 @@ fn qualify_imported_node(
             qualify_imported_expression(iterable, package, local_type_names);
             qualify_imported_expression(body, package, local_type_names);
         }
+        ASTNode::ForRange {
+            start, end, body, ..
+        } => {
+            qualify_imported_expression(start, package, local_type_names);
+            qualify_imported_expression(end, package, local_type_names);
+            qualify_imported_expression(body, package, local_type_names);
+        }
         ASTNode::Loop { body } | ASTNode::Defer { body } => {
             qualify_imported_expression(body, package, local_type_names);
         }
