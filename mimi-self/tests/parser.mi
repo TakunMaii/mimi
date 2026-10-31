@@ -101,6 +101,8 @@ main :: fn () i32 {
     if composed_block.statements.next.next.value.start != 141 || composed_block.statements.next.next.end != 146 { return 292 }
     empty_composed_block := lexer.parse_statement_block("{}", 0, &storage)
     if lexer.block_node_is_null(empty_composed_block) || !lexer.statement_node_is_null(empty_composed_block.statements) { return 293 }
+    whitespace_composed_block := lexer.parse_statement_block("{   \n }", 0, &storage)
+    if lexer.block_node_is_null(whitespace_composed_block) || !lexer.statement_node_is_null(whitespace_composed_block.statements) { return 316 }
     expression_composed_block := lexer.parse_statement_block("{ work() }", 0, &storage)
     if lexer.block_node_is_null(expression_composed_block) || expression_composed_block.statements.kind != 303 || expression_composed_block.statements.value.kind != 263 { return 294 }
     control_composed_source := "{ if ready { return 1 } else { return 2 } return 0 }"

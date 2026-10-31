@@ -1275,7 +1275,8 @@ pub parse_statement_block :: fn (source : []u8, offset : u64, storage : *Express
         }
     }
     if paren_depth != 0 || bracket_depth != 0 || brace_depth != 0 { return mimi_buffer_empty() as *BlockNode }
-    if next_token(source, segment_start).0 != 0 {
+    trailing := next_token(source, segment_start)
+    if trailing.0 != 0 && trailing.1 < closing {
         current := parse_statement_piece(source[segment_start:closing], segment_start + offset, storage)
         if statement_node_is_null(current) { return mimi_buffer_empty() as *BlockNode }
         if first == (mimi_buffer_empty() as *StatementNode) { first = current } else { last.next = current }
