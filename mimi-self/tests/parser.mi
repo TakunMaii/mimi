@@ -47,6 +47,28 @@ main :: fn () i32 {
     if indexed.left.kind != 261 || indexed.left.right.kind != 43 { return 22 }
     if indexed.left.right.right.kind != 42 { return 23 }
     if indexed.start != 0 || indexed.end != 21 { return 24 }
+    empty_call := lexer.parse_expression("f()", &storage)
+    if lexer.expression_is_null(empty_call) || empty_call.kind != 263 || !lexer.expression_is_null(empty_call.right) { return 27 }
+    call := lexer.parse_expression("f(a + 1, g(2), c)", &storage)
+    if lexer.expression_is_null(call) || call.kind != 263 { return 28 }
+    if call.right.kind != 262 || call.right.left.kind != 262 || call.right.right.kind != 1 { return 29 }
+    if call.right.left.right.kind != 263 { return 30 }
+    three_arguments := lexer.parse_expression("f(a, b, c)", &storage)
+    if lexer.expression_is_null(three_arguments) || three_arguments.right.kind != 262 { return 33 }
+    if three_arguments.right.left.kind != 262 || three_arguments.right.left.left.kind != 1 || three_arguments.right.right.kind != 1 { return 34 }
+    call_precedence := lexer.parse_expression("a + f(b) * c", &storage)
+    if lexer.expression_is_null(call_precedence) || call_precedence.kind != 43 || call_precedence.right.kind != 42 { return 35 }
+    if call_precedence.right.left.kind != 263 { return 36 }
+    method_call := lexer.parse_expression("obj.method(3)", &storage)
+    if lexer.expression_is_null(method_call) || method_call.kind != 263 || method_call.left.kind != 260 { return 31 }
+    trailing_argument_comma := lexer.parse_expression("f(1,)", &storage)
+    if !lexer.expression_is_null(trailing_argument_comma) { return 32 }
+    leading_argument_comma := lexer.parse_expression("f(, 1)", &storage)
+    if !lexer.expression_is_null(leading_argument_comma) { return 37 }
+    repeated_argument_comma := lexer.parse_expression("f(1,,2)", &storage)
+    if !lexer.expression_is_null(repeated_argument_comma) { return 38 }
+    mismatched_call_delimiter := lexer.parse_expression("f(1]", &storage)
+    if !lexer.expression_is_null(mismatched_call_delimiter) { return 39 }
     missing_index := lexer.parse_expression("items[]", &storage)
     if !lexer.expression_is_null(missing_index) { return 25 }
     unclosed_index := lexer.parse_expression("items[1", &storage)
