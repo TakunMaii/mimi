@@ -15,7 +15,7 @@ the Python suite covers it through the self-hosted compiler.
 | Source spans and diagnostics | Supported | Span records and source line/caret rendering | Python source model integration test |
 | Declarations, functions, modules | Supported | Variable/constant binding headers and type/initializer source spans parsed for `:=`, `: Type =`, and `::`; declaration AST and function declarations pending | `tests/parser.mi` |
 | Scalar, pointer, array, slice, tuple, function types | Supported | Named, pointer, slice, and fixed-array type syntax parsed into arena nodes with exact length-literal spans; tuple/function/generic types pending | `tests/parser.mi` |
-| Expressions, casts, calls, member/index/slice access | Supported | Number/string/boolean atoms retain exact source payload spans; grouped unary/binary expressions with precedence, negation, logical not, address/dereference, member access, indexing, slices, and nested calls; casts pending | `tests/parser.mi` |
+| Expressions, casts, calls, member/index/slice access | Supported | Number/string/boolean atoms retain exact source payload spans with a raw spelling accessor; grouped unary/binary expressions with precedence, negation, logical not, address/dereference, member access, indexing, slices, and nested calls; casts pending | `tests/parser.mi` |
 | If/match, loops, ranges, break/continue, defer | Supported | Not implemented | Pending |
 | Structs, enums, generics, closures | Supported | Not implemented | Pending |
 | Name resolution and type checking | Supported | Not implemented | Pending |

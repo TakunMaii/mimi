@@ -611,6 +611,11 @@ pub expression_is_null :: fn (node : *ExprNode) bool {
     node == (mimi_buffer_empty() as *ExprNode)
 }
 
+pub expression_payload :: fn (source : []u8, node : *ExprNode) []u8 {
+    if expression_is_null(node) || (node.kind != 1 && node.kind != 2 && node.kind != 3) { return "" }
+    source[node.payload_start:node.payload_end]
+}
+
 pub binding_header_is_null :: fn (header : *BindingHeader) bool {
     header == (mimi_buffer_empty() as *BindingHeader)
 }

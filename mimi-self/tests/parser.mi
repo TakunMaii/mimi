@@ -38,12 +38,15 @@ main :: fn () i32 {
     string_atom := lexer.parse_expression("\"text\"", &storage)
     if lexer.expression_is_null(string_atom) || string_atom.kind != 3 || string_atom.start != 0 || string_atom.end != 6 { return 86 }
     if string_atom.payload_start != 0 || string_atom.payload_end != 6 { return 98 }
+    raw_string := lexer.expression_payload("\"a\\nb\"", lexer.parse_expression("\"a\\nb\"", &storage))
+    if raw_string.len != 6 || raw_string[2] != 92 || raw_string[3] != 110 { return 103 }
     true_atom := lexer.parse_expression("true", &storage)
     if lexer.expression_is_null(true_atom) || true_atom.kind != 4 || true_atom.end != 4 { return 87 }
     false_atom := lexer.parse_expression("false", &storage)
     if lexer.expression_is_null(false_atom) || false_atom.kind != 5 || false_atom.end != 5 { return 88 }
     expression := lexer.parse_expression("1 + 2 * 3", &storage)
     if lexer.expression_is_null(expression) { return 2 }
+    if lexer.expression_payload("1 + 2 * 3", expression).len != 0 { return 104 }
     if expression.kind != 43 || expression.start != 0 || expression.end != 9 { return 2 }
     if expression.left.kind != 2 || expression.right.kind != 42 { return 3 }
     if expression.right.left.kind != 2 || expression.right.right.kind != 2 { return 4 }

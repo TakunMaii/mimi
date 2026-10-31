@@ -41,6 +41,8 @@ unterminated block comment, 3 for an unterminated string, 4 for an invalid
 escape, and 5 for malformed UTF-8 in an identifier. `lexer.error_span` returns
 the corresponding half-open byte range in the source. `lexer.lex_next` combines
 the token kind, span, and error code in one `LexResult`.
+`lexer.expression_payload` returns the original source spelling for identifier,
+number, and string literal nodes; string escapes remain encoded in that view.
 
 `source.render` writes a diagnostic with its path, one-based line and column,
 source line, and byte-span underline to standard error. `source.load_graph`
