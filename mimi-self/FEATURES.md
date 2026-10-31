@@ -14,7 +14,7 @@ the Python suite covers it through the self-hosted compiler.
 | Comments and lexical errors | Supported | Line/block comments, categorized errors, and one result with exact token/error byte spans | `tests/lexer.mi` |
 | Source spans and diagnostics | Supported | Span records and source line/caret rendering | Python source model integration test |
 | Declarations, functions, modules | Partial | Variable/constant binding headers, function header spans, and named parameters; type nodes cover named, pointer, slice, fixed-array, nested tuple, and nested function types; binding forms `:=`, `: Type =`, `::`; declaration AST, parameter semantics, and function bodies pending | `tests/parser.mi` |
-| Scalar, pointer, array, slice, tuple, function types | Supported | Named, pointer, slice, and fixed-array type syntax parsed into arena nodes with exact length-literal spans; tuple/function/generic types pending | `tests/parser.mi` |
+| Scalar, pointer, array, slice, tuple, function types | Supported | Named, pointer, slice, fixed-array, nested tuple, and nested function type syntax parsed into arena nodes with source spans; generic types pending | `tests/parser.mi` |
 | Expressions, casts, calls, member/index/slice access | Supported | Number/string/boolean atoms retain exact source payload spans with a raw spelling accessor; atomic tuple literals have a dedicated parser; grouped unary/binary expressions with precedence, negation, logical not, address/dereference, member access, indexing, slices, and nested calls; casts pending | `tests/parser.mi` |
 | If/match, loops, ranges, break/continue, defer | Supported | Not implemented | Pending |
 | Structs, enums, generics, closures | Supported | Not implemented | Pending |

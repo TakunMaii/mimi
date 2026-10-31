@@ -89,8 +89,8 @@ two consecutive stages.
 ## Current milestone
 
 T1 containers, runtime, Result/Option, source file records, source-aware
-diagnostic rendering, and iterative module import traversal are in place. The T2 lexer
-returns token kinds and byte spans, decodes supported escapes, validates
+diagnostic rendering, and iterative module import traversal are in place. The
+T2 lexer returns token kinds and byte spans, decodes supported escapes, validates
 UTF-8 sequences, classifies common errors, returns token/error spans together,
 and handles member-number/decimal boundaries. Its Unicode identifier ranges
 are still approximate. An
@@ -101,8 +101,9 @@ and nested function type syntax is parsed, and binding headers expose
 declaration/type/initializer spans. Function headers and named parameters have
 source-aware nodes; atomic tuple literals have a dedicated parser. Generic
 types, general tuple expressions and destructuring, declaration AST
-construction, control-flow statements, and type checking remain open. The parser currently lives alongside the lexer because
-stage0 loses imported aliases inside imported module function bodies.
+construction, control-flow statements, and type checking remain open. The
+parser currently lives alongside the lexer because stage0 loses imported
+aliases inside imported module function bodies.
 
 Next, parse declarations, types, and statements before name resolution and
 type checking.
