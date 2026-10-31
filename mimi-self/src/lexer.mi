@@ -695,6 +695,18 @@ pub LoopNode :: struct {
     body : *BlockNode,
 }
 
+pub ForNode :: struct {
+    start : u64,
+    end : u64,
+    variable_start : u64,
+    variable_end : u64,
+    is_range : bool,
+    iterable : *ExprNode,
+    range_start : *ExprNode,
+    range_end : *ExprNode,
+    body : *BlockNode,
+}
+
 pub FunctionHeader :: struct {
     start : u64,
     end : u64,
@@ -1245,6 +1257,87 @@ pub parse_loop_statement :: fn (source : []u8, storage : *ExpressionArena) *Loop
     node.start = keyword.1
     node.end = source.len
     node.condition = condition
+    node.body = body
+    node
+}
+
+pub for_node_is_null :: fn (node : *ForNode) bool {
+    node == (mimi_buffer_empty() as *ForNode)
+}
+
+pub parse_for_statement :: fn (source : []u8, storage : *ExpressionArena) *ForNode {
+    keyword := next_token(source, 0)
+    if keyword.0 != 170 { return mimi_buffer_empty() as *ForNode }
+    variable := next_token(source, keyword.2)
+    in_token := next_token(source, variable.2)
+    if variable.0 != 1 || in_token.0 != 173 { return mimi_buffer_empty() as *ForNode }
+    cursor := in_token.2
+    paren_depth : u64 = 0
+    bracket_depth : u64 = 0
+    header_end := source.len
+    block_start := source.len
+    found_block := false
+    while cursor < source.len && !found_block {
+        token := next_token(source, cursor)
+        if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *ForNode }
+        cursor = token.2
+        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
+            if token.0 == 41 {
+                if paren_depth == 0 { return mimi_buffer_empty() as *ForNode }
+                paren_depth = paren_depth - 1
+            } else {
+                if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
+                    if token.0 == 93 {
+                        if bracket_depth == 0 { return mimi_buffer_empty() as *ForNode }
+                        bracket_depth = bracket_depth - 1
+                    } else {
+                        if token.0 == 123 && paren_depth == 0 && bracket_depth == 0 {
+                            header_end = token.1
+                            block_start = token.1
+                            found_block = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !found_block || header_end <= in_token.2 { return mimi_buffer_empty() as *ForNode }
+    iterable : *ExprNode = mimi_buffer_empty() as *ExprNode
+    range_start : *ExprNode = mimi_buffer_empty() as *ExprNode
+    range_end : *ExprNode = mimi_buffer_empty() as *ExprNode
+    is_range := false
+    range_cursor := in_token.2
+    while range_cursor < header_end && !is_range {
+        token := next_token(source, range_cursor)
+        if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *ForNode }
+        if token.0 == 135 { is_range = true } else { range_cursor = token.2 }
+    }
+    if is_range {
+        range_start := parse_expression(source[in_token.2:range_cursor], storage)
+        range_end := parse_expression(source[range_cursor + 2:header_end], storage)
+        if expression_is_null(range_start) || expression_is_null(range_end) { return mimi_buffer_empty() as *ForNode }
+        range_start.end = range_start.end + in_token.2
+        range_start.start = range_start.start + in_token.2
+        range_end.start = range_end.start + range_cursor + 2
+        range_end.end = range_end.end + range_cursor + 2
+    } else {
+        iterable = parse_expression(source[in_token.2:header_end], storage)
+        if expression_is_null(iterable) { return mimi_buffer_empty() as *ForNode }
+        iterable.start = iterable.start + in_token.2
+        iterable.end = iterable.end + in_token.2
+    }
+    body := parse_block_span(source[block_start:source.len], block_start, storage)
+    if block_node_is_null(body) || next_token(source, body.end).0 != 0 { return mimi_buffer_empty() as *ForNode }
+    if mimi_arena_allocate(storage, 72, 8) == 0 { return mimi_buffer_empty() as *ForNode }
+    node := storage.last as *ForNode
+    node.start = keyword.1
+    node.end = body.end
+    node.variable_start = variable.1
+    node.variable_end = variable.2
+    node.is_range = is_range
+    node.iterable = iterable
+    node.range_start = range_start
+    node.range_end = range_end
     node.body = body
     node
 }

@@ -65,6 +65,7 @@ two consecutive stages.
 - [x] Parse simple assignment statements with expression targets and values.
 - [x] Parse plain `if` statements with optional `else` block spans.
 - [x] Parse `while`, `loop`, and `do-while` condition/body spans.
+- [x] Parse collection and integer-range `for` headers with body spans.
 - [x] Parse plain `if/else` expressions into expression nodes.
 - [x] Parse tuple destructuring names with atomic tuple literal initializers.
 - [x] Build function definition nodes with balanced block source spans.
@@ -118,7 +119,8 @@ Generic declarations and parameter validation, general tuple expressions and
 destructuring type checks, statement blocks, and remaining control-flow
 statements remain open. `if` statements and expressions retain conditions and
 then/else-if/else branch spans; block statement composition is not implemented.
-While/loop/do-while retain condition and body spans. Name
+While/loop/do-while and collection/range for loops retain their header and
+body spans. Name
 resolution and type checking remain open. The parser currently lives alongside
 the lexer because stage0 loses imported aliases inside imported module function
 bodies.

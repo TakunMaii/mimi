@@ -126,6 +126,14 @@ main :: fn () i32 {
     if do_while_statement.condition.start != 23 || do_while_statement.end != 28 { return 213 }
     invalid_do_while := lexer.parse_loop_statement("do { work() }", &storage)
     if !lexer.loop_node_is_null(invalid_do_while) { return 214 }
+    collection_for := lexer.parse_for_statement("for item in values { work(item) }", &storage)
+    if lexer.for_node_is_null(collection_for) || collection_for.is_range || collection_for.variable_start != 4 { return 226 }
+    if collection_for.iterable.kind != 1 || collection_for.iterable.start != 12 || collection_for.body.start != 20 { return 227 }
+    range_for := lexer.parse_for_statement("for index in 1..10 { work(index) }", &storage)
+    if lexer.for_node_is_null(range_for) || !range_for.is_range || range_for.range_start.kind != 2 || range_for.range_end.kind != 2 { return 228 }
+    if range_for.range_start.start != 14 || range_for.range_end.start != 17 { return 229 }
+    invalid_for := lexer.parse_for_statement("for item values {}", &storage)
+    if !lexer.for_node_is_null(invalid_for) { return 230 }
     parameters := lexer.parse_parameters("work :: fn (x : i32, ptr : *u8) bool {", function_header, &storage)
     if lexer.parameter_list_is_null(parameters) { return 111 }
     if parameters.name_start != 12 || parameters.name_end != 13 { return 115 }
