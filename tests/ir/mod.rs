@@ -3539,6 +3539,10 @@ fn builds_x86_64_arrays_slices_pointers_and_loops() {
             0,
         ),
         (
+            "sum :: fn (values : []i32) i32 { total := 0 for item in values { total = total + item } total } main :: fn () i32 { values : [4]i32 = [3, 5, 7, 9] result := if sum(values[1..3]) == 12 && sum(values[..2]) == 8 && sum(values[2..]) == 16 && sum(values[..]) == 24 { 0 } else { 1 } result }",
+            0,
+        ),
+        (
             "point :: struct { x : i32, y : i32 } shift :: fn (value : point) point { point { x = value.x + 1, y = value.y + 2 } } main :: fn () i32 { value := shift(point { x = 4, y = 5 }) result := if value.x == 5 && value.y == 7 { 0 } else { 1 } result }",
             0,
         ),
