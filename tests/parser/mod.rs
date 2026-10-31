@@ -46,6 +46,21 @@ fn tokenizes_chained_numeric_members_separately_from_decimals() {
 }
 
 #[test]
+fn tokenizes_range_after_integer_literal() {
+    assert_eq!(
+        tokenize("values[1..3]".chars()),
+        vec![
+            Token::Identifier("values".into()),
+            Token::LeftBracket,
+            Token::LiteralNumber("1".into()),
+            Token::DotDot,
+            Token::LiteralNumber("3".into()),
+            Token::RightBracket,
+        ]
+    );
+}
+
+#[test]
 fn parses_arithmetic_precedence_and_parentheses() {
     assert_eq!(
         parse(tokenize("result := 1 + 2 * (3 - 4)".chars())),
@@ -665,6 +680,23 @@ fn parses_array_types_literals_indexing_and_slices() {
             ..
         }
     ));
+}
+
+#[test]
+fn parses_half_open_and_open_ended_range_slices() {
+    let nodes = parse(tokenize(
+        "a := values[1..3] b := values[..3] c := values[1..] d := values[..]".chars(),
+    ));
+    assert_eq!(nodes.len(), 4);
+    for node in nodes {
+        assert!(matches!(
+            node,
+            ASTNode::VariableDefinition {
+                value: Expression::Slice { .. },
+                ..
+            }
+        ));
+    }
 }
 
 #[test]

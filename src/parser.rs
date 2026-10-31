@@ -1655,7 +1655,7 @@ where
             } else {
                 Some(Box::new(parse_expression(tokens, 0)))
             };
-            if matches!(tokens.peek(), Some(Token::Colon)) {
+            if matches!(tokens.peek(), Some(Token::Colon | Token::DotDot)) {
                 tokens.next();
                 let end = if matches!(tokens.peek(), Some(Token::RightBracket)) {
                     None
