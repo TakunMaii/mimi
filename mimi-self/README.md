@@ -43,13 +43,15 @@ the corresponding half-open byte range in the source. `lexer.lex_next` combines
 the token kind, span, and error code in one `LexResult`.
 The C runtime's Unicode identifier tables are generated from Rust's Unicode
 `Alphabetic` and `Alphanumeric` character properties by
-`mimi-self/tools/generate_unicode_tables.rs`. From the repository root,
-regenerate the runtime tables with:
+`mimi-self/tools/generate_unicode_tables.rs`. From the repository root, emit a
+fresh table block with:
 
 ```sh
 rustc mimi-self/tools/generate_unicode_tables.rs -o /tmp/mimi-unicode-tables
-/tmp/mimi-unicode-tables >> mimi-self/runtime.c
+/tmp/mimi-unicode-tables > /tmp/mimi-unicode-tables.c
 ```
+Use that output to replace the generated table block in `mimi-self/runtime.c`;
+do not append it, since the runtime already contains the generated definitions.
 `lexer.expression_payload` returns the original source spelling for identifier,
 number, and string literal nodes; string escapes remain encoded in that view.
 
