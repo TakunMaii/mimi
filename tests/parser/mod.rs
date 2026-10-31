@@ -485,6 +485,24 @@ fn parses_comparison_and_logical_precedence() {
 }
 
 #[test]
+fn relational_comparison_binds_tighter_than_equality() {
+    assert_eq!(
+        parse(tokenize("result := flag == left < right".chars())),
+        vec![ASTNode::VariableDefinition {
+            name: "result".into(),
+            data_type: None,
+            value: Expression::Equal(
+                Box::new(Expression::Identifier("flag".into())),
+                Box::new(Expression::LessThan(
+                    Box::new(Expression::Identifier("left".into())),
+                    Box::new(Expression::Identifier("right".into())),
+                )),
+            ),
+        }]
+    );
+}
+
+#[test]
 fn single_equal_remains_assignment() {
     assert_eq!(
         parse(tokenize("value = left == right".chars())),
