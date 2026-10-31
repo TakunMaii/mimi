@@ -54,6 +54,14 @@ main :: fn () i32 {
     if !lexer.expression_is_null(empty_tuple_node) { return 120 }
     non_tuple_group := lexer.parse_tuple_literal("(value)", &storage)
     if !lexer.expression_is_null(non_tuple_group) { return 121 }
+    repeated_tuple_comma := lexer.parse_tuple_literal("(a,,b)", &storage)
+    if !lexer.expression_is_null(repeated_tuple_comma) { return 124 }
+    unclosed_tuple := lexer.parse_tuple_literal("(a, b", &storage)
+    if !lexer.expression_is_null(unclosed_tuple) { return 125 }
+    mismatched_tuple := lexer.parse_tuple_literal("(a, b]", &storage)
+    if !lexer.expression_is_null(mismatched_tuple) { return 126 }
+    tuple_with_suffix := lexer.parse_tuple_literal("(a, b) + c", &storage)
+    if !lexer.expression_is_null(tuple_with_suffix) { return 127 }
     malformed_function := lexer.parse_function_header("work :: fn (x : i32 bool {", &storage)
     if !lexer.function_header_is_null(malformed_function) { return 108 }
     callback_header := lexer.parse_function_header("visit :: fn (callback : fn (i32) bool) []u8 {", &storage)
