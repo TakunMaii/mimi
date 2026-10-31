@@ -4123,7 +4123,11 @@ impl Builder {
         let result = self.value();
         self.emit(MirInstruction::LoadFunctionAddress {
             result,
-            symbol: format!("_{}", self.link_function_name(name)),
+            symbol: format!(
+                "{}{}",
+                if cfg!(target_os = "macos") { "_" } else { "" },
+                self.link_function_name(name)
+            ),
             external: false,
         });
         self.value_types.insert(

@@ -5,6 +5,15 @@ use std::sync::{Mutex, OnceLock};
 use crate::lir::TargetArch;
 use crate::parser::{ASTNode, DataType, Expression};
 
+fn clang_target(target: TargetArch) -> &'static str {
+    match (cfg!(target_os = "macos"), target) {
+        (true, TargetArch::Aarch64) => "--target=aarch64-apple-darwin",
+        (true, TargetArch::X86_64) => "--target=x86_64-apple-darwin",
+        (false, TargetArch::Aarch64) => "--target=aarch64-unknown-linux-gnu",
+        (false, TargetArch::X86_64) => "--target=x86_64-unknown-linux-gnu",
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum Json {
     Null,
@@ -562,7 +571,11 @@ fn generate_aggregate_callback_adapter(
     } else {
         &result_type
     };
-    let target_symbol = format!("_{}", target.replace('\\', "\\\\").replace('"', "\\\""));
+    let target_symbol = format!(
+        "{}{}",
+        if cfg!(target_os = "macos") { "_" } else { "" },
+        target.replace('\\', "\\\\").replace('"', "\\\"")
+    );
     let mut source = format!(
         "#include \"{include}\"\nextern {target_result} __mimi_callback_target({}) __asm__(\"{target_symbol}\");\n",
         if target_parameters.is_empty() {
@@ -897,10 +910,7 @@ fn import_header_with_shims(
     }
     let mut command = Command::new(&clang);
     command.args(["-Xclang", "-ast-dump=json", "-fsyntax-only", "-x", "c"]);
-    command.arg(match target {
-        TargetArch::Aarch64 => "--target=aarch64-apple-darwin",
-        TargetArch::X86_64 => "--target=x86_64-apple-darwin",
-    });
+    command.arg(clang_target(target));
     if let Some(sysroot) = sysroot {
         command.arg("--sysroot").arg(sysroot);
     }
@@ -1000,10 +1010,7 @@ fn import_numeric_macros(
 ) -> Result<Vec<ASTNode>, String> {
     let mut command = Command::new(std::env::var_os("MIMI_CLANG").unwrap_or("clang".into()));
     command.args(["-dM", "-E", "-x", "c"]);
-    command.arg(match target {
-        TargetArch::Aarch64 => "--target=aarch64-apple-darwin",
-        TargetArch::X86_64 => "--target=x86_64-apple-darwin",
-    });
+    command.arg(clang_target(target));
     if let Some(sysroot) = sysroot {
         command.arg("--sysroot").arg(sysroot);
     }
@@ -1121,10 +1128,7 @@ fn import_record_layouts(
         "-x",
         "c",
     ]);
-    command.arg(match target {
-        TargetArch::Aarch64 => "--target=aarch64-apple-darwin",
-        TargetArch::X86_64 => "--target=x86_64-apple-darwin",
-    });
+    command.arg(clang_target(target));
     if let Some(sysroot) = sysroot {
         command.arg("--sysroot").arg(sysroot);
     }
@@ -2135,9 +2139,19 @@ mod tests {
         )
         .unwrap();
         let clang = std::env::var_os("MIMI_CLANG").unwrap_or("clang".into());
+        let aarch64_layout = if cfg!(target_os = "macos") {
+            (16, 8, 8)
+        } else {
+            (32, 16, 16)
+        };
         for (target, expected_size, expected_align, expected_offset) in [
             (TargetArch::X86_64, 32, 16, 16),
-            (TargetArch::Aarch64, 16, 8, 8),
+            (
+                TargetArch::Aarch64,
+                aarch64_layout.0,
+                aarch64_layout.1,
+                aarch64_layout.2,
+            ),
         ] {
             let layouts =
                 import_record_layouts(&clang, header.to_str().unwrap(), target, &[], &[], None)

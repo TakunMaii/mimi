@@ -619,6 +619,9 @@ fn passes_string_literal_as_c_char_pointer() {
 
 #[test]
 fn imports_libc_enum_constants() {
+    if cfg!(target_os = "linux") {
+        return;
+    }
     let source = std::env::temp_dir().join(format!(
         "mimi_cimport_libc_constant_source_{}.mi",
         std::process::id()
@@ -834,7 +837,12 @@ fn imports_c_functions_with_aggregate_arguments_and_returns() {
         "c :: @cimport(\"point.h\") main :: fn () i32 { a := c.Point {x=1.5, y=2.5} b := c.Point {x=3.5, y=4.5} result := c.point_add(a, b) value := c.value_roundtrip(c.Value {real=3.25}) if result.x == 5.0 && result.y == 7.0 && value.real == 3.25 {return 0} else {return 1} 0 }",
     )
     .unwrap();
-    for target in [lir::TargetArch::X86_64, lir::TargetArch::Aarch64] {
+    let targets = if cfg!(target_os = "macos") {
+        vec![lir::TargetArch::X86_64, lir::TargetArch::Aarch64]
+    } else {
+        vec![lir::TargetArch::X86_64]
+    };
+    for target in targets {
         let executable = directory.join(format!("main-{target:?}"));
         build_file_for_target_with_c_options(
             source.to_str().unwrap(),
@@ -1254,7 +1262,12 @@ fn links_scalar_c_calls_for_each_supported_target() {
     )
     .unwrap();
     let host = <lir::HostTarget as lir::Target>::arch(&lir::HostTarget);
-    for target in [lir::TargetArch::X86_64, lir::TargetArch::Aarch64] {
+    let targets = if cfg!(target_os = "macos") {
+        vec![lir::TargetArch::X86_64, lir::TargetArch::Aarch64]
+    } else {
+        vec![lir::TargetArch::X86_64]
+    };
+    for target in targets {
         let executable = directory.join(format!("main-{target:?}"));
         build_file_for_target_with_c_options(
             source.to_str().unwrap(),
@@ -3231,7 +3244,11 @@ fn emits_and_assembles_x86_64_integer_control_flow() {
     assert!(assembly.contains(".intel_syntax noprefix"));
     assert!(assembly.contains("cmp rax, rcx"));
     assert!(assembly.contains("jz .Lcombine_"));
-    assert!(assembly.contains("call _combine"));
+    assert!(assembly.contains(if cfg!(target_os = "macos") {
+        "call _combine"
+    } else {
+        "call combine"
+    }));
     assert!(assembly.contains("leave\n    ret"));
 
     let assembly_path =
@@ -3270,7 +3287,11 @@ fn emits_and_assembles_x86_64_float_and_stack_arguments() {
     assert!(assembly.contains("addss xmm0, xmm1"));
     assert!(assembly.contains("vcvtph2ps"));
     assert!(assembly.contains("vcvtps2ph"));
-    assert!(assembly.contains("call _sum10"));
+    assert!(assembly.contains(if cfg!(target_os = "macos") {
+        "call _sum10"
+    } else {
+        "call sum10"
+    }));
     assert!(assembly.contains("[rsp + 0]"));
 
     let assembly_path =

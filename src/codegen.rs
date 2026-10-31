@@ -64,6 +64,9 @@ pub(crate) fn compile_executable_with_options(
     if module.target == TargetArch::X86_64 {
         return compile_x86_64(module, output, options);
     }
+    if !cfg!(target_os = "macos") {
+        return Err("AArch64 executable linking is currently supported only on macOS".into());
+    }
     let (text, data, symbols, relocations) = encode_module(module)?;
     let object = write_macho_object(&text, &data, &symbols, &relocations);
     let object_path = output.with_extension("o");
@@ -242,6 +245,9 @@ fn compile_c_sources(
         }
         for define in &options.defines {
             compiler.arg(format!("-D{define}"));
+        }
+        if cfg!(target_os = "linux") {
+            compiler.arg("-D_Nonnull=");
         }
         let result = compiler
             .args(["-std=c11", "-O2", "-c"])
