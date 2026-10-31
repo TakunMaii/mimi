@@ -895,6 +895,6 @@ fn symbol(name: &str) -> String {
             format!("_{name}")
         }
     } else {
-        name.strip_prefix('_').unwrap_or(name).to_string()
+        name.to_string()
     }
 }

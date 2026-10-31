@@ -3230,6 +3230,42 @@ fn emits_host_assembly_for_integer_function() {
 }
 
 #[test]
+fn emits_assemblable_aarch64_linux_object() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let ast = parse(tokenize(
+        "extern print : fn(str : []u8)void add :: fn (left : i32, right : i32) i32 { left + right } apply :: fn (function : fn(i32, i32)i32) i32 { function(20, 22) } main :: fn () i32 { print(\"linux\") apply(add) }".chars(),
+    ));
+    let hir = hir::lower_ast(&ast);
+    let mir = mir::lower_hir(&hir);
+    let target = lir::TargetArch::Aarch64;
+    let lir = lir::lower_mir(&mir, &target);
+    let assembly = codegen::emit_assembly(&lir).unwrap();
+    assert!(assembly.contains(".section .rodata"));
+    assert!(assembly.contains("bl print"));
+    assert!(assembly.contains(":lo12:add"));
+    assert!(!assembly.contains("@PAGE"));
+
+    let assembly_path = std::env::temp_dir().join(format!(
+        "mimi_aarch64_linux_assembly_{}.s",
+        std::process::id()
+    ));
+    let object_path = assembly_path.with_extension("o");
+    std::fs::write(&assembly_path, assembly).unwrap();
+    let status = std::process::Command::new("clang")
+        .args(["--target=aarch64-unknown-linux-gnu", "-c"])
+        .arg(&assembly_path)
+        .arg("-o")
+        .arg(&object_path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    std::fs::remove_file(assembly_path).unwrap();
+    std::fs::remove_file(object_path).unwrap();
+}
+
+#[test]
 fn emits_and_assembles_x86_64_integer_control_flow() {
     let ast = parse(tokenize(
         "combine :: fn (left : i32, right : i32) i32 { if left < right { left + right } else { left - right } } main :: fn () i32 { combine(9, 4) }"
@@ -3828,7 +3864,8 @@ fn lowers_function_values_and_indirect_calls() {
             .flat_map(|block| &block.instructions)
             .any(|instruction| matches!(
                 instruction,
-                mir::MirInstruction::LoadFunctionAddress { symbol, .. } if symbol == "_square"
+                mir::MirInstruction::LoadFunctionAddress { symbol, .. }
+                    if symbol == if cfg!(target_os = "macos") { "_square" } else { "square" }
             ))
     );
     assert!(mir.functions.iter().any(|function| {

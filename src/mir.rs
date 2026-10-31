@@ -3,6 +3,14 @@ use crate::layout::{AbiClass, TypeLayouts, scalar_storage_size};
 use crate::lir::TargetDataLayout;
 use crate::parser::Expression;
 
+fn native_symbol(name: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("_{name}")
+    } else {
+        name.to_string()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ValueId(pub(crate) u32);
 
@@ -463,7 +471,7 @@ impl Builder {
                         let symbol = self.link_function_name(&symbol);
                         self.emit(MirInstruction::LoadFunctionAddress {
                             result,
-                            symbol: format!("_{symbol}"),
+                            symbol: native_symbol(&symbol),
                             external,
                         });
                         let environment = self.value();
@@ -736,7 +744,7 @@ impl Builder {
                         let symbol = self.link_function_name(&name);
                         self.emit(MirInstruction::LoadFunctionAddress {
                             result,
-                            symbol: format!("_{symbol}"),
+                            symbol: native_symbol(&symbol),
                             external,
                         });
                         self.value_types.insert(
@@ -837,7 +845,7 @@ impl Builder {
                 let result = self.value();
                 self.emit(MirInstruction::LoadFunctionAddress {
                     result,
-                    symbol: format!("_{symbol}"),
+                    symbol: native_symbol(&symbol),
                     external: false,
                 });
                 let environment = self.value();
@@ -2584,7 +2592,7 @@ impl Builder {
             let callee = self.value();
             self.emit(MirInstruction::LoadFunctionAddress {
                 result: callee,
-                symbol: format!("_{}", global.link_name),
+                symbol: native_symbol(&global.link_name),
                 external: true,
             });
             let result = self.value();
@@ -2603,7 +2611,7 @@ impl Builder {
         let result = self.value();
         self.emit(MirInstruction::LoadFunctionAddress {
             result,
-            symbol: format!("_{}", global.link_name),
+            symbol: native_symbol(&global.link_name),
             external: true,
         });
         result
@@ -4040,7 +4048,7 @@ impl Builder {
         let result = self.value();
         self.emit(MirInstruction::LoadFunctionAddress {
             result,
-            symbol: format!("_{symbol}"),
+            symbol: native_symbol(symbol),
             external: false,
         });
         let (params, return_type) = self.function_signatures.get(symbol)?;
@@ -4123,11 +4131,7 @@ impl Builder {
         let result = self.value();
         self.emit(MirInstruction::LoadFunctionAddress {
             result,
-            symbol: format!(
-                "{}{}",
-                if cfg!(target_os = "macos") { "_" } else { "" },
-                self.link_function_name(name)
-            ),
+            symbol: native_symbol(&self.link_function_name(name)),
             external: false,
         });
         self.value_types.insert(
