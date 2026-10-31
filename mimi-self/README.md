@@ -13,7 +13,11 @@ python3 mimi-self/test.py
 The same suite accepts an alternate compiler executable with
 `python3 mimi-self/test.py --compiler /path/to/mimi`.
 
-The current milestone is compiler infrastructure for the self-hosted front
-end: tokenization, reusable containers, file and process APIs, and source
-records. Stage0 is the Rust compiler. See [TODO.md](TODO.md) for the parity
-roadmap and [FEATURES.md](FEATURES.md) for the feature matrix.
+The current milestone is the self-hosted lexer with byte spans, string escape
+decoding, UTF-8 identifier validation, and categorized errors. Stage0 is the
+Rust compiler. See [TODO.md](TODO.md) for the parity roadmap and
+[FEATURES.md](FEATURES.md) for the feature matrix.
+
+`lexer.error_code` returns 1 for an unexpected character, 2 for an
+unterminated block comment, 3 for an unterminated string, 4 for an invalid
+escape, and 5 for malformed UTF-8 in an identifier.

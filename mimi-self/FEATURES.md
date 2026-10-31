@@ -10,8 +10,8 @@ the Python suite covers it through the self-hosted compiler.
 | File, path, directory, process APIs | Supported by Rust standard library | Binary read/write, existence/type/size checks, directory creation, and argv-based process execution | Python integration tests |
 | Result and Option | Rust `Result`/`Option` | Generic enum conventions with explicit `match` propagation | `tests/result.mi` |
 | Source files and diagnostics | Compiler source map and diagnostics | File loading plus source span and diagnostic records; rendering is pending | Python source model integration test |
-| Identifiers, numbers, strings, punctuation | Supported | Token kinds, keyword classification, and byte spans; string values remain raw | `tests/lexer.mi` |
-| Comments and lexical errors | Supported | Line/block comments and invalid-token kind; no diagnostic text yet | `tests/lexer.mi` |
+| Identifiers, numbers, strings, punctuation | Supported | Token kinds, keyword classification, byte spans, escape decoding, UTF-8 validation | `tests/lexer.mi` |
+| Comments and lexical errors | Supported | Line/block comments and categorized lexer error codes/messages | `tests/lexer.mi` |
 | Source spans and diagnostics | Supported | Span and diagnostic records exist; source-aware rendering is pending | Python source model integration test |
 | Declarations, functions, modules | Supported | Not implemented | Pending |
 | Scalar, pointer, array, slice, tuple, function types | Supported | Not implemented | Pending |

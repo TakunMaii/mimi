@@ -32,8 +32,13 @@ two consecutive stages.
 
 ## T2: Self-hosted front end
 
+- [x] Return token kinds and exact byte spans; classify keywords, punctuation,
+  operators, and literal kinds.
+- [x] Decode the supported string escapes and reject malformed UTF-8 in
+  identifiers.
+- [x] Classify common lexer failures with stable error codes and messages.
 - [ ] Port the lexer, including UTF-8 identifiers, exact spans, escape
-  validation, and useful lexical errors.
+  validation, and useful lexical errors to the self-hosted compiler API.
 - [ ] Implement the parser and AST for declarations, types, expressions,
   statements, imports, generics, and control flow.
 - [ ] Implement name resolution, type checking, generic specialization, and
@@ -60,13 +65,11 @@ two consecutive stages.
 
 ## Current milestone
 
-T1 compiler infrastructure is in place: byte vectors, a string map, arena
-allocation, file and basic path operations, process execution, generic
-`Result`/`Option` conventions, and source/diagnostic data structures. The
-Python suite builds every fixture with stage0, runs it, and checks file and
-path behavior. Stage0 currently cannot compile functions that construct a
-generic enum from inside the function body; this is tracked as a limitation
-while tests cover generic enum values at local typed declarations.
+T1 compiler infrastructure is in place. The T2 lexer returns token kinds and
+byte spans, decodes supported escapes, validates UTF-8 identifiers, and
+classifies common errors. It still lacks a reusable parser and AST. The Rust
+stage0 compiler currently rejects generic enum construction from inside a
+function body; tests cover generic enum values at typed local declarations.
 
-Next, proceed through T2: improve lexer error reporting, then implement the
-parser and AST before name resolution and type checking.
+Next, implement parser token consumption and an arena-backed AST, then extend
+it through precedence, grouping, declarations, types, and statements.

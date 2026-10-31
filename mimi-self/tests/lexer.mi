@@ -54,5 +54,11 @@ main :: fn () i32 {
     if lexer.token_count("a | b") != -1 { return 8 }
     if lexer.token_count("ratio := 1.") != 4 { return 9 }
     if lexer.token_count("\"bad\\q\"") != -1 { return 10 }
+    if lexer.error_code("a | b", 2) != 1 { return 49 }
+    if lexer.error_code("/* unfinished", 12) != 2 { return 50 }
+    if lexer.error_code("\"unfinished", 11) != 3 { return 51 }
+    if lexer.error_code("\"bad\\q\"", 4) != 4 { return 52 }
+    if lexer.error_code([240, 128, 128, 128], 0) != 5 { return 53 }
+    if lexer.error_message("\"bad\\q\"", 4)[0] != 105 { return 54 }
     0
 }

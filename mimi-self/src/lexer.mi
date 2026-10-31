@@ -117,6 +117,84 @@ pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
     (0, source.len, source.len)
 }
 
+pub error_code :: fn (source : []u8, cursor : u64) u8 {
+    index : u64 = 0
+    in_string := false
+    escaped := false
+    in_block_comment := false
+    while index < cursor && index < source.len {
+        byte := source[index]
+        if in_block_comment {
+            if byte == 42 && index + 1 < source.len && source[index + 1] == 47 {
+                in_block_comment = false
+                index = index + 2
+            } else {
+                index = index + 1
+            }
+        } else {
+            if in_string {
+                if escaped {
+                    escaped = false
+                    index = index + 1
+                } else {
+                    if byte == 92 {
+                        escaped = true
+                        index = index + 1
+                    } else {
+                        if byte == 34 {
+                            in_string = false
+                        }
+                        index = index + 1
+                    }
+                }
+            } else {
+                if byte == 34 {
+                    in_string = true
+                    index = index + 1
+                } else {
+                    if byte == 47 && index + 1 < source.len && source[index + 1] == 47 {
+                        index = index + 2
+                        while index < cursor && index < source.len && source[index] != 10 {
+                            index = index + 1
+                        }
+                    } else {
+                        if byte == 47 && index + 1 < source.len && source[index + 1] == 42 {
+                            in_block_comment = true
+                            index = index + 2
+                        } else {
+                            index = index + 1
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if in_block_comment { return 2 }
+    if in_string {
+        if escaped { return 4 }
+        if cursor >= source.len { return 3 }
+        if source[cursor] == 92 {
+            if cursor + 1 >= source.len { return 4 }
+            value := source[cursor + 1]
+            if value != 34 && value != 92 && value != 110 && value != 114 && value != 116 { return 4 }
+        }
+        return 3
+    }
+    if cursor < source.len && source[cursor] >= 128 && utf8_width(source, cursor) == 0 {
+        return 5
+    }
+    1
+}
+
+pub error_message :: fn (source : []u8, cursor : u64) []u8 {
+    code := error_code(source, cursor)
+    if code == 2 { return "unterminated block comment" }
+    if code == 3 { return "unterminated string literal" }
+    if code == 4 { return "invalid string escape" }
+    if code == 5 { return "invalid UTF-8 sequence in identifier" }
+    "unexpected character"
+}
+
 utf8_width :: fn (source : []u8, index : u64) u8 {
     first := source[index]
     if first >= 194 && first <= 223 {
