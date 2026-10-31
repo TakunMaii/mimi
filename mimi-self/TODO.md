@@ -29,6 +29,7 @@ two consecutive stages.
   parser and type-checker code.
 - [ ] Complete source file/module loading for the self-hosted compiler,
   including import resolution and recursive traversal.
+- [x] Track loading/loaded module states and reject cycles in a module graph.
 - [x] Define source spans and render diagnostics with source context.
 
 ## T2: Self-hosted front end
@@ -66,10 +67,10 @@ two consecutive stages.
 
 ## Current milestone
 
-T1 containers, runtime, Result/Option, source file records, and source-aware
-diagnostic rendering are in place. A module state graph detects repeated and
-currently-loading paths, but source import resolution and recursive traversal
-are still open. The T2 lexer returns token kinds and byte spans, decodes
+T1 containers, runtime, Result/Option, source file records, source-aware
+diagnostic rendering, and module state/cycle tracking are in place. Source
+import resolution and recursive traversal are still open. The T2 lexer
+returns token kinds and byte spans, decodes
 supported escapes, validates UTF-8 identifiers, and classifies common errors.
 It still lacks a reusable parser and AST. The Rust stage0 compiler currently
 rejects generic enum construction from inside a function body; tests cover

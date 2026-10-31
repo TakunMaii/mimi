@@ -80,11 +80,19 @@ pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
                             return (identifier_kind(source, start, index), start, index)
                         } else {
                             if byte >= 48 && byte <= 57 {
+                                previous := index
+                                after_member_dot := false
+                                while previous > 0 && (source[previous - 1] == 32 || source[previous - 1] == 9 || source[previous - 1] == 10 || source[previous - 1] == 13) {
+                                    previous = previous - 1
+                                }
+                                if previous > 0 && source[previous - 1] == 46 {
+                                    after_member_dot = true
+                                }
                                 index = index + 1
                                 while index < source.len && source[index] >= 48 && source[index] <= 57 {
                                     index = index + 1
                                 }
-                                if index < source.len && source[index] == 46 && (index + 1 >= source.len || source[index + 1] != 46) {
+                                if !after_member_dot && index < source.len && source[index] == 46 && (index + 1 >= source.len || source[index + 1] != 46) {
                                     index = index + 1
                                     while index < source.len && source[index] >= 48 && source[index] <= 57 {
                                         index = index + 1

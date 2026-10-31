@@ -8,6 +8,11 @@ main :: fn () i32 {
     third := lexer.next_token("abc + 12", second.2)
     if third.0 != 2 || third.1 != 6 || third.2 != 8 { return 13 }
     if lexer.next_token("abc + 12", third.2).0 != 0 { return 14 }
+    members := "nested.1.0 ratio := 1.25"
+    if lexer.token_count(members) != 9 { return 55 }
+    if lexer.next_token(members, 7).0 != 2 || lexer.next_token(members, 7).2 != 8 { return 56 }
+    if lexer.next_token(members, 8).0 != 46 { return 57 }
+    if lexer.next_token(members, 9).0 != 2 { return 58 }
     if lexer.next_token("fn true f8 if", 0).0 != 160 { return 15 }
     if lexer.next_token("fn true f8 if", 2).0 != 4 { return 16 }
     if lexer.next_token("fn true f8 if", 7).0 != 5 { return 17 }
