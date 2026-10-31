@@ -1477,6 +1477,32 @@ where
     I: Iterator<Item = Token> + Clone,
 {
     let mut lhs = match first {
+        Token::At => {
+            let name = match tokens.next() {
+                Some(Token::Identifier(name)) => name,
+                _ => panic!("expected intrinsic name after '@'"),
+            };
+            if !matches!(tokens.next(), Some(Token::LeftParen)) {
+                panic!("expected '(' after intrinsic '@{name}'");
+            }
+            let mut arguments = Vec::new();
+            if !matches!(tokens.peek(), Some(Token::RightParen)) {
+                loop {
+                    arguments.push(parse_expression(tokens, 0));
+                    match tokens.next() {
+                        Some(Token::Comma) => continue,
+                        Some(Token::RightParen) => break,
+                        _ => panic!("expected ',' or ')' after intrinsic argument"),
+                    }
+                }
+            } else {
+                tokens.next();
+            }
+            Expression::Call {
+                name: format!("@{name}"),
+                arguments,
+            }
+        }
         Token::Identifier(name) => Expression::Identifier(name),
         Token::LiteralNumber(value) => Expression::LiteralNumber(value),
         Token::LiteralString(value) => Expression::LiteralString(value),

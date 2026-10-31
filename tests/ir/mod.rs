@@ -104,6 +104,46 @@ fn builds_and_runs_explicit_numeric_casts() {
 }
 
 #[test]
+fn builds_and_runs_assert_and_reports_panic_intrinsics() {
+    let directory = std::env::temp_dir().join(format!("mimi_intrinsics_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("main.mi");
+    let executable = directory.join("main");
+
+    std::fs::write(&source, "main :: fn () i32 { @assert(true) 0 }").unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+
+    for (intrinsic, message) in [
+        ("@assert(false)", "assertion failed"),
+        ("@panic(\"panic message\")", "panic message"),
+        ("@todo(\"todo message\")", "todo message"),
+    ] {
+        std::fs::write(&source, format!("main :: fn () i32 {{ {intrinsic} 0 }}")).unwrap();
+        build_file(
+            source.to_str().unwrap(),
+            executable.to_str().unwrap(),
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let output = std::process::Command::new(&executable).output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains(message));
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn builds_and_runs_pointer_casts() {
     let source = std::env::temp_dir().join(format!(
         "mimi_pointer_cast_source_{}.mi",

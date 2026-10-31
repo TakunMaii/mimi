@@ -2276,6 +2276,41 @@ fn infer_expression(
             result
         }
         Expression::Call { name, arguments } => {
+            if matches!(name.as_str(), "@assert" | "@todo" | "@panic") {
+                let expected_count = 1;
+                if arguments.len() != expected_count {
+                    return Err(error(format!(
+                        "intrinsic '{name}' expects {expected_count} argument(s), got {}",
+                        arguments.len()
+                    )));
+                }
+                if name == "@assert" {
+                    let condition = infer_expression(
+                        &arguments[0],
+                        scopes,
+                        functions,
+                        structs,
+                        Some(DataType::Bool),
+                    )?;
+                    require_compatible(condition, Some(DataType::Bool))?;
+                } else {
+                    if !matches!(arguments[0], Expression::LiteralString(_)) {
+                        return Err(error(format!(
+                            "intrinsic '{name}' currently requires a string literal message"
+                        )));
+                    }
+                    let message_type =
+                        infer_expression(&arguments[0], scopes, functions, structs, None)?;
+                    if !matches!(message_type, DataType::Slice(element) if *element == DataType::U8)
+                    {
+                        return Err(error(format!(
+                            "intrinsic '{name}' message must be a string or []u8, found {message_type:?}"
+                        )));
+                    }
+                }
+                require_compatible(DataType::Void, expected)?;
+                return Ok(DataType::Void);
+            }
             if let Some(Symbol {
                 data_type: DataType::Function(parameters, return_type),
                 ..

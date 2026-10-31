@@ -1038,6 +1038,106 @@ impl Builder {
             }
             Expression::Match { value, arms } => self.lower_match(value, arms),
             Expression::Call { name, arguments } => {
+                if matches!(name.as_str(), "@assert" | "@todo" | "@panic") {
+                    let message = if name == "@assert" {
+                        "assertion failed"
+                    } else {
+                        match arguments.first()? {
+                            Expression::LiteralString(message) => message.as_str(),
+                            _ => return None,
+                        }
+                    };
+                    if name == "@assert" {
+                        let condition = self.expression(&arguments[0])?;
+                        let passed = self.new_block();
+                        let failed = self.new_block();
+                        self.terminate(MirTerminator::Branch {
+                            condition,
+                            then_block: passed,
+                            else_block: failed,
+                        });
+                        self.current = failed;
+                        let message_value = self.value();
+                        self.emit(MirInstruction::ConstString {
+                            result: message_value,
+                            bytes: message.as_bytes().to_vec(),
+                        });
+                        self.emit(MirInstruction::Call {
+                            result: None,
+                            result_slice_length: None,
+                            name: "puts".into(),
+                            args: vec![message_value],
+                            float_args: Vec::new(),
+                            result_float: None,
+                            variadic_start: None,
+                        });
+                        let null_stream = self.value();
+                        self.emit(MirInstruction::ConstInt {
+                            result: null_stream,
+                            value: 0,
+                        });
+                        self.emit(MirInstruction::Call {
+                            result: None,
+                            result_slice_length: None,
+                            name: "fflush".into(),
+                            args: vec![null_stream],
+                            float_args: Vec::new(),
+                            result_float: None,
+                            variadic_start: None,
+                        });
+                        self.emit(MirInstruction::Call {
+                            result: None,
+                            result_slice_length: None,
+                            name: "abort".into(),
+                            args: Vec::new(),
+                            float_args: Vec::new(),
+                            result_float: None,
+                            variadic_start: None,
+                        });
+                        self.terminate(MirTerminator::Jump(passed));
+                        self.current = passed;
+                    } else {
+                        let message_value = self.expression(&arguments[0])?;
+                        self.emit(MirInstruction::Call {
+                            result: None,
+                            result_slice_length: None,
+                            name: "puts".into(),
+                            args: vec![message_value],
+                            float_args: Vec::new(),
+                            result_float: None,
+                            variadic_start: None,
+                        });
+                        let null_stream = self.value();
+                        self.emit(MirInstruction::ConstInt {
+                            result: null_stream,
+                            value: 0,
+                        });
+                        self.emit(MirInstruction::Call {
+                            result: None,
+                            result_slice_length: None,
+                            name: "fflush".into(),
+                            args: vec![null_stream],
+                            float_args: Vec::new(),
+                            result_float: None,
+                            variadic_start: None,
+                        });
+                        self.emit(MirInstruction::Call {
+                            result: None,
+                            result_slice_length: None,
+                            name: "abort".into(),
+                            args: Vec::new(),
+                            float_args: Vec::new(),
+                            result_float: None,
+                            variadic_start: None,
+                        });
+                        self.terminate(MirTerminator::Return {
+                            value: None,
+                            slice_length: None,
+                        });
+                        return None;
+                    }
+                    return None;
+                }
                 if let Some((parameter_types, return_type)) =
                     self.variable_function_signatures.get(name).cloned()
                 {
