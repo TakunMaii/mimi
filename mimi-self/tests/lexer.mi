@@ -60,6 +60,7 @@ main :: fn () i32 {
     if lexer.token_count("a | b") != -1 { return 8 }
     if lexer.token_count("ratio := 1.") != 4 { return 9 }
     if lexer.token_count("\"bad\\q\"") != -1 { return 10 }
+    if lexer.token_count("1.2.3") != -1 { return 60 }
     if lexer.error_code("a | b", 2) != 1 { return 49 }
     if lexer.error_code("/* unfinished", 12) != 2 { return 50 }
     if lexer.error_code("\"unfinished", 11) != 3 { return 51 }

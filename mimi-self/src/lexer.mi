@@ -97,6 +97,9 @@ pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
                                     while index < source.len && source[index] >= 48 && source[index] <= 57 {
                                         index = index + 1
                                     }
+                                    if index < source.len && source[index] == 46 && (index + 1 >= source.len || source[index + 1] != 46) {
+                                        return (255, index, index)
+                                    }
                                 }
                                 return (2, start, index)
                             } else {
