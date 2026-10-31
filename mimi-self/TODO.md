@@ -81,7 +81,8 @@ two consecutive stages.
 - [x] Parse tuple destructuring names with atomic tuple literal initializers.
 - [x] Build function definition nodes with balanced block source spans.
 - [x] Reject duplicate function parameter names.
-- [ ] Validate generic function type parameters.
+- [x] Confirm generic function declarations are outside the current stage0
+  syntax; generic parameters apply to structs and enums.
 - [x] Compose binding, tuple destructuring, assignment, transfer, defer, and
   expression statements into block statement lists.
 - [x] Recursively compose control-flow statements and nested block contents.
