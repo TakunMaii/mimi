@@ -20,6 +20,20 @@ fn infers_numeric_literal_types_by_value() {
 }
 
 #[test]
+fn checks_integer_range_loop_bounds() {
+    let valid = parse(tokenize(
+        "main :: fn () i32 { total := 0 for index in 0..5 { total = total + index } total }"
+            .chars(),
+    ));
+    check(&valid).unwrap();
+
+    let invalid = parse(tokenize(
+        "main :: fn (start : u32) void { for index in start..5 { index } }".chars(),
+    ));
+    assert!(check(&invalid).is_err());
+}
+
+#[test]
 fn specializes_generic_struct_fields_and_checks_field_types() {
     let valid = parse(tokenize(
         "pair :: struct <T> { x : T, y : T } value : pair<i32> = pair<i32> { x = 1, y = 2 } get_x :: fn (item : pair<i32>) i32 { item.x }".chars(),

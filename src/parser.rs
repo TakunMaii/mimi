@@ -213,6 +213,12 @@ pub(crate) enum ASTNode {
         iterable: Expression,
         body: Expression,
     },
+    ForRange {
+        binding: String,
+        start: Expression,
+        end: Expression,
+        body: Expression,
+    },
     Loop {
         body: Expression,
     },
@@ -626,17 +632,36 @@ where
         matches!(tokens.next(), Some(Token::In)),
         "expected 'in' after loop binding"
     );
-    let iterable = match tokens.next() {
-        Some(Token::Identifier(name)) if matches!(tokens.peek(), Some(Token::LeftBrace)) => {
-            Expression::Identifier(name)
-        }
-        Some(first) => parse_expression_from(first, tokens, 0),
+    let first = match tokens.next() {
+        Some(first) => first,
         None => panic!("expected iterable after 'in'"),
     };
-    ASTNode::For {
-        binding,
-        iterable,
-        body: parse_block_expression(tokens),
+    let iterable = match first {
+        Token::Identifier(name) if matches!(tokens.peek(), Some(Token::LeftBrace)) => {
+            Expression::Identifier(name)
+        }
+        first => parse_expression_from(first, tokens, 0),
+    };
+    if matches!(tokens.peek(), Some(Token::DotDot)) {
+        tokens.next();
+        let end = parse_expression_from_mode(
+            tokens.next().expect("expected range end after '..'"),
+            tokens,
+            0,
+            false,
+        );
+        ASTNode::ForRange {
+            binding,
+            start: iterable,
+            end,
+            body: parse_block_expression(tokens),
+        }
+    } else {
+        ASTNode::For {
+            binding,
+            iterable,
+            body: parse_block_expression(tokens),
+        }
     }
 }
 
@@ -1510,25 +1535,25 @@ where
         Token::Minus => Expression::Negate(Box::new(parse_expression_from_mode(
             tokens.next().expect("expected an expression"),
             tokens,
-            6,
+            7,
             allow_struct_literal,
         ))),
         Token::Bang => Expression::Not(Box::new(parse_expression_from_mode(
             tokens.next().expect("expected an expression"),
             tokens,
-            6,
+            7,
             allow_struct_literal,
         ))),
         Token::Ampersand => Expression::AddressOf(Box::new(parse_expression_from_mode(
             tokens.next().expect("expected an expression"),
             tokens,
-            6,
+            7,
             allow_struct_literal,
         ))),
         Token::Star => Expression::Dereference(Box::new(parse_expression_from_mode(
             tokens.next().expect("expected an expression"),
             tokens,
-            6,
+            7,
             allow_struct_literal,
         ))),
         Token::LeftParen => {
@@ -1681,7 +1706,7 @@ where
             } else {
                 Some(Box::new(parse_expression(tokens, 0)))
             };
-            if matches!(tokens.peek(), Some(Token::Colon)) {
+            if matches!(tokens.peek(), Some(Token::Colon | Token::DotDot)) {
                 tokens.next();
                 let end = if matches!(tokens.peek(), Some(Token::RightBracket)) {
                     None
@@ -1727,7 +1752,7 @@ where
             continue;
         }
         if matches!(tokens.peek(), Some(Token::As)) {
-            let precedence = 6;
+            let precedence = 7;
             if precedence < min_precedence {
                 break;
             }
@@ -1744,15 +1769,15 @@ where
             Some(Token::AndAnd) => (2, BinaryOperator::And),
             Some(Token::EqualEqual) => (3, BinaryOperator::Equal),
             Some(Token::NotEqual) => (3, BinaryOperator::NotEqual),
-            Some(Token::LessThan) => (3, BinaryOperator::LessThan),
-            Some(Token::LessThanOrEqual) => (3, BinaryOperator::LessThanOrEqual),
-            Some(Token::GreaterThan) => (3, BinaryOperator::GreaterThan),
-            Some(Token::GreaterThanOrEqual) => (3, BinaryOperator::GreaterThanOrEqual),
-            Some(Token::Plus) => (4, BinaryOperator::Add),
-            Some(Token::Minus) => (4, BinaryOperator::Subtract),
-            Some(Token::Star) => (5, BinaryOperator::Multiply),
-            Some(Token::Slash) => (5, BinaryOperator::Divide),
-            Some(Token::Percent) => (5, BinaryOperator::Remainder),
+            Some(Token::LessThan) => (4, BinaryOperator::LessThan),
+            Some(Token::LessThanOrEqual) => (4, BinaryOperator::LessThanOrEqual),
+            Some(Token::GreaterThan) => (4, BinaryOperator::GreaterThan),
+            Some(Token::GreaterThanOrEqual) => (4, BinaryOperator::GreaterThanOrEqual),
+            Some(Token::Plus) => (5, BinaryOperator::Add),
+            Some(Token::Minus) => (5, BinaryOperator::Subtract),
+            Some(Token::Star) => (6, BinaryOperator::Multiply),
+            Some(Token::Slash) => (6, BinaryOperator::Divide),
+            Some(Token::Percent) => (6, BinaryOperator::Remainder),
             _ => break,
         };
         if precedence < min_precedence {

@@ -959,7 +959,7 @@ fn emit_numeric_convert(
             } else {
                 return Err(format!("unsupported float cast width f{from_width}"));
             }
-            if to_width == 32 {
+            if from_width == 32 {
                 assembly.push_str("    cvttss2si rax, xmm0\n");
             } else {
                 assembly.push_str("    cvttsd2si rax, xmm0\n");
@@ -1031,6 +1031,6 @@ fn symbol(name: &str) -> String {
             format!("_{name}")
         }
     } else {
-        name.strip_prefix('_').unwrap_or(name).to_string()
+        name.to_string()
     }
 }

@@ -61,8 +61,21 @@ pub(crate) fn compile_executable_with_options(
     options: &LinkOptions,
 ) -> Result<(), String> {
     validate_data_layout(module)?;
+    if cfg!(target_os = "linux") {
+        let host_arch = if cfg!(target_arch = "aarch64") {
+            TargetArch::Aarch64
+        } else {
+            TargetArch::X86_64
+        };
+        if module.target != host_arch {
+            return Err("Linux cross-compilation requires a target-specific toolchain and is not configured".into());
+        }
+    }
     if module.target == TargetArch::X86_64 {
         return compile_x86_64(module, output, options);
+    }
+    if !cfg!(target_os = "macos") {
+        return compile_aarch64_linux(module, output, options);
     }
     let (text, data, symbols, relocations) = encode_module(module)?;
     let object = write_macho_object(&text, &data, &symbols, &relocations);
@@ -197,6 +210,82 @@ fn compile_x86_64(module: &LirModule, output: &Path, options: &LinkOptions) -> R
     }
 }
 
+fn compile_aarch64_linux(
+    module: &LirModule,
+    output: &Path,
+    options: &LinkOptions,
+) -> Result<(), String> {
+    if !cfg!(target_os = "linux") {
+        return Err("AArch64 executable linking is supported only on Linux and macOS".into());
+    }
+    compile_assembly_executable(module, output, options, "AArch64")
+}
+
+fn compile_assembly_executable(
+    module: &LirModule,
+    output: &Path,
+    options: &LinkOptions,
+    architecture: &str,
+) -> Result<(), String> {
+    let assembly = emit_assembly(module)?;
+    let assembly_path = output.with_extension("s");
+    let object_path = output.with_extension("o");
+    std::fs::write(&assembly_path, assembly)
+        .map_err(|error| format!("cannot write {architecture} assembly: {error}"))?;
+
+    let assembled = Command::new("cc")
+        .arg("-c")
+        .arg(&assembly_path)
+        .arg("-o")
+        .arg(&object_path)
+        .output()
+        .map_err(|error| format!("cannot invoke {architecture} assembler: {error}"))?;
+    if !assembled.status.success() {
+        let _ = std::fs::remove_file(&assembly_path);
+        let _ = std::fs::remove_file(&object_path);
+        return Err(String::from_utf8_lossy(&assembled.stderr).into_owned());
+    }
+
+    let float8_object = match compile_float8_runtime(module, output) {
+        Ok(object) => object,
+        Err(error) => {
+            let _ = std::fs::remove_file(&assembly_path);
+            let _ = std::fs::remove_file(&object_path);
+            return Err(error);
+        }
+    };
+    let c_objects = compile_c_sources(module, output, options)?;
+    let mut linker = Command::new("cc");
+    for path in &options.library_paths {
+        linker.arg("-L").arg(path);
+    }
+    linker.arg(&object_path);
+    for object in &c_objects {
+        linker.arg(object);
+    }
+    if let Some(runtime) = &float8_object {
+        linker.arg(runtime);
+    }
+    for library in &options.libraries {
+        linker.arg(format!("-l{library}"));
+    }
+    let linked = linker.arg("-o").arg(output).output();
+    let _ = std::fs::remove_file(&assembly_path);
+    let _ = std::fs::remove_file(&object_path);
+    if let Some(runtime) = float8_object {
+        let _ = std::fs::remove_file(runtime);
+    }
+    for object in c_objects {
+        let _ = std::fs::remove_file(object);
+    }
+    let linked = linked.map_err(|error| format!("cannot invoke {architecture} linker: {error}"))?;
+    if linked.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&linked.stderr).into_owned())
+    }
+}
+
 fn compile_c_sources(
     module: &LirModule,
     output: &Path,
@@ -242,6 +331,9 @@ fn compile_c_sources(
         }
         for define in &options.defines {
             compiler.arg(format!("-D{define}"));
+        }
+        if cfg!(target_os = "linux") {
+            compiler.arg("-D_Nonnull=");
         }
         let result = compiler
             .args(["-std=c11", "-O2", "-c"])
@@ -2132,7 +2224,11 @@ fn emit_aarch64(module: &LirModule) -> Result<String, String> {
         emit_function(&function, &mut assembly)?;
     }
     if !module.strings.is_empty() {
-        assembly.push_str(".section __TEXT,__const\n.p2align 3\n");
+        if cfg!(target_os = "macos") {
+            assembly.push_str(".section __TEXT,__const\n.p2align 3\n");
+        } else {
+            assembly.push_str(".section .rodata\n.p2align 3\n");
+        }
         for (symbol, bytes) in &module.strings {
             assembly.push_str(&format!("{symbol}:\n"));
             if bytes.is_empty() {
@@ -2154,6 +2250,14 @@ fn emit_aarch64(module: &LirModule) -> Result<String, String> {
     Ok(assembly)
 }
 
+fn function_symbol(name: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("_{name}")
+    } else {
+        name.to_string()
+    }
+}
+
 fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), String> {
     if function.blocks.is_empty() {
         return Err("function has no basic blocks".into());
@@ -2161,7 +2265,7 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
     if function.params.len() > 16 {
         return Err("ARM64 backend currently supports at most 16 integer parameters".into());
     }
-    let label = format!("_{}", function.name);
+    let label = function_symbol(&function.name);
     assembly.push_str(&format!(".globl {label}\n{label}:\n"));
     let frame_size = stack_frame_size(function);
     let has_calls = function
@@ -2204,15 +2308,29 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     external,
                 } => {
                     if *external {
-                        assembly.push_str(&format!(
-                            "    adrp x{}, {symbol}@GOTPAGE\n    ldr x{}, [x{}, {symbol}@GOTPAGEOFF]\n",
-                            register.0, register.0, register.0
-                        ));
+                        if cfg!(target_os = "macos") {
+                            assembly.push_str(&format!(
+                                "    adrp x{}, {}@GOTPAGE\n    ldr x{}, [x{}, {}@GOTPAGEOFF]\n",
+                                register.0, symbol, register.0, register.0, symbol
+                            ));
+                        } else {
+                            assembly.push_str(&format!(
+                                "    adrp x{}, :got:{symbol}\n    ldr x{}, [x{}, :got_lo12:{symbol}]\n",
+                                register.0, register.0, register.0
+                            ));
+                        }
                     } else {
-                        assembly.push_str(&format!(
-                            "    adrp x{}, {symbol}@PAGE\n    add x{}, x{}, {symbol}@PAGEOFF\n",
-                            register.0, register.0, register.0
-                        ));
+                        if cfg!(target_os = "macos") {
+                            assembly.push_str(&format!(
+                                "    adrp x{}, {symbol}@PAGE\n    add x{}, x{}, {symbol}@PAGEOFF\n",
+                                register.0, register.0, register.0
+                            ));
+                        } else {
+                            assembly.push_str(&format!(
+                                "    adrp x{}, {symbol}\n    add x{}, x{}, :lo12:{symbol}\n",
+                                register.0, register.0, register.0
+                            ));
+                        }
                     }
                 }
                 LirInstruction::Add {
@@ -2380,7 +2498,7 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                         assembly,
                         &argument_moves(&integer_args[..integer_args.len().min(8)]),
                     );
-                    assembly.push_str(&format!("    bl _{name}\n"));
+                    assembly.push_str(&format!("    bl {}\n", function_symbol(name)));
                     emit_stack_adjust(assembly, stack_size, false);
                     if let (Some(pointer), Some(length)) = (result, result_slice_length) {
                         emit_register_moves(

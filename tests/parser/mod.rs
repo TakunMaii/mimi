@@ -46,6 +46,21 @@ fn tokenizes_chained_numeric_members_separately_from_decimals() {
 }
 
 #[test]
+fn tokenizes_range_after_integer_literal() {
+    assert_eq!(
+        tokenize("values[1..3]".chars()),
+        vec![
+            Token::Identifier("values".into()),
+            Token::LeftBracket,
+            Token::LiteralNumber("1".into()),
+            Token::DotDot,
+            Token::LiteralNumber("3".into()),
+            Token::RightBracket,
+        ]
+    );
+}
+
+#[test]
 fn parses_arithmetic_precedence_and_parentheses() {
     assert_eq!(
         parse(tokenize("result := 1 + 2 * (3 - 4)".chars())),
@@ -470,6 +485,24 @@ fn parses_comparison_and_logical_precedence() {
 }
 
 #[test]
+fn relational_comparison_binds_tighter_than_equality() {
+    assert_eq!(
+        parse(tokenize("result := flag == left < right".chars())),
+        vec![ASTNode::VariableDefinition {
+            name: "result".into(),
+            data_type: None,
+            value: Expression::Equal(
+                Box::new(Expression::Identifier("flag".into())),
+                Box::new(Expression::LessThan(
+                    Box::new(Expression::Identifier("left".into())),
+                    Box::new(Expression::Identifier("right".into())),
+                )),
+            ),
+        }]
+    );
+}
+
+#[test]
 fn single_equal_remains_assignment() {
     assert_eq!(
         parse(tokenize("value = left == right".chars())),
@@ -608,6 +641,29 @@ fn parses_control_flow_statements() {
 }
 
 #[test]
+fn parses_half_open_integer_range_loops() {
+    let nodes = parse(tokenize("for index in 2..7 { index }".chars()));
+    assert!(matches!(
+        nodes.as_slice(),
+        [ASTNode::ForRange {
+            binding,
+            start: Expression::LiteralNumber(start),
+            end: Expression::LiteralNumber(end),
+            ..
+        }] if binding == "index" && start == "2" && end == "7"
+    ));
+
+    assert!(matches!(
+        parse(tokenize("for index in lower..upper {}".chars())).as_slice(),
+        [ASTNode::ForRange {
+            start: Expression::Identifier(start),
+            end: Expression::Identifier(end),
+            ..
+        }] if start == "lower" && end == "upper"
+    ));
+}
+
+#[test]
 fn parses_break_and_continue_in_blocks() {
     let nodes = parse(tokenize("main :: fn () void { break continue }".chars()));
     assert!(matches!(
@@ -665,6 +721,23 @@ fn parses_array_types_literals_indexing_and_slices() {
             ..
         }
     ));
+}
+
+#[test]
+fn parses_half_open_and_open_ended_range_slices() {
+    let nodes = parse(tokenize(
+        "a := values[1..3] b := values[..3] c := values[1..] d := values[..]".chars(),
+    ));
+    assert_eq!(nodes.len(), 4);
+    for node in nodes {
+        assert!(matches!(
+            node,
+            ASTNode::VariableDefinition {
+                value: Expression::Slice { .. },
+                ..
+            }
+        ));
+    }
 }
 
 #[test]

@@ -1064,6 +1064,13 @@ fn generic_applications(
                     visit_expr(iterable, output);
                     visit_expr(body, output);
                 }
+                ASTNode::ForRange {
+                    start, end, body, ..
+                } => {
+                    visit_expr(start, output);
+                    visit_expr(end, output);
+                    visit_expr(body, output);
+                }
                 ASTNode::Loop { body } | ASTNode::Defer { body } => visit_expr(body, output),
                 ASTNode::IfLet {
                     value,
@@ -1324,6 +1331,18 @@ fn collect_free_names(
                 body,
             } => {
                 collect_free_names(iterable, bound, captures);
+                let mut nested = bound.clone();
+                nested.insert(binding.clone());
+                collect_free_names(body, &mut nested, captures);
+            }
+            ASTNode::ForRange {
+                binding,
+                start,
+                end,
+                body,
+            } => {
+                collect_free_names(start, bound, captures);
+                collect_free_names(end, bound, captures);
                 let mut nested = bound.clone();
                 nested.insert(binding.clone());
                 collect_free_names(body, &mut nested, captures);
@@ -1634,6 +1653,13 @@ fn lift_lambdas_in_node(
         }
         ASTNode::For { iterable, body, .. } => {
             lift_lambdas_in_expression(iterable, functions, used_names, next_lambda);
+            lift_lambdas_in_expression(body, functions, used_names, next_lambda);
+        }
+        ASTNode::ForRange {
+            start, end, body, ..
+        } => {
+            lift_lambdas_in_expression(start, functions, used_names, next_lambda);
+            lift_lambdas_in_expression(end, functions, used_names, next_lambda);
             lift_lambdas_in_expression(body, functions, used_names, next_lambda);
         }
         ASTNode::IfLet {

@@ -57,7 +57,9 @@ top-level `const` globals are read-only in Mimi.
 Mutable globals of complete imported structs and unions support field reads,
 field writes, and taking the address of the global aggregate.
 Integer and floating-point scalar calls are compiled and linked against C on
-both supported Apple targets.
+x86_64 Linux and both supported Apple targets. AArch64 Linux uses the host
+system assembler and linker; it requires a native AArch64 Linux toolchain.
+Automatic Linux cross-compilation is not currently configured.
 String literals passed to imported `char *` parameters are emitted as
 NUL-terminated static byte arrays. Slices and arrays expose `.ptr` and `.len`,
 so APIs that take a pointer and length can be called as
