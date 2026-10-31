@@ -3309,6 +3309,23 @@ fn emits_and_assembles_x86_64_integer_control_flow() {
 }
 
 #[test]
+fn uses_compact_x86_64_immediate_loads_when_encodable() {
+    let ast = parse(tokenize(
+        "main :: fn () i32 { zero := 0 positive := 42 negative := -7 wide := 5000000000 zero + positive + negative + (wide as i32) }"
+            .chars(),
+    ));
+    let hir = hir::lower_ast(&ast);
+    let mir = mir::lower_hir_with_layout(&hir, lir::TargetDataLayout::HOST_64);
+    let lir = lir::lower_mir(&mir, &lir::X86_64Target);
+    let assembly = codegen::emit_assembly(&lir).unwrap();
+
+    assert!(assembly.contains("xor eax, eax"));
+    assert!(assembly.contains("mov eax, 0x2a"));
+    assert!(assembly.contains("mov eax, 0x7"));
+    assert!(assembly.contains("movabs rax, 0x12a05f200"));
+}
+
+#[test]
 fn emits_and_assembles_x86_64_float_and_stack_arguments() {
     let ast = parse(tokenize(
         "sum10 :: fn (a : i32, b : i32, c : i32, d : i32, e : i32, f : i32, g : i32, h : i32, i : i32, j : i32) i32 { a + b + c + d + e + f + g + h + i + j } add32 :: fn (left : f32, right : f32) f32 { left + right } multiply16 :: fn (left : f16, right : f16) f16 { left * right } main :: fn () i32 { sum10(1, 2, 3, 4, 5, 6, 7, 8, 9, 10) + if add32(1.0, 2.0) > 2.0 { 1 } else { 0 } }"
