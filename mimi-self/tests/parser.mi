@@ -180,6 +180,15 @@ main :: fn () i32 {
     generic_struct_literal := lexer.parse_expression("Pair<i32> { value = 1 }", &fresh_storage)
     if lexer.expression_is_null(generic_struct_literal) || generic_struct_literal.kind != 291 || generic_struct_literal.left.kind != 278 { return 271 }
     if generic_struct_literal.left.start != 0 || generic_struct_literal.left.end != 9 { return 272 }
+    scalar_cast := lexer.parse_expression("value as i32", &fresh_storage)
+    if lexer.expression_is_null(scalar_cast) || scalar_cast.kind != 293 || scalar_cast.left.kind != 1 || scalar_cast.right.kind != 270 { return 273 }
+    if scalar_cast.start != 0 || scalar_cast.end != 12 || scalar_cast.right.start != 9 { return 274 }
+    pointer_cast := lexer.parse_expression("address as *u8", &fresh_storage)
+    if lexer.expression_is_null(pointer_cast) || pointer_cast.kind != 293 || pointer_cast.right.kind != 271 { return 275 }
+    grouped_cast := lexer.parse_expression("(left + right) as i64", &fresh_storage)
+    if lexer.expression_is_null(grouped_cast) || grouped_cast.kind != 293 || grouped_cast.left.kind != 43 { return 276 }
+    malformed_cast := lexer.parse_expression("value as", &fresh_storage)
+    if !lexer.expression_is_null(malformed_cast) { return 277 }
     malformed_struct_literal := lexer.parse_expression("Point { x }", &fresh_storage)
     if !lexer.expression_is_null(malformed_struct_literal) { return 270 }
     while_statement := lexer.parse_loop_statement("while ready { work() }", &storage)

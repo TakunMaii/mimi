@@ -2171,6 +2171,43 @@ pub parse_struct_literal :: fn (source : []u8, storage : *ExpressionArena) *Stru
     literal
 }
 
+parse_cast_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
+    cursor : u64 = 0
+    paren_depth : u64 = 0
+    bracket_depth : u64 = 0
+    cast_start := source.len
+    cast_end := source.len
+    while cursor < source.len {
+        token := next_token(source, cursor)
+        if token.0 == 0 || token.0 == 255 { break }
+        cursor = token.2
+        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
+            if token.0 == 41 && paren_depth > 0 { paren_depth = paren_depth - 1 } else {
+                if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
+                    if token.0 == 93 && bracket_depth > 0 { bracket_depth = bracket_depth - 1 } else {
+                        if token.0 == 174 && paren_depth == 0 && bracket_depth == 0 {
+                            if cast_start != source.len { return mimi_buffer_empty() as *ExprNode }
+                            cast_start = token.1
+                            cast_end = token.2
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if cast_start == source.len { return mimi_buffer_empty() as *ExprNode }
+    left_source := source[0:cast_start]
+    first := next_token(left_source, 0)
+    left := parse_expression(left_source, storage)
+    if expression_is_null(left) { return left }
+    if expression_precedence(left.kind as u8) != 0 && first.0 != 40 { return mimi_buffer_empty() as *ExprNode }
+    data_type := parse_type(source[cast_end:source.len], storage)
+    if expression_is_null(data_type) { return data_type }
+    data_type.start = data_type.start + cast_end
+    data_type.end = data_type.end + cast_end
+    allocate_expr(storage, 293, left.start, data_type.end, left, data_type)
+}
+
 pub function_node_is_null :: fn (function : *FunctionNode) bool {
     function == (mimi_buffer_empty() as *FunctionNode)
 }
@@ -2629,6 +2666,11 @@ pub parse_function_type :: fn (source : []u8, storage : *ExpressionArena) *ExprN
 pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     // Bound the stack-size calculations below before multiplying source.len.
     if source.len > 500000000000000000 { return mimi_buffer_empty() as *ExprNode }
+    first_cast := next_token(source, 0)
+    if first_cast.0 == 1 || first_cast.0 == 2 || first_cast.0 == 3 || first_cast.0 == 40 || first_cast.0 == 42 || first_cast.0 == 91 || first_cast.0 == 38 || first_cast.0 == 45 || first_cast.0 == 33 {
+        cast := parse_cast_expression(source, storage)
+        if !expression_is_null(cast) { return cast }
+    }
     first := next_token(source, 0)
     if first.0 == 1 && (next_token(source, first.2).0 == 123 || next_token(source, first.2).0 == 60) {
         literal := parse_struct_literal(source, storage)

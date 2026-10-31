@@ -78,6 +78,8 @@ two consecutive stages.
 - [ ] Validate generic function type parameters and parse statement blocks.
 - [x] Extend tuple literal parsing to arbitrary expressions and parse tuple
   types and destructuring bindings.
+- [x] Parse `value as Type` casts for scalar, pointer, and grouped values.
+- [ ] Match cast precedence inside unparenthesized binary expressions.
 - [x] Parse simple-name struct literal fields and nested values.
 - [x] Parse generic struct literal type applications.
 - [ ] Validate destructuring tuple value types and arity.
