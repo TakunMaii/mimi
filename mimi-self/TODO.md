@@ -78,7 +78,7 @@ two consecutive stages.
 - [ ] Validate generic function type parameters.
 - [x] Compose binding, assignment, transfer, defer, and expression statements
   into block statement lists.
-- [ ] Recursively compose control-flow statements and nested block contents.
+- [x] Recursively compose control-flow statements and nested block contents.
 - [x] Extend tuple literal parsing to arbitrary expressions and parse tuple
   types and destructuring bindings.
 - [x] Parse `value as Type` casts for scalar, pointer, and grouped values.
@@ -131,17 +131,16 @@ remain pending.
 Function definitions have balanced body spans. `parse_statement_block` also
 composes binding, assignment, transfer, defer, and expression statements into
 source-aware linked lists; recursive control-flow statement composition is
-still pending. Tuple literals accept arbitrary expressions and nested
-calls; simple-name struct literal fields and nested values are also parsed.
+Tuple literals accept arbitrary expressions and nested calls; simple-name
+struct literal fields and nested values are also parsed.
 Return/break/continue statement nodes have dedicated parsers. Simple
 assignment and both expression/block forms of `defer` are parsed as statement
-nodes; deferred block contents are not yet recursively parsed. Atomic tuple
+nodes; deferred block contents are recursively parsed. Atomic tuple
 destructuring is represented by a dedicated name-list/value node; tuple literal
 initializer arity is checked, while element types require semantic analysis.
 Scalar, pointer, generic, and tuple casts bind to the preceding operand in
 unparenthesized binary expressions.
-Generic declarations and parameter validation, plus recursive block parsing
-for control-flow statements, remain open. `if` statements and expressions retain conditions and
+Generic declarations and parameter validation remain open. `if` statements and expressions retain conditions and
 then/else-if/else branch spans. Match nodes preserve the scrutinee and variant
 arm/binding/result spans. Block statement composition, enum exhaustiveness,
 and semantic validation are not implemented.

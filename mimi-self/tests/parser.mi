@@ -101,6 +101,20 @@ main :: fn () i32 {
     if lexer.block_node_is_null(empty_composed_block) || !lexer.statement_node_is_null(empty_composed_block.statements) { return 293 }
     expression_composed_block := lexer.parse_statement_block("{ work() }", 0, &storage)
     if lexer.block_node_is_null(expression_composed_block) || expression_composed_block.statements.kind != 303 || expression_composed_block.statements.value.kind != 263 { return 294 }
+    control_composed_source := "{ if ready { return 1 } else { return 2 } return 0 }"
+    control_composed_block := lexer.parse_statement_block(control_composed_source, 50, &storage)
+    if lexer.block_node_is_null(control_composed_block) || control_composed_block.statements.kind != 304 { return 295 }
+    if control_composed_block.statements.if_statement.condition.start != 55 || control_composed_block.statements.if_statement.then_branch.start != 61 { return 296 }
+    if control_composed_block.statements.if_statement.else_branch.start != 80 || control_composed_block.statements.next.kind != 280 { return 297 }
+    if control_composed_block.statements.if_statement.then_branch.statements.kind != 280 || control_composed_block.statements.if_statement.else_branch.statements.kind != 280 { return 302 }
+    loop_composed_block := lexer.parse_statement_block("{ while ready { break } return 0 }", 20, &storage)
+    if lexer.block_node_is_null(loop_composed_block) || loop_composed_block.statements.kind != 306 || loop_composed_block.statements.loop_statement.kind != 286 { return 298 }
+    if loop_composed_block.statements.loop_statement.body.start != 36 || loop_composed_block.statements.next.kind != 280 { return 299 }
+    if loop_composed_block.statements.loop_statement.body.statements.kind != 281 { return 303 }
+    if_let_composed_block := lexer.parse_statement_block("{ if some(value) := option { work(value) } return 0 }", 10, &storage)
+    if lexer.block_node_is_null(if_let_composed_block) || if_let_composed_block.statements.kind != 305 || if_let_composed_block.statements.if_let.variant_start != 14 { return 300 }
+    for_composed_block := lexer.parse_statement_block("{ for item in values { work(item) } return 0 }", 30, &storage)
+    if lexer.block_node_is_null(for_composed_block) || for_composed_block.statements.kind != 307 || for_composed_block.statements.for_loop.variable_start != 35 { return 301 }
     unclosed_function_definition := lexer.parse_function_definition("work :: fn () i32 { return 1", &storage)
     if !lexer.function_node_is_null(unclosed_function_definition) { return 201 }
     if_statement_source := "if ready { left := 1 } else { right := 2 }"

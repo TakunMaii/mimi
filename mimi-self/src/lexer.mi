@@ -599,6 +599,10 @@ pub StatementNode :: struct {
     next : *StatementNode,
     body : *BlockNode,
     binding : *BindingNode,
+    if_statement : *IfNode,
+    if_let : *IfLetNode,
+    loop_statement : *LoopNode,
+    for_loop : *ForNode,
 }
 
 pub DestructureNameNode :: struct {
@@ -926,7 +930,7 @@ pub parse_transfer_statement :: fn (source : []u8, storage : *ExpressionArena) *
         }
         if next_token(source, keyword.2).0 != 0 { return mimi_buffer_empty() as *StatementNode }
     }
-    if mimi_arena_allocate(storage, 56, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+    if mimi_arena_allocate(storage, 88, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
     statement := storage.last as *StatementNode
     statement.kind = kind
     statement.start = keyword.1
@@ -935,6 +939,10 @@ pub parse_transfer_statement :: fn (source : []u8, storage : *ExpressionArena) *
     statement.next = mimi_buffer_empty() as *StatementNode
     statement.body = mimi_buffer_empty() as *BlockNode
     statement.binding = mimi_buffer_empty() as *BindingNode
+    statement.if_statement = mimi_buffer_empty() as *IfNode
+    statement.if_let = mimi_buffer_empty() as *IfLetNode
+    statement.loop_statement = mimi_buffer_empty() as *LoopNode
+    statement.for_loop = mimi_buffer_empty() as *ForNode
     statement
 }
 
@@ -946,7 +954,7 @@ pub parse_defer_statement :: fn (source : []u8, storage : *ExpressionArena) *Sta
     if next.0 == 123 {
         body := parse_block_span(source[next.1:source.len], next.1, storage)
         if block_node_is_null(body) { return mimi_buffer_empty() as *StatementNode }
-        if mimi_arena_allocate(storage, 56, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+        if mimi_arena_allocate(storage, 88, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
         statement := storage.last as *StatementNode
         statement.kind = 290
         statement.start = keyword.1
@@ -955,13 +963,17 @@ pub parse_defer_statement :: fn (source : []u8, storage : *ExpressionArena) *Sta
         statement.next = mimi_buffer_empty() as *StatementNode
         statement.body = body
         statement.binding = mimi_buffer_empty() as *BindingNode
+        statement.if_statement = mimi_buffer_empty() as *IfNode
+        statement.if_let = mimi_buffer_empty() as *IfLetNode
+        statement.loop_statement = mimi_buffer_empty() as *LoopNode
+        statement.for_loop = mimi_buffer_empty() as *ForNode
         return statement
     }
     value := parse_expression(source[keyword.2:source.len], storage)
     if expression_is_null(value) { return mimi_buffer_empty() as *StatementNode }
     value.start = value.start + keyword.2
     value.end = value.end + keyword.2
-    if mimi_arena_allocate(storage, 56, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+    if mimi_arena_allocate(storage, 88, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
     statement := storage.last as *StatementNode
     statement.kind = 283
     statement.start = keyword.1
@@ -970,6 +982,10 @@ pub parse_defer_statement :: fn (source : []u8, storage : *ExpressionArena) *Sta
     statement.next = mimi_buffer_empty() as *StatementNode
     statement.body = mimi_buffer_empty() as *BlockNode
     statement.binding = mimi_buffer_empty() as *BindingNode
+    statement.if_statement = mimi_buffer_empty() as *IfNode
+    statement.if_let = mimi_buffer_empty() as *IfLetNode
+    statement.loop_statement = mimi_buffer_empty() as *LoopNode
+    statement.for_loop = mimi_buffer_empty() as *ForNode
     statement
 }
 
@@ -1012,7 +1028,7 @@ pub parse_assignment_statement :: fn (source : []u8, storage : *ExpressionArena)
     value.end = value.end + equal_end
     assignment := allocate_expr(storage, 284, target.start, value.end, target, value)
     if expression_is_null(assignment) { return mimi_buffer_empty() as *StatementNode }
-    if mimi_arena_allocate(storage, 56, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+    if mimi_arena_allocate(storage, 88, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
     statement := storage.last as *StatementNode
     statement.kind = 284
     statement.start = target.start
@@ -1021,6 +1037,10 @@ pub parse_assignment_statement :: fn (source : []u8, storage : *ExpressionArena)
     statement.next = mimi_buffer_empty() as *StatementNode
     statement.body = mimi_buffer_empty() as *BlockNode
     statement.binding = mimi_buffer_empty() as *BindingNode
+    statement.if_statement = mimi_buffer_empty() as *IfNode
+    statement.if_let = mimi_buffer_empty() as *IfLetNode
+    statement.loop_statement = mimi_buffer_empty() as *LoopNode
+    statement.for_loop = mimi_buffer_empty() as *ForNode
     statement
 }
 
@@ -1255,7 +1275,7 @@ pub parse_statement_block :: fn (source : []u8, offset : u64, storage : *Express
 }
 
 statement_starts_here :: fn (source : []u8, token : (u8, u64, u64)) bool {
-    if token.0 == 172 || token.0 == 175 || token.0 == 176 || token.0 == 177 { return true }
+    if token.0 == 164 || token.0 == 168 || token.0 == 169 || token.0 == 170 || token.0 == 171 || token.0 == 172 || token.0 == 175 || token.0 == 176 || token.0 == 177 { return true }
     if token.0 != 1 { return false }
     separator := next_token(source, token.2)
     if separator.0 == 58 {
@@ -1268,6 +1288,30 @@ statement_starts_here :: fn (source : []u8, token : (u8, u64, u64)) bool {
 parse_statement_piece :: fn (source : []u8, offset : u64, storage : *ExpressionArena) *StatementNode {
     first := next_token(source, 0)
     statement : *StatementNode = mimi_buffer_empty() as *StatementNode
+    if first.0 == 164 {
+        if_let := parse_if_let_statement(source, storage)
+        if !if_let_node_is_null(if_let) {
+            statement = allocate_control_statement(storage, 305, if_let.start, if_let.end)
+            statement.if_let = if_let
+        } else {
+            if_node := parse_if_statement(source, storage)
+            if if_node_is_null(if_node) { return mimi_buffer_empty() as *StatementNode }
+            statement = allocate_control_statement(storage, 304, if_node.start, if_node.end)
+            statement.if_statement = if_node
+        }
+    } else {
+    if first.0 == 168 || first.0 == 169 || first.0 == 171 {
+        loop_node := parse_loop_statement(source, storage)
+        if loop_node_is_null(loop_node) { return mimi_buffer_empty() as *StatementNode }
+        statement = allocate_control_statement(storage, 306, loop_node.start, loop_node.end)
+        statement.loop_statement = loop_node
+    } else {
+    if first.0 == 170 {
+        for_node := parse_for_statement(source, storage)
+        if for_node_is_null(for_node) { return mimi_buffer_empty() as *StatementNode }
+        statement = allocate_control_statement(storage, 307, for_node.start, for_node.end)
+        statement.for_loop = for_node
+    } else {
     if first.0 == 175 || first.0 == 176 || first.0 == 177 {
         statement = parse_transfer_statement(source, storage)
     } else {
@@ -1276,7 +1320,7 @@ parse_statement_piece :: fn (source : []u8, offset : u64, storage : *ExpressionA
         } else {
             binding := parse_binding_declaration(source, storage)
             if !binding_node_is_null(binding) {
-                if mimi_arena_allocate(storage, 56, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+                if mimi_arena_allocate(storage, 88, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
                 statement = storage.last as *StatementNode
                 statement.kind = 285
                 statement.start = binding.start
@@ -1285,12 +1329,16 @@ parse_statement_piece :: fn (source : []u8, offset : u64, storage : *ExpressionA
                 statement.next = mimi_buffer_empty() as *StatementNode
                 statement.body = mimi_buffer_empty() as *BlockNode
                 statement.binding = binding
+                statement.if_statement = mimi_buffer_empty() as *IfNode
+                statement.if_let = mimi_buffer_empty() as *IfLetNode
+                statement.loop_statement = mimi_buffer_empty() as *LoopNode
+                statement.for_loop = mimi_buffer_empty() as *ForNode
             } else {
                 statement = parse_assignment_statement(source, storage)
                 if statement_node_is_null(statement) {
                     value := parse_expression(source, storage)
                     if expression_is_null(value) { return mimi_buffer_empty() as *StatementNode }
-                    if mimi_arena_allocate(storage, 56, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+                    if mimi_arena_allocate(storage, 88, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
                     statement = storage.last as *StatementNode
                     statement.kind = 303
                     statement.start = value.start
@@ -1299,13 +1347,136 @@ parse_statement_piece :: fn (source : []u8, offset : u64, storage : *ExpressionA
                     statement.next = mimi_buffer_empty() as *StatementNode
                     statement.body = mimi_buffer_empty() as *BlockNode
                     statement.binding = mimi_buffer_empty() as *BindingNode
+                    statement.if_statement = mimi_buffer_empty() as *IfNode
+                    statement.if_let = mimi_buffer_empty() as *IfLetNode
+                    statement.loop_statement = mimi_buffer_empty() as *LoopNode
+                    statement.for_loop = mimi_buffer_empty() as *ForNode
                 }
             }
         }
     }
+    }
+    }
+    }
     if statement_node_is_null(statement) { return statement }
+    compose_statement_blocks(source, statement, storage)
     shift_statement_spans(statement, offset)
+    shift_control_statement(statement, offset)
     statement
+}
+
+compose_statement_blocks :: fn (source : []u8, statement : *StatementNode, storage : *ExpressionArena) void {
+    if statement.if_statement != (mimi_buffer_empty() as *IfNode) { compose_if_blocks(source, statement.if_statement, storage) }
+    if statement.if_let != (mimi_buffer_empty() as *IfLetNode) {
+        node := statement.if_let
+        node.then_branch = compose_block_contents(source, node.then_branch, storage)
+        node.else_branch = compose_block_contents(source, node.else_branch, storage)
+    }
+    if statement.loop_statement != (mimi_buffer_empty() as *LoopNode) {
+        node := statement.loop_statement
+        node.body = compose_block_contents(source, node.body, storage)
+    }
+    if statement.for_loop != (mimi_buffer_empty() as *ForNode) {
+        node := statement.for_loop
+        node.body = compose_block_contents(source, node.body, storage)
+    }
+    if statement.kind == 290 && !block_node_is_null(statement.body) {
+        statement.body = compose_block_contents(source, statement.body, storage)
+    }
+}
+
+compose_if_blocks :: fn (source : []u8, node : *IfNode, storage : *ExpressionArena) void {
+    node.then_branch = compose_block_contents(source, node.then_branch, storage)
+    node.else_branch = compose_block_contents(source, node.else_branch, storage)
+    if node.else_if != (mimi_buffer_empty() as *IfNode) { compose_if_blocks(source, node.else_if, storage) }
+}
+
+compose_block_contents :: fn (source : []u8, block : *BlockNode, storage : *ExpressionArena) *BlockNode {
+    if block_node_is_null(block) { return block }
+    parse_statement_block(source[block.start:block.end], block.start, storage)
+}
+
+allocate_control_statement :: fn (storage : *ExpressionArena, kind : u64, start : u64, end : u64) *StatementNode {
+    if mimi_arena_allocate(storage, 88, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+    statement := storage.last as *StatementNode
+    statement.kind = kind
+    statement.start = start
+    statement.end = end
+    statement.value = mimi_buffer_empty() as *ExprNode
+    statement.next = mimi_buffer_empty() as *StatementNode
+    statement.body = mimi_buffer_empty() as *BlockNode
+    statement.binding = mimi_buffer_empty() as *BindingNode
+    statement.if_statement = mimi_buffer_empty() as *IfNode
+    statement.if_let = mimi_buffer_empty() as *IfLetNode
+    statement.loop_statement = mimi_buffer_empty() as *LoopNode
+    statement.for_loop = mimi_buffer_empty() as *ForNode
+    statement
+}
+
+shift_control_statement :: fn (statement : *StatementNode, offset : u64) void {
+    if statement.if_statement != (mimi_buffer_empty() as *IfNode) { shift_if_node(statement.if_statement, offset) }
+    if statement.if_let != (mimi_buffer_empty() as *IfLetNode) {
+        node := statement.if_let
+        node.start = node.start + offset
+        node.end = node.end + offset
+        node.value.start = node.value.start + offset
+        node.value.end = node.value.end + offset
+        shift_expression_children(node.value, offset)
+        shift_block_span(node.then_branch, offset)
+        shift_block_span(node.else_branch, offset)
+    }
+    if statement.loop_statement != (mimi_buffer_empty() as *LoopNode) {
+        node := statement.loop_statement
+        node.start = node.start + offset
+        node.end = node.end + offset
+        if !expression_is_null(node.condition) {
+            node.condition.start = node.condition.start + offset
+            node.condition.end = node.condition.end + offset
+            shift_expression_children(node.condition, offset)
+        }
+        shift_block_span(node.body, offset)
+    }
+    if statement.for_loop != (mimi_buffer_empty() as *ForNode) {
+        node := statement.for_loop
+        node.start = node.start + offset
+        node.end = node.end + offset
+        node.variable_start = node.variable_start + offset
+        node.variable_end = node.variable_end + offset
+        if !expression_is_null(node.iterable) { shift_expression_tree(node.iterable, offset) }
+        if !expression_is_null(node.range_start) { shift_expression_tree(node.range_start, offset) }
+        if !expression_is_null(node.range_end) { shift_expression_tree(node.range_end, offset) }
+        shift_block_span(node.body, offset)
+    }
+}
+
+shift_if_node :: fn (node : *IfNode, offset : u64) void {
+    node.start = node.start + offset
+    node.end = node.end + offset
+    shift_expression_tree(node.condition, offset)
+    shift_block_span(node.then_branch, offset)
+    shift_block_span(node.else_branch, offset)
+    if node.else_if != (mimi_buffer_empty() as *IfNode) { shift_if_node(node.else_if, offset) }
+}
+
+shift_block_span :: fn (block : *BlockNode, offset : u64) void {
+    if block_node_is_null(block) { return }
+    block.start = block.start + offset
+    block.end = block.end + offset
+    block.content_start = block.content_start + offset
+    block.content_end = block.content_end + offset
+    current := block.statements
+    while !statement_node_is_null(current) {
+        shift_statement_spans(current, offset)
+        shift_control_statement(current, offset)
+        current = current.next
+    }
+}
+
+shift_expression_tree :: fn (expression : *ExprNode, offset : u64) void {
+    if expression_is_null(expression) { return }
+    expression.start = expression.start + offset
+    expression.end = expression.end + offset
+    shift_expression_children(expression, offset)
 }
 
 shift_statement_spans :: fn (statement : *StatementNode, offset : u64) void {
@@ -1317,10 +1488,7 @@ shift_statement_spans :: fn (statement : *StatementNode, offset : u64) void {
         shift_expression_children(statement.value, offset)
     }
     if !block_node_is_null(statement.body) {
-        statement.body.start = statement.body.start + offset
-        statement.body.end = statement.body.end + offset
-        statement.body.content_start = statement.body.content_start + offset
-        statement.body.content_end = statement.body.content_end + offset
+        shift_block_span(statement.body, offset)
     }
     if !binding_node_is_null(statement.binding) {
         statement.binding.start = statement.binding.start + offset
