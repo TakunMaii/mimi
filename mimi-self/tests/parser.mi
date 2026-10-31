@@ -257,6 +257,17 @@ main :: fn () i32 {
     if defer_statement.start != 0 || defer_statement.end != 15 || defer_statement.value.start != 6 { return 183 }
     empty_defer := lexer.parse_defer_statement("defer", &storage)
     if !lexer.statement_node_is_null(empty_defer) { return 184 }
+    tuple_binding := lexer.parse_tuple_binding("first, second := (1, true)", &storage)
+    if lexer.tuple_binding_is_null(tuple_binding) || tuple_binding.name_count != 2 || tuple_binding.value.kind != 268 { return 185 }
+    if tuple_binding.names.start != 0 || tuple_binding.names.end != 5 { return 186 }
+    if tuple_binding.names.next.start != 7 || tuple_binding.names.next.end != 13 { return 187 }
+    if tuple_binding.start != 0 || tuple_binding.end != 26 || tuple_binding.value.start != 17 { return 188 }
+    one_name_binding := lexer.parse_tuple_binding("first := (1, true)", &storage)
+    if !lexer.tuple_binding_is_null(one_name_binding) { return 189 }
+    repeated_name_separator := lexer.parse_tuple_binding("first,,second := (1, true)", &storage)
+    if !lexer.tuple_binding_is_null(repeated_name_separator) { return 190 }
+    non_tuple_binding := lexer.parse_tuple_binding("first, second := value", &storage)
+    if !lexer.tuple_binding_is_null(non_tuple_binding) { return 191 }
     lexer.expression_arena_release(&storage)
     0
 }

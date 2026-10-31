@@ -647,6 +647,20 @@ pub StatementNode :: struct {
     next : *StatementNode,
 }
 
+pub DestructureNameNode :: struct {
+    start : u64,
+    end : u64,
+    next : *DestructureNameNode,
+}
+
+pub TupleBindingNode :: struct {
+    start : u64,
+    end : u64,
+    name_count : u64,
+    names : *DestructureNameNode,
+    value : *ExprNode,
+}
+
 pub FunctionHeader :: struct {
     start : u64,
     end : u64,
@@ -839,6 +853,53 @@ pub parse_defer_statement :: fn (source : []u8, storage : *ExpressionArena) *Sta
     statement.value = value
     statement.next = mimi_buffer_empty() as *StatementNode
     statement
+}
+
+pub tuple_binding_is_null :: fn (binding : *TupleBindingNode) bool {
+    binding == (mimi_buffer_empty() as *TupleBindingNode)
+}
+
+pub parse_tuple_binding :: fn (source : []u8, storage : *ExpressionArena) *TupleBindingNode {
+    cursor : u64 = 0
+    names : *DestructureNameNode = mimi_buffer_empty() as *DestructureNameNode
+    last : *DestructureNameNode = mimi_buffer_empty() as *DestructureNameNode
+    count : u64 = 0
+    value_start : u64 = 0
+    while true {
+        name := next_token(source, cursor)
+        if name.0 != 1 { return mimi_buffer_empty() as *TupleBindingNode }
+        if mimi_arena_allocate(storage, 24, 8) == 0 { return mimi_buffer_empty() as *TupleBindingNode }
+        item := storage.last as *DestructureNameNode
+        item.start = name.1
+        item.end = name.2
+        item.next = mimi_buffer_empty() as *DestructureNameNode
+        if last == (mimi_buffer_empty() as *DestructureNameNode) { names = item } else { last.next = item }
+        last = item
+        count = count + 1
+        separator := next_token(source, name.2)
+        if separator.0 == 44 {
+            cursor = separator.2
+        } else {
+            if separator.0 != 58 { return mimi_buffer_empty() as *TupleBindingNode }
+            equal := next_token(source, separator.2)
+            if equal.0 != 61 { return mimi_buffer_empty() as *TupleBindingNode }
+            value_start = equal.2
+            break
+        }
+    }
+    if count < 2 { return mimi_buffer_empty() as *TupleBindingNode }
+    value := parse_tuple_literal(source[value_start:source.len], storage)
+    if expression_is_null(value) { return mimi_buffer_empty() as *TupleBindingNode }
+    value.start = value.start + value_start
+    value.end = value.end + value_start
+    if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *TupleBindingNode }
+    binding := storage.last as *TupleBindingNode
+    binding.start = names.start
+    binding.end = value.end
+    binding.name_count = count
+    binding.names = names
+    binding.value = value
+    binding
 }
 
 pub function_header_is_null :: fn (header : *FunctionHeader) bool {
