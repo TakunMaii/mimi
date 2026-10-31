@@ -41,6 +41,19 @@ main :: fn () i32 {
     if lexer.parameter_list_is_null(parameters.next) || parameters.next.name_start != 21 || parameters.next.data_type.kind != 271 { return 113 }
     if parameters.next.data_type.start != 27 { return 116 }
     if parameters.next.data_type.end != 30 { return 114 }
+    tuple_node := lexer.parse_tuple_literal("(left, 2, \"x\",)", &storage)
+    if lexer.expression_is_null(tuple_node) { return 117 }
+    if tuple_node.kind != 268 { return tuple_node.kind as i32 }
+    if tuple_node.left.kind != 262 { return tuple_node.left.kind as i32 }
+    if tuple_node.left.left.kind != 1 { return tuple_node.left.left.kind as i32 }
+    if tuple_node.left.right.kind != 262 { return tuple_node.left.right.kind as i32 }
+    if tuple_node.left.right.left.kind != 2 { return tuple_node.left.right.left.kind as i32 }
+    if tuple_node.left.right.right.kind != 3 { return tuple_node.left.right.right.kind as i32 }
+    if tuple_node.start != 0 || tuple_node.end != 15 { return 119 }
+    empty_tuple_node := lexer.parse_tuple_literal("()", &storage)
+    if !lexer.expression_is_null(empty_tuple_node) { return 120 }
+    non_tuple_group := lexer.parse_tuple_literal("(value)", &storage)
+    if !lexer.expression_is_null(non_tuple_group) { return 121 }
     malformed_function := lexer.parse_function_header("work :: fn (x : i32 bool {", &storage)
     if !lexer.function_header_is_null(malformed_function) { return 108 }
     callback_header := lexer.parse_function_header("visit :: fn (callback : fn (i32) bool) []u8 {", &storage)

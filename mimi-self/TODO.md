@@ -60,6 +60,8 @@ two consecutive stages.
 - [ ] Build declaration AST nodes from binding headers and initializer
   expressions; validate function type parameters and parse tuples and
   statement blocks.
+- [ ] Extend tuple literal parsing to arbitrary expressions and parse tuple
+  types/destructuring.
 - [ ] Implement name resolution, type checking, generic specialization, and
   diagnostics.
 - [x] Add a Python differential smoke suite for accepted programs and

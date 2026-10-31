@@ -842,6 +842,49 @@ pub parse_parameters :: fn (source : []u8, header : *FunctionHeader, storage : *
     first
 }
 
+pub parse_tuple_literal :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
+    opening := next_token(source, 0)
+    if opening.0 != 40 { return mimi_buffer_empty() as *ExprNode }
+    cursor := opening.2
+    token := next_token(source, cursor)
+    if token.0 != 1 && token.0 != 2 && token.0 != 3 && token.0 != 4 && token.0 != 5 {
+        return mimi_buffer_empty() as *ExprNode
+    }
+    first := allocate_expr(storage, token.0 as u64, token.1, token.2, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+    if expression_is_null(first) { return first }
+    first.payload_start = token.1
+    first.payload_end = token.2
+    items := first
+    cursor = token.2
+    saw_comma := false
+    while true {
+        separator := next_token(source, cursor)
+        if separator.0 == 41 {
+            if !saw_comma || next_token(source, separator.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
+            return allocate_expr(storage, 268, opening.1, separator.2, items, mimi_buffer_empty() as *ExprNode)
+        }
+        if separator.0 != 44 { return mimi_buffer_empty() as *ExprNode }
+        saw_comma = true
+        cursor = separator.2
+        token = next_token(source, cursor)
+        if token.0 == 41 {
+            if next_token(source, token.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
+            return allocate_expr(storage, 268, opening.1, token.2, items, mimi_buffer_empty() as *ExprNode)
+        }
+        if token.0 != 1 && token.0 != 2 && token.0 != 3 && token.0 != 4 && token.0 != 5 {
+            return mimi_buffer_empty() as *ExprNode
+        }
+        item := allocate_expr(storage, token.0 as u64, token.1, token.2, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+        if expression_is_null(item) { return item }
+        item.payload_start = token.1
+        item.payload_end = token.2
+        items = allocate_expr(storage, 262, items.start, item.end, items, item)
+        if expression_is_null(items) { return items }
+        cursor = token.2
+    }
+    mimi_buffer_empty() as *ExprNode
+}
+
 parse_parameter :: fn (source : []u8, offset : u64, storage : *ExpressionArena) *ParameterNode {
     name := next_token(source, 0)
     colon := next_token(source, name.2)
