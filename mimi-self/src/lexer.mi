@@ -875,7 +875,7 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                                 expecting_operand = false
                             } else {
                                 if expecting_operand {
-                                    if token.0 != 45 && token.0 != 33 { return mimi_buffer_empty() as *ExprNode }
+                                    if token.0 != 45 && token.0 != 33 && token.0 != 38 && token.0 != 42 { return mimi_buffer_empty() as *ExprNode }
                                     stacks.operators[stacks.operator_count] = ExprOperator { kind = 250 + token.0 as u64, start = token.1, base_count = 0, argument_count = 0 }
                                     stacks.operator_count = stacks.operator_count + 1
                                 } else {
@@ -948,7 +948,7 @@ reduce_expression :: fn (stacks : *ExpressionStacks) bool {
 }
 
 is_prefix_operator :: fn (kind : u64) bool {
-    kind == 295 || kind == 283
+    kind == 295 || kind == 283 || kind == 288 || kind == 292
 }
 
 expression_operator_precedence :: fn (kind : u64) u8 {

@@ -47,6 +47,10 @@ main :: fn () i32 {
     unary := lexer.parse_expression("-(a + 2)", &storage)
     if lexer.expression_is_null(unary) || unary.kind != 295 { return 9 }
     if unary.left.kind != 43 { return 10 }
+    pointer_unary := lexer.parse_expression("&*ptr", &storage)
+    if lexer.expression_is_null(pointer_unary) || pointer_unary.kind != 288 || pointer_unary.left.kind != 292 { return 66 }
+    mixed_pointer := lexer.parse_expression("*ptr + left * right", &storage)
+    if lexer.expression_is_null(mixed_pointer) || mixed_pointer.kind != 43 || mixed_pointer.left.kind != 292 || mixed_pointer.right.kind != 42 { return 67 }
 
     invalid := lexer.parse_expression("1 + )", &storage)
     if !lexer.expression_is_null(invalid) { return 11 }
