@@ -85,6 +85,7 @@ two consecutive stages.
   types and destructuring bindings.
 - [x] Parse `value as Type` casts for scalar, pointer, and grouped values.
 - [x] Match cast precedence inside unparenthesized binary expressions.
+- [x] Reject trailing commas in function type parameter lists, matching stage0.
 - [x] Parse simple-name struct literal fields and nested values.
 - [x] Parse generic struct literal type applications.
 - [x] Validate tuple destructuring initializer arity when it is a tuple literal.

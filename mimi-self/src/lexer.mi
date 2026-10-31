@@ -3178,12 +3178,7 @@ pub parse_function_type :: fn (source : []u8, storage : *ExpressionArena) *ExprN
             if separator.0 == 41 { break }
             if separator.0 != 44 { return mimi_buffer_empty() as *ExprNode }
             cursor = separator.2
-            trailing_close := next_token(source, cursor)
-            if trailing_close.0 == 41 {
-                close_start = trailing_close.1
-                close_end = trailing_close.2
-                break
-            }
+            if next_token(source, cursor).0 == 41 { return mimi_buffer_empty() as *ExprNode }
         }
     }
     if close_end == 0 { return mimi_buffer_empty() as *ExprNode }

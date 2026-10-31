@@ -35,9 +35,9 @@ main :: fn () i32 {
     nested_function_type := lexer.parse_type("fn (fn (i32) bool) []u8", &storage)
     if lexer.expression_is_null(nested_function_type) || nested_function_type.left.kind != 277 || nested_function_type.right.kind != 272 { return 157 }
     malformed_function_type := lexer.parse_type("fn (i32,) bool", &storage)
-    if lexer.expression_is_null(malformed_function_type) || malformed_function_type.kind != 277 || malformed_function_type.left.kind != 270 { return 158 }
+    if !lexer.expression_is_null(malformed_function_type) { return 158 }
     trailing_multi_function_type := lexer.parse_type("fn (i32, *u8,) bool", &storage)
-    if lexer.expression_is_null(trailing_multi_function_type) || trailing_multi_function_type.left.kind != 276 { return 220 }
+    if !lexer.expression_is_null(trailing_multi_function_type) { return 220 }
     repeated_function_type_comma := lexer.parse_type("fn (i32,,u8) bool", &storage)
     if !lexer.expression_is_null(repeated_function_type_comma) { return 221 }
     generic_type := lexer.parse_type("Pair<i32>", &storage)
