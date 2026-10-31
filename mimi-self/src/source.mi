@@ -1,4 +1,6 @@
 bytes :: @import("bytes.mi")
+maps :: @import("map.mi")
+extern mimi_diagnostic_print : fn(code : *u8, code_length : u64, message : *u8, message_length : u64, path : *u8, path_length : u64, source : *u8, source_length : u64, start : u64, end : u64) void
 
 pub SourceFile :: struct {
     path : []u8,
@@ -15,6 +17,44 @@ pub Diagnostic :: struct {
     message : []u8,
     span : Span,
 }
+
+pub ModuleGraph :: struct {
+    states : maps.StringMap,
+}
+
+pub module_graph_init :: fn () ModuleGraph {
+    ModuleGraph { states = maps.init() }
+}
+
+pub module_begin :: fn (graph : *ModuleGraph, path : []u8) bool {
+    states := graph.states
+    value : u64 = 0
+    if maps.get(&states, path, &value) { return false }
+    if !maps.set(&states, path, 1) { return false }
+    graph.states = states
+    true
+}
+
+pub module_finish :: fn (graph : *ModuleGraph, path : []u8) bool {
+    states := graph.states
+    value : u64 = 0
+    if !maps.get(&states, path, &value) || value != 1 { return false }
+    if !maps.set(&states, path, 2) { return false }
+    graph.states = states
+    true
+}
+
+pub module_state :: fn (graph : *ModuleGraph, path : []u8, state : *u64) bool {
+    states := graph.states
+    maps.get(&states, path, state)
+}
+
+pub module_graph_release :: fn (graph : *ModuleGraph) void {
+    states := graph.states
+    maps.release(&states)
+    graph.states = maps.init()
+}
+
 
 pub init :: fn () SourceFile {
     SourceFile { path = "", contents = bytes.init() }
@@ -35,4 +75,19 @@ pub release :: fn (source : *SourceFile) void {
     contents := source.contents
     bytes.release(&contents)
     source.contents = contents
+}
+
+pub render :: fn (diagnostic : Diagnostic, source : *SourceFile) void {
+    mimi_diagnostic_print(
+        diagnostic.code.ptr,
+        diagnostic.code.len,
+        diagnostic.message.ptr,
+        diagnostic.message.len,
+        source.path.ptr,
+        source.path.len,
+        source.contents.data,
+        source.contents.len,
+        diagnostic.span.start,
+        diagnostic.span.end
+    )
 }

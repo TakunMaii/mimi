@@ -27,8 +27,9 @@ two consecutive stages.
   minimal standard library or a small C runtime.
 - [x] Add `Result`/`Option` conventions and error propagation suitable for
   parser and type-checker code.
-- [ ] Define source file/module loading and diagnostics for the self-hosted
-  compiler.
+- [ ] Complete source file/module loading for the self-hosted compiler,
+  including import resolution and recursive traversal.
+- [x] Define source spans and render diagnostics with source context.
 
 ## T2: Self-hosted front end
 
@@ -65,13 +66,14 @@ two consecutive stages.
 
 ## Current milestone
 
-T1 container, runtime, and Result/Option foundations are in place. Source
-file records and diagnostic spans exist, but module graph loading and
-diagnostic rendering remain open. The T2 lexer returns token kinds and byte
-spans, decodes supported escapes, validates UTF-8 identifiers, and classifies
-common errors. It still lacks a reusable parser and AST. The Rust stage0
-compiler currently rejects generic enum construction from inside a function
-body; tests cover generic enum values at typed local declarations.
+T1 containers, runtime, Result/Option, source file records, and source-aware
+diagnostic rendering are in place. A module state graph detects repeated and
+currently-loading paths, but source import resolution and recursive traversal
+are still open. The T2 lexer returns token kinds and byte spans, decodes
+supported escapes, validates UTF-8 identifiers, and classifies common errors.
+It still lacks a reusable parser and AST. The Rust stage0 compiler currently
+rejects generic enum construction from inside a function body; tests cover
+generic enum values at typed local declarations.
 
 Next, implement parser token consumption and an arena-backed AST, then extend
 it through precedence, grouping, declarations, types, and statements.

@@ -156,7 +156,17 @@ main :: fn () i32 {{
     if span.start != 2 || span.end != 5 {{ return 4 }}
     diagnostic := source.Diagnostic {{ code = "E_TEST", message = "sample", span = span }}
     if diagnostic.span.end - diagnostic.span.start != 3 {{ return 5 }}
+    source.render(diagnostic, &loaded)
     source.release(&loaded)
+    graph := source.module_graph_init()
+    if !source.module_begin(&graph, "root.mi") {{ return 6 }}
+    if source.module_begin(&graph, "root.mi") {{ return 7 }}
+    state : u64 = 0
+    if !source.module_state(&graph, "root.mi", &state) || state != 1 {{ return 8 }}
+    if !source.module_finish(&graph, "root.mi") {{ return 9 }}
+    if !source.module_state(&graph, "root.mi", &state) || state != 2 {{ return 10 }}
+    if source.module_finish(&graph, "root.mi") {{ return 11 }}
+    source.module_graph_release(&graph)
     0
 }}
 ''',
@@ -165,6 +175,47 @@ main :: fn () i32 {{
         run(
             [
                 str(compiler), "build", str(source_path), "-o", str(executable),
+                "--c-source", str(RUNTIME),
+            ]
+        )
+        result = run([str(executable)])
+        expected_diagnostic = [
+            "error[E_TEST]: sample",
+            f" --> {input_path}:1:3",
+            "1 | alpha",
+            "  |   ^~~",
+        ]
+        for fragment in expected_diagnostic:
+            if fragment not in result.stderr:
+                raise AssertionError(
+                    f"diagnostic output missing {fragment!r}:\n{result.stderr}"
+                )
+
+
+def test_module_loading(compiler: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="mimi-self-modules-") as temporary:
+        directory = Path(temporary)
+        program = directory / "module-load.mi"
+        executable = directory / "module-load"
+        module_path = mimi_quote(SELF / "src" / "source.mi")
+        program.write_text(
+            f'''source :: @import({module_path})
+main :: fn () i32 {{
+    graph := source.module_graph_init()
+    if !source.module_begin(&graph, "root.mi") {{ return 1 }}
+    if !source.module_begin(&graph, "child.mi") {{ return 2 }}
+    if source.module_begin(&graph, "root.mi") {{ return 3 }}
+    if !source.module_finish(&graph, "child.mi") {{ return 4 }}
+    if !source.module_finish(&graph, "root.mi") {{ return 5 }}
+    source.module_graph_release(&graph)
+    0
+}}
+''',
+            encoding="utf-8",
+        )
+        run(
+            [
+                str(compiler), "build", str(program), "-o", str(executable),
                 "--c-source", str(RUNTIME),
             ]
         )
@@ -202,6 +253,7 @@ def main() -> None:
     test_file_io(compiler)
     test_path_api(compiler)
     test_source_model(compiler)
+    test_module_loading(compiler)
     print(f"mimi-self: tests passed with {compiler}")
 
 

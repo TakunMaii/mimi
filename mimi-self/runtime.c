@@ -71,6 +71,71 @@ void mimi_buffer_release(MimiByteBuffer *buffer) {
     buffer->data = NULL;
 }
 
+static void mimi_write_bytes(FILE *stream, const uint8_t *data, uint64_t length) {
+    if (length != 0) {
+        fwrite(data, 1, (size_t)length, stream);
+    }
+}
+
+void mimi_diagnostic_print(
+    const uint8_t *code,
+    uint64_t code_length,
+    const uint8_t *message,
+    uint64_t message_length,
+    const uint8_t *path,
+    uint64_t path_length,
+    const uint8_t *source,
+    uint64_t source_length,
+    uint64_t start,
+    uint64_t end
+) {
+    FILE *stream = stderr;
+    uint64_t offset = start < source_length ? start : source_length;
+    uint64_t line_start = offset;
+    uint64_t line_end = offset;
+    uint64_t line = 1;
+    while (line_start > 0 && source[line_start - 1] != '\n') {
+        line_start--;
+    }
+    for (uint64_t index = 0; index < line_start; index++) {
+        if (source[index] == '\n') {
+            line++;
+        }
+    }
+    line_end = offset;
+    while (line_end < source_length && source[line_end] != '\n') {
+        line_end++;
+    }
+    uint64_t column = offset - line_start + 1;
+    uint64_t highlight_end = end < line_end ? end : line_end;
+    uint64_t highlight_length = highlight_end > offset ? highlight_end - offset : 1;
+
+    fputs("error[", stream);
+    mimi_write_bytes(stream, code, code_length);
+    fputs("]: ", stream);
+    mimi_write_bytes(stream, message, message_length);
+    fputs("\n --> ", stream);
+    mimi_write_bytes(stream, path, path_length);
+    fprintf(stream, ":%llu:%llu\n  |\n%llu | ",
+        (unsigned long long)line,
+        (unsigned long long)column,
+        (unsigned long long)line);
+    const uint8_t *line_data = source;
+    if (line_start != 0) {
+        line_data = source + line_start;
+    }
+    mimi_write_bytes(stream, line_data, line_end - line_start);
+    fputs("\n  | ", stream);
+    for (uint64_t index = 1; index < column; index++) {
+        fputc(' ', stream);
+    }
+    for (uint64_t index = 0; index < highlight_length; index++) {
+        fputc(index == 0 ? '^' : '~', stream);
+    }
+    fputc('\n', stream);
+    fflush(stream);
+}
+
 static char *mimi_path_copy(const uint8_t *path, uint64_t length) {
     char *copy = malloc((size_t)length + 1);
     if (copy == NULL) {
@@ -187,6 +252,28 @@ int mimi_path_file_size(const uint8_t *path, uint64_t path_length, uint64_t *siz
         return 0;
     }
     *size = (uint64_t)info.st_size;
+    return 1;
+}
+
+int mimi_path_join(const uint8_t *base, uint64_t base_length, const uint8_t *part, uint64_t part_length, MimiByteBuffer *output) {
+    if (output == NULL || output->released || part_length > SIZE_MAX || base_length > SIZE_MAX) {
+        return 0;
+    }
+    uint64_t separator = base_length != 0 && base[base_length - 1] != '/' ? 1 : 0;
+    if (base_length > UINT64_MAX - separator || base_length + separator > UINT64_MAX - part_length) {
+        return 0;
+    }
+    uint64_t needed = base_length + separator + part_length;
+    if (needed > output->capacity) {
+        if (!mimi_buffer_resize(output, needed)) {
+            return 0;
+        }
+        output->capacity = needed;
+    }
+    if (base_length != 0) memcpy(output->data, base, (size_t)base_length);
+    if (separator) output->data[base_length] = '/';
+    if (part_length != 0) memcpy(output->data + base_length + separator, part, (size_t)part_length);
+    output->len = needed;
     return 1;
 }
 

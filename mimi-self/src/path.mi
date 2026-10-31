@@ -2,6 +2,7 @@ extern mimi_path_exists : fn(path : *u8, path_length : u64) i32
 extern mimi_path_is_directory : fn(path : *u8, path_length : u64) i32
 extern mimi_path_create_directory : fn(path : *u8, path_length : u64) i32
 extern mimi_path_file_size : fn(path : *u8, path_length : u64, size : *u64) i32
+extern mimi_path_join : fn(base : *u8, base_length : u64, part : *u8, part_length : u64, output : *bytes.ByteBuffer) i32
 
 pub exists :: fn (path : []u8) bool {
     mimi_path_exists(path.ptr, path.len) != 0
@@ -18,3 +19,9 @@ pub create_directory :: fn (path : []u8) bool {
 pub file_size :: fn (path : []u8, size : *u64) bool {
     mimi_path_file_size(path.ptr, path.len, size) != 0
 }
+
+pub join :: fn (base : []u8, part : []u8, output : *bytes.ByteBuffer) bool {
+    mimi_path_join(base.ptr, base.len, part.ptr, part.len, output) != 0
+}
+
+bytes :: @import("bytes.mi")
