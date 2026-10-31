@@ -26,6 +26,16 @@ main :: fn () i32 {
     nested_tuple_type := lexer.parse_type("((i32, u8), bool)", &storage)
     if lexer.expression_is_null(nested_tuple_type) || nested_tuple_type.kind != 275 || nested_tuple_type.left.kind != 276 || nested_tuple_type.left.left.kind != 275 { return 151 }
     if nested_tuple_type.left.left.start != 1 || nested_tuple_type.left.left.end != 10 || nested_tuple_type.end != 17 { return 152 }
+    function_type := lexer.parse_type("fn (i32, *u8) bool", &storage)
+    if lexer.expression_is_null(function_type) || function_type.kind != 277 || function_type.left.kind != 276 { return 153 }
+    if function_type.left.left.kind != 270 || function_type.left.right.kind != 271 || function_type.right.kind != 270 { return 154 }
+    if function_type.start != 0 || function_type.end != 18 || function_type.right.start != 14 { return 155 }
+    empty_function_type := lexer.parse_type("fn () i32", &storage)
+    if lexer.expression_is_null(empty_function_type) || empty_function_type.kind != 277 || !lexer.expression_is_null(empty_function_type.left) { return 156 }
+    nested_function_type := lexer.parse_type("fn (fn (i32) bool) []u8", &storage)
+    if lexer.expression_is_null(nested_function_type) || nested_function_type.left.kind != 277 || nested_function_type.right.kind != 272 { return 157 }
+    malformed_function_type := lexer.parse_type("fn (i32,) bool", &storage)
+    if !lexer.expression_is_null(malformed_function_type) { return 158 }
     singleton_tuple_type := lexer.parse_tuple_type("(i32)", &storage)
     if !lexer.expression_is_null(singleton_tuple_type) { return 131 }
     trailing_tuple_type := lexer.parse_tuple_type("(i32, *u8) extra", &storage)
