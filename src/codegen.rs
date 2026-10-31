@@ -528,6 +528,9 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 LirInstruction::FloatBinary { .. } => 4,
                 LirInstruction::FloatNeg { .. } => 3,
                 LirInstruction::FloatConvert { .. } => 3,
+                LirInstruction::NumericConvert {
+                    from_type, to_type, ..
+                } => numeric_convert_words(from_type, to_type)?,
                 LirInstruction::LoadSlot { .. } | LirInstruction::StoreSlot { .. } => 1,
                 LirInstruction::SlotAddress { slot, .. } => slot_address_words(*slot),
                 LirInstruction::IndexAddress { scale, .. } => index_address_words(*scale)?,
@@ -941,6 +944,15 @@ fn encode_function(
                 continue;
             }
             let word = match instruction {
+                LirInstruction::NumericConvert {
+                    destination,
+                    value,
+                    from_type,
+                    to_type,
+                } => {
+                    encode_numeric_convert(*destination, *value, from_type, to_type, bytes)?;
+                    continue;
+                }
                 LirInstruction::LoadImmediate { register, value } => {
                     encode_immediate(register.0, *value as u64, bytes)?;
                     continue;
@@ -1398,6 +1410,9 @@ fn block_encoded_size(
             LirInstruction::FloatBinary { .. } => 4,
             LirInstruction::FloatNeg { .. } => 3,
             LirInstruction::FloatConvert { .. } => 3,
+            LirInstruction::NumericConvert {
+                from_type, to_type, ..
+            } => numeric_convert_words(from_type, to_type)?,
             LirInstruction::LoadSlot { .. } | LirInstruction::StoreSlot { .. } => 1,
             LirInstruction::SlotAddress { slot, .. } => slot_address_words(*slot),
             LirInstruction::IndexAddress { scale, .. } => index_address_words(*scale)?,
@@ -1552,6 +1567,9 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
         }
         | LirInstruction::FloatConvert {
             destination, value, ..
+        }
+        | LirInstruction::NumericConvert {
+            destination, value, ..
         } => vec![*destination, *value],
         LirInstruction::Not { destination, value } => vec![*destination, *value],
         LirInstruction::LoadSlot { destination, .. } => vec![*destination],
@@ -1686,6 +1704,199 @@ fn encode_immediate(register: u32, value: u64, bytes: &mut Vec<u8>) -> Result<()
 
 fn push_word(bytes: &mut Vec<u8>, word: u32) {
     bytes.extend_from_slice(&word.to_le_bytes());
+}
+
+fn numeric_convert_words(from_type: &HirType, to_type: &HirType) -> Result<usize, String> {
+    let (from_width, from_float) = numeric_type_parts(from_type)?;
+    let (to_width, to_float) = numeric_type_parts(to_type)?;
+    Ok(match (from_float, to_float) {
+        (false, false) => 1,
+        (false, true) => 2,
+        (true, false) => 2 + usize::from(to_width < 32),
+        (true, true) => 2 + usize::from(from_width != to_width),
+    })
+}
+
+fn numeric_type_parts(data_type: &HirType) -> Result<(u16, bool), String> {
+    match data_type {
+        HirType::Integer { bits, .. } => Ok((*bits, false)),
+        HirType::Pointer(_) => Ok((64, false)),
+        HirType::Float { bits: 32 | 64 } => {
+            if let HirType::Float { bits } = data_type {
+                Ok((*bits, true))
+            } else {
+                unreachable!()
+            }
+        }
+        _ => Err(format!("unsupported ARM64 numeric cast type {data_type:?}")),
+    }
+}
+
+fn emit_numeric_convert_assembly(
+    assembly: &mut String,
+    destination: ValueId,
+    value: ValueId,
+    from_type: &HirType,
+    to_type: &HirType,
+) -> Result<(), String> {
+    let (from_width, from_signed, from_float) = numeric_type_parts_detail(from_type)?;
+    let (to_width, to_signed, to_float) = numeric_type_parts_detail(to_type)?;
+    let d = destination.0;
+    let n = value.0;
+    match (from_float, to_float) {
+        (false, false) => {
+            let mnemonic = match (to_width, to_signed) {
+                (8, true) => "sxtb",
+                (8, false) => "uxtb",
+                (16, true) => "sxth",
+                (16, false) => "uxth",
+                (32, true) => "sxtw",
+                (32, false) => "uxtw",
+                (64, _) => {
+                    assembly.push_str(&format!("    mov x{d}, x{n}\n"));
+                    return Ok(());
+                }
+                _ => return Err(format!("unsupported integer cast width {to_width}")),
+            };
+            assembly.push_str(&format!("    {mnemonic} x{d}, w{n}\n"));
+        }
+        (false, true) => {
+            let op = if from_signed { "scvtf" } else { "ucvtf" };
+            let fp = if to_width == 32 { "s" } else { "d" };
+            assembly.push_str(&format!("    {op} {fp}16, x{n}\n    fmov x{d}, {fp}16\n"));
+        }
+        (true, false) => {
+            let src = if from_width == 32 { "s" } else { "d" };
+            let op = if to_signed { "fcvtzs" } else { "fcvtzu" };
+            let dst = if to_width == 64 { "x" } else { "w" };
+            assembly.push_str(&format!(
+                "    fmov {src}16, {}{n}\n    {op} {dst}{d}, {src}16\n",
+                if from_width == 32 { "w" } else { "x" }
+            ));
+        }
+        (true, true) => {
+            if from_width == to_width {
+                assembly.push_str(&format!("    mov x{d}, x{n}\n"));
+            } else {
+                let src = if from_width == 32 { "s" } else { "d" };
+                let dst = if to_width == 32 { "s" } else { "d" };
+                assembly.push_str(&format!(
+                    "    fmov {src}16, {}{n}\n    fcvt {dst}16, {src}16\n    fmov x{d}, {dst}16\n",
+                    if from_width == 32 { "w" } else { "x" }
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn encode_numeric_convert(
+    destination: ValueId,
+    value: ValueId,
+    from_type: &HirType,
+    to_type: &HirType,
+    bytes: &mut Vec<u8>,
+) -> Result<(), String> {
+    let (from_width, from_signed, from_float) = numeric_type_parts_detail(from_type)?;
+    let (to_width, to_signed, to_float) = numeric_type_parts_detail(to_type)?;
+    let d = destination.0;
+    let n = value.0;
+    match (from_float, to_float) {
+        (false, false) => {
+            let imms = to_width - 1;
+            let base: u32 = if to_signed { 0x9340_0000 } else { 0xd340_0000 };
+            push_word(
+                bytes,
+                (base as u32) | (u32::from(imms) << 10) | (n << 5) | d,
+            );
+        }
+        (false, true) => {
+            let base = match (to_width, from_signed) {
+                (32, true) => 0x1e22_0000,
+                (64, true) => 0x9e62_0000,
+                (32, false) => 0x1e23_0000,
+                (64, false) => 0x9e63_0000,
+                _ => return Err(format!("unsupported ARM64 float width f{to_width}")),
+            };
+            push_word(bytes, base | (n << 5) | 16);
+            let move_to_gpr = if to_width == 32 {
+                0x1e26_0000
+            } else {
+                0x9e66_0000
+            };
+            push_word(bytes, move_to_gpr | (16 << 5) | d);
+        }
+        (true, false) => {
+            let base = match (from_width, to_signed, to_width == 64) {
+                (32, true, false) => 0x1e38_0000,
+                (32, true, true) => 0x9e38_0000,
+                (64, true, false) => 0x1e78_0000,
+                (64, true, true) => 0x9e78_0000,
+                (32, false, false) => 0x1e39_0000,
+                (32, false, true) => 0x9e39_0000,
+                (64, false, false) => 0x1e79_0000,
+                (64, false, true) => 0x9e79_0000,
+                _ => return Err(format!("unsupported ARM64 float width f{from_width}")),
+            };
+            let move_to_fp = if from_width == 32 {
+                0x1e27_0000
+            } else {
+                0x9e67_0000
+            };
+            push_word(bytes, move_to_fp | (n << 5) | 16);
+            push_word(bytes, base | (16 << 5) | d);
+            if to_width < 32 {
+                let extend: u32 = if to_signed { 0x9340_0000 } else { 0xd340_0000 };
+                push_word(
+                    bytes,
+                    extend | (u32::from(to_width - 1) << 10) | (d << 5) | d,
+                );
+            }
+        }
+        (true, true) => {
+            let opcode = match (from_width, to_width) {
+                (32, 64) => 0x1e22_c000,
+                (64, 32) => 0x1e62_4000,
+                (32, 32) | (64, 64) => 0xaa00_03e0,
+                _ => {
+                    return Err(format!(
+                        "unsupported ARM64 float conversion f{from_width} to f{to_width}"
+                    ));
+                }
+            };
+            let move_to_fp = if from_width == 32 {
+                0x1e27_0000
+            } else {
+                0x9e67_0000
+            };
+            push_word(bytes, move_to_fp | (n << 5) | 16);
+            if from_width != to_width {
+                push_word(bytes, opcode | (16 << 5) | 16);
+            }
+            let move_to_gpr = if to_width == 32 {
+                0x1e26_0000
+            } else {
+                0x9e66_0000
+            };
+            push_word(bytes, move_to_gpr | (16 << 5) | d);
+        }
+    }
+    Ok(())
+}
+
+fn numeric_type_parts_detail(data_type: &HirType) -> Result<(u16, bool, bool), String> {
+    match data_type {
+        HirType::Integer { bits, signed } => Ok((*bits, *signed, false)),
+        HirType::Pointer(_) => Ok((64, false, false)),
+        HirType::Float { bits: 32 | 64 } => {
+            if let HirType::Float { bits } = data_type {
+                Ok((*bits, true, true))
+            } else {
+                unreachable!()
+            }
+        }
+        _ => Err(format!("unsupported ARM64 numeric cast type {data_type:?}")),
+    }
 }
 
 fn float_width(data_type: &HirType) -> Option<u16> {
@@ -2130,6 +2341,20 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     "    add x{}, x{}, x{}\n",
                     destination.0, lhs.0, rhs.0
                 )),
+                LirInstruction::NumericConvert {
+                    destination,
+                    value,
+                    from_type,
+                    to_type,
+                } => {
+                    emit_numeric_convert_assembly(
+                        assembly,
+                        *destination,
+                        *value,
+                        from_type,
+                        to_type,
+                    )?;
+                }
                 LirInstruction::FloatBinary {
                     destination,
                     lhs,

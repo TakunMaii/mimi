@@ -307,6 +307,12 @@ fn emit_instruction(
             assembly.push_str("    movd xmm0, eax\n    cvtss2sd xmm0, xmm0\n    movq rax, xmm0\n");
             store_value(assembly, function, *destination, "rax")?;
         }
+        LirInstruction::NumericConvert {
+            destination,
+            value,
+            from_type,
+            to_type,
+        } => emit_numeric_convert(function, *destination, *value, from_type, to_type, assembly)?,
         LirInstruction::FloatConvert {
             from_width,
             to_width,
@@ -794,6 +800,9 @@ fn instruction_values(instruction: &LirInstruction, values: &mut Vec<ValueId>) {
         }
         | LirInstruction::FloatConvert {
             destination, value, ..
+        }
+        | LirInstruction::NumericConvert {
+            destination, value, ..
         } => {
             values.extend([*destination, *value]);
         }
@@ -875,6 +884,124 @@ fn store_value(
         value_offset(function, value)?
     ));
     Ok(())
+}
+
+fn emit_numeric_convert(
+    function: &LirFunction,
+    destination: ValueId,
+    value: ValueId,
+    from_type: &HirType,
+    to_type: &HirType,
+    assembly: &mut String,
+) -> Result<(), String> {
+    let (from_width, from_signed, from_float) = numeric_parts(from_type)?;
+    let (to_width, to_signed, to_float) = numeric_parts(to_type)?;
+    load_value(assembly, function, value, "rax")?;
+    match (from_float, to_float) {
+        (false, false) => match to_width {
+            8 => assembly.push_str(if to_signed {
+                "    movsx rax, al\n"
+            } else {
+                "    movzx eax, al\n"
+            }),
+            16 => assembly.push_str(if to_signed {
+                "    movsx rax, ax\n"
+            } else {
+                "    movzx eax, ax\n"
+            }),
+            32 => assembly.push_str(if to_signed {
+                "    movsxd rax, eax\n"
+            } else {
+                "    mov eax, eax\n"
+            }),
+            64 => {}
+            _ => return Err(format!("unsupported integer cast width {to_width}")),
+        },
+        (false, true) => {
+            if !from_signed {
+                if from_width == 64 {
+                    return Err("u64 to float casts are not supported by the x86_64 backend".into());
+                }
+                match from_width {
+                    8 => assembly.push_str("    movzx eax, al\n"),
+                    16 => assembly.push_str("    movzx eax, ax\n"),
+                    32 => assembly.push_str("    mov eax, eax\n"),
+                    _ => return Err(format!("unsupported integer cast width {from_width}")),
+                }
+            }
+            let instruction = if to_width == 32 {
+                "cvtsi2ss"
+            } else {
+                "cvtsi2sd"
+            };
+            let source = if from_width < 64 { "eax" } else { "rax" };
+            assembly.push_str(&format!("    {instruction} xmm0, {source}\n"));
+            if to_width == 32 {
+                assembly.push_str("    movd eax, xmm0\n");
+            } else {
+                assembly.push_str("    movq rax, xmm0\n");
+            }
+        }
+        (true, false) => {
+            if from_width == 32 {
+                assembly.push_str("    movd xmm0, eax\n");
+            } else if from_width == 64 {
+                assembly.push_str("    movq xmm0, rax\n");
+            } else {
+                return Err(format!("unsupported float cast width f{from_width}"));
+            }
+            if to_width == 32 {
+                assembly.push_str("    cvttss2si rax, xmm0\n");
+            } else {
+                assembly.push_str("    cvttsd2si rax, xmm0\n");
+            }
+            if !to_signed && to_width == 64 {
+                return Err("unsigned f64 to u64 conversion is not supported by x86_64".into());
+            }
+            match to_width {
+                8 => assembly.push_str(if to_signed {
+                    "    movsx rax, al\n"
+                } else {
+                    "    movzx eax, al\n"
+                }),
+                16 => assembly.push_str(if to_signed {
+                    "    movsx rax, ax\n"
+                } else {
+                    "    movzx eax, ax\n"
+                }),
+                32 => assembly.push_str(if to_signed {
+                    "    movsxd rax, eax\n"
+                } else {
+                    "    mov eax, eax\n"
+                }),
+                _ => {}
+            }
+        }
+        (true, true) => {
+            if from_width == 32 && to_width == 64 {
+                assembly
+                    .push_str("    movd xmm0, eax\n    cvtss2sd xmm0, xmm0\n    movq rax, xmm0\n");
+            } else if from_width == 64 && to_width == 32 {
+                assembly
+                    .push_str("    movq xmm0, rax\n    cvtsd2ss xmm0, xmm0\n    movd eax, xmm0\n");
+            } else if from_width == 32 && to_width == 32 || from_width == 64 && to_width == 64 {
+            } else {
+                return Err(format!(
+                    "unsupported float conversion f{from_width} to f{to_width}"
+                ));
+            }
+        }
+    }
+    store_value(assembly, function, destination, "rax")
+}
+
+fn numeric_parts(data_type: &HirType) -> Result<(u16, bool, bool), String> {
+    match data_type {
+        HirType::Integer { bits, signed } => Ok((*bits, *signed, false)),
+        HirType::Float { bits } => Ok((*bits, true, true)),
+        HirType::Pointer(_) => Ok((64, false, false)),
+        _ => Err(format!("unsupported numeric cast type {data_type:?}")),
+    }
 }
 
 fn slot_mem(function: &LirFunction, slot: SlotId) -> Result<String, String> {

@@ -2100,6 +2100,20 @@ fn infer_expression(
                 _ => Err(error("dereference requires a pointer")),
             }
         }
+        Expression::Cast { value, data_type } => {
+            validate_generic_type_use(*data_type, structs)?;
+            let source_type = infer_expression(value, scopes, functions, structs, None)?;
+            let pointer_cast = matches!(source_type, DataType::Pointer(_))
+                && matches!(data_type, DataType::Pointer(_));
+            if !pointer_cast
+                && (!supports_explicit_cast(source_type) || !supports_explicit_cast(*data_type))
+            {
+                return Err(error(format!(
+                    "'as' casts support numeric scalar conversions and pointer-to-pointer conversions; found {source_type} as {data_type}"
+                )));
+            }
+            Ok(*data_type)
+        }
         Expression::Not(inner) => {
             infer_expression(inner, scopes, functions, structs, Some(DataType::Bool))?;
             Ok(DataType::Bool)
@@ -3230,6 +3244,22 @@ fn error(message: impl Into<String>) -> TypeError {
     TypeError {
         message: message.into(),
     }
+}
+
+fn supports_explicit_cast(data_type: DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::U8
+            | DataType::U16
+            | DataType::U32
+            | DataType::U64
+            | DataType::I8
+            | DataType::I16
+            | DataType::I32
+            | DataType::I64
+            | DataType::F32
+            | DataType::F64
+    )
 }
 
 impl DataType {

@@ -80,6 +80,59 @@ fn builds_and_runs_tuples_through_functions_and_member_assignment() {
 }
 
 #[test]
+fn builds_and_runs_explicit_numeric_casts() {
+    let source = std::env::temp_dir().join(format!("mimi_cast_source_{}.mi", std::process::id()));
+    let executable =
+        std::env::temp_dir().join(format!("mimi_cast_executable_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { narrowed := 258 as i8 widened := narrowed as i32 from_float := 12.75 as i32 to_float := 3 as f64 converted_float := to_float as f32 result := if narrowed == 2 && widened == 2 && from_float == 12 && converted_float == 3.0 { 0 } else { 1 } result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
+fn builds_and_runs_pointer_casts() {
+    let source = std::env::temp_dir().join(format!(
+        "mimi_pointer_cast_source_{}.mi",
+        std::process::id()
+    ));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_pointer_cast_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { value := 123 byte_pointer := (&value) as *u8 pointer := byte_pointer as *i32 result := if *pointer == 123 { 0 } else { 1 } result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
 fn builds_and_runs_tuple_destructuring_once() {
     let source =
         std::env::temp_dir().join(format!("mimi_destructure_source_{}.mi", std::process::id()));

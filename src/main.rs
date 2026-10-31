@@ -670,6 +670,10 @@ fn qualify_imported_expression(
         | Expression::Dereference(inner) => {
             qualify_imported_expression(inner, package, local_type_names);
         }
+        Expression::Cast { value, data_type } => {
+            qualify_imported_expression(value, package, local_type_names);
+            *data_type = qualify_imported_type(*data_type, package, local_type_names);
+        }
         Expression::Add(lhs, rhs)
         | Expression::Subtract(lhs, rhs)
         | Expression::Multiply(lhs, rhs)

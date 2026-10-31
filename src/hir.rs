@@ -895,7 +895,8 @@ fn generic_applications(
             Expression::Negate(value)
             | Expression::Not(value)
             | Expression::AddressOf(value)
-            | Expression::Dereference(value) => visit_expr(value, output),
+            | Expression::Dereference(value)
+            | Expression::Cast { value, .. } => visit_expr(value, output),
             Expression::Add(a, b)
             | Expression::Subtract(a, b)
             | Expression::Multiply(a, b)
@@ -1356,7 +1357,8 @@ fn collect_free_names(
         Expression::Negate(value)
         | Expression::Not(value)
         | Expression::AddressOf(value)
-        | Expression::Dereference(value) => collect_free_names(value, bound, captures),
+        | Expression::Dereference(value)
+        | Expression::Cast { value, .. } => collect_free_names(value, bound, captures),
         Expression::Add(left, right)
         | Expression::Subtract(left, right)
         | Expression::Multiply(left, right)
@@ -1459,7 +1461,8 @@ fn lift_lambdas_in_expression(
         Expression::Negate(value)
         | Expression::Not(value)
         | Expression::AddressOf(value)
-        | Expression::Dereference(value) => {
+        | Expression::Dereference(value)
+        | Expression::Cast { value, .. } => {
             lift_lambdas_in_expression(value, functions, used_names, next_lambda);
         }
         Expression::Add(left, right)

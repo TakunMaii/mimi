@@ -324,6 +324,9 @@ fn instruction_uses_defs(instruction: &LirInstruction) -> (Vec<ValueId>, Vec<Val
         } => (vec![*value], vec![*destination]),
         LirInstruction::FloatConvert {
             destination, value, ..
+        }
+        | LirInstruction::NumericConvert {
+            destination, value, ..
         } => (vec![*value], vec![*destination]),
         LirInstruction::Call {
             result,
@@ -472,6 +475,9 @@ fn rewrite_function(
                     map_value(value)?;
                 }
                 LirInstruction::FloatConvert {
+                    destination, value, ..
+                }
+                | LirInstruction::NumericConvert {
                     destination, value, ..
                 } => {
                     map_value(destination)?;
