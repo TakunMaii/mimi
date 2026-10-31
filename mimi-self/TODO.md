@@ -54,6 +54,7 @@ two consecutive stages.
 - [x] Parse grouped unary and binary expressions with operator precedence into
   arena-backed AST nodes.
 - [x] Parse chained named and numeric member access in expressions.
+- [x] Parse indexed expressions with full binary expression precedence.
 - [x] Parse chained named and numeric member access in expressions.
 - [ ] Implement name resolution, type checking, generic specialization, and
   diagnostics.
@@ -88,10 +89,11 @@ returns token kinds and byte spans, decodes supported escapes, validates
 UTF-8 sequences, classifies common errors, returns token/error spans together,
 and handles member-number/decimal boundaries. Its Unicode identifier ranges
 are still approximate. An
-arena-backed expression parser now handles atom, prefix, binary, and grouped
-forms with precedence; declaration, type, call, member, index, and statement
-parsing remain open. The parser currently lives alongside the lexer because
-stage0 loses imported aliases inside imported module function bodies.
+arena-backed expression parser now handles atom, prefix, binary, grouped,
+member, and indexed forms with precedence; declaration, type, call, slice,
+and statement parsing remain open. The parser currently lives alongside the
+lexer because stage0 loses imported aliases inside imported module function
+bodies.
 
-Next, extend the expression AST with calls/member/index access, then parse
+Next, extend the expression AST with calls and slice access, then parse
 declarations, types, and statements before name resolution and type checking.

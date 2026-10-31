@@ -42,6 +42,15 @@ main :: fn () i32 {
     if !lexer.expression_is_null(adjacent) { return 16 }
     incomplete_member := lexer.parse_expression("a.", &storage)
     if !lexer.expression_is_null(incomplete_member) { return 20 }
+    indexed := lexer.parse_expression("items[1 + 2 * 3].value", &storage)
+    if lexer.expression_is_null(indexed) || indexed.kind != 260 { return 21 }
+    if indexed.left.kind != 261 || indexed.left.right.kind != 43 { return 22 }
+    if indexed.left.right.right.kind != 42 { return 23 }
+    if indexed.start != 0 || indexed.end != 21 { return 24 }
+    missing_index := lexer.parse_expression("items[]", &storage)
+    if !lexer.expression_is_null(missing_index) { return 25 }
+    unclosed_index := lexer.parse_expression("items[1", &storage)
+    if !lexer.expression_is_null(unclosed_index) { return 26 }
     lexer.expression_arena_release(&storage)
     0
 }

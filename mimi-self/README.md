@@ -17,8 +17,8 @@ cases and their first diagnostic against the Rust stage0 compiler. Pass
 `--reference-compiler /path/to/stage0` to select a different reference binary.
 
 The current milestone is the self-hosted lexer and an arena-backed expression
-parser for grouped unary and binary expressions. The parser handles operator
-precedence and left associativity. Stage0 is the Rust compiler. See
+parser for grouped unary/binary expressions, member access, and indexing. The
+parser handles operator precedence and left associativity. Stage0 is the Rust compiler. See
 [TODO.md](TODO.md) for the parity roadmap and [FEATURES.md](FEATURES.md) for
 the feature matrix.
 
