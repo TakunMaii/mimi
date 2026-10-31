@@ -96,12 +96,12 @@ and handles member-number/decimal boundaries. Its Unicode identifier ranges
 are still approximate. An
 arena-backed expression parser now handles atom, prefix, binary, grouped,
 member, indexed, sliced, and call forms with precedence. Number/string/boolean
-atoms retain source spans. Named, pointer, slice, and fixed-array type syntax
-is parsed, and binding headers expose declaration/type/initializer spans.
-Function headers and named parameters have source-aware nodes; atomic tuple
-literals have a dedicated parser. Tuple/function/generic types, general tuple
-expressions, declaration AST construction, control-flow statements, and type
-checking remain open. The parser currently lives alongside the lexer because
+atoms retain source spans. Named, pointer, slice, fixed-array, and nested tuple
+type syntax is parsed, and binding headers expose declaration/type/initializer
+spans. Function headers and named parameters have source-aware nodes; atomic
+tuple literals have a dedicated parser. Function/generic types, general tuple
+expressions and destructuring, declaration AST construction, control-flow
+statements, and type checking remain open. The parser currently lives alongside the lexer because
 stage0 loses imported aliases inside imported module function bodies.
 
 Next, parse declarations, types, and statements before name resolution and

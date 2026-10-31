@@ -21,6 +21,11 @@ main :: fn () i32 {
     if lexer.expression_is_null(tuple_type) || tuple_type.kind != 275 || tuple_type.left.kind != 276 { return 128 }
     if tuple_type.left.left.kind != 270 || tuple_type.left.right.kind != 271 || tuple_type.left.right.left.kind != 270 { return 129 }
     if tuple_type.start != 0 || tuple_type.end != 10 { return 130 }
+    general_tuple_type := lexer.parse_type("(i32, *u8)", &storage)
+    if lexer.expression_is_null(general_tuple_type) || general_tuple_type.kind != 275 || general_tuple_type.start != 0 || general_tuple_type.end != 10 { return 150 }
+    nested_tuple_type := lexer.parse_type("((i32, u8), bool)", &storage)
+    if lexer.expression_is_null(nested_tuple_type) || nested_tuple_type.kind != 275 || nested_tuple_type.left.kind != 276 || nested_tuple_type.left.left.kind != 275 { return 151 }
+    if nested_tuple_type.left.left.start != 1 || nested_tuple_type.left.left.end != 10 || nested_tuple_type.end != 17 { return 152 }
     singleton_tuple_type := lexer.parse_tuple_type("(i32)", &storage)
     if !lexer.expression_is_null(singleton_tuple_type) { return 131 }
     trailing_tuple_type := lexer.parse_tuple_type("(i32, *u8) extra", &storage)

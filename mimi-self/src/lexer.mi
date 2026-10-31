@@ -905,6 +905,8 @@ parse_parameter :: fn (source : []u8, offset : u64, storage : *ExpressionArena) 
 
 pub parse_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     if source.len > 500000000000000000 { return mimi_buffer_empty() as *ExprNode }
+    first := next_token(source, 0)
+    if first.0 == 40 { return parse_tuple_type(source, storage) }
     if mimi_arena_allocate(storage, source.len * 32 + 32, 8) == 0 { return mimi_buffer_empty() as *ExprNode }
     prefixes := storage.last as *ExprOperator
     prefix_count : u64 = 0
