@@ -90,6 +90,8 @@ main :: fn () i32 {
     if function_definition.parameters.data_type.kind != 270 || function_definition.return_type.kind != 270 { return 198 }
     if function_definition.body.start != 27 || function_definition.body.end != function_definition_source.len { return 199 }
     if function_definition.body.content_start != 28 || function_definition.body.content_end + 1 != function_definition.body.end { return 200 }
+    if function_definition.body.statements.kind != 304 || function_definition.body.statements.if_statement.then_branch.statements.kind != 285 { return 306 }
+    if function_definition.body.statements.next.kind != 280 { return 307 }
     composed_block_source := "{ first := 1 first = first + 1 return first }"
     composed_block := lexer.parse_statement_block(composed_block_source, 100, &storage)
     if lexer.block_node_is_null(composed_block) || composed_block.statements.kind != 285 { return 288 }

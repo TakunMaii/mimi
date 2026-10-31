@@ -2555,7 +2555,7 @@ pub parse_function_definition :: fn (source : []u8, storage : *ExpressionArena) 
     header := parse_function_header(source, storage)
     if function_header_is_null(header) { return mimi_buffer_empty() as *FunctionNode }
     if header.body_start >= source.len { return mimi_buffer_empty() as *FunctionNode }
-    body := parse_block_span(source[header.body_start:source.len], header.body_start, storage)
+    body := parse_statement_block(source[header.body_start:source.len], header.body_start, storage)
     if block_node_is_null(body) { return mimi_buffer_empty() as *FunctionNode }
     parameters := parse_parameters(source, header, storage)
     if header.parameters_start != header.parameters_end && parameter_list_is_null(parameters) {
