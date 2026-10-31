@@ -74,10 +74,12 @@ T1 containers, runtime, Result/Option, source file records, source-aware
 diagnostic rendering, and module state/cycle tracking are in place. Source
 import resolution and recursive traversal are still open. The T2 lexer
 returns token kinds and byte spans, decodes
-supported escapes, validates UTF-8 identifiers, and classifies common errors.
-It still lacks a reusable parser and AST. The Rust stage0 compiler currently
-rejects generic enum construction from inside a function body; tests cover
-generic enum values at typed local declarations.
+supported escapes, validates UTF-8 sequences, classifies common errors, and
+handles member-number/decimal boundaries. Its Unicode identifier ranges are
+still approximate, and its API reports an error code/message separately from
+the token result. It still lacks a reusable parser and AST. The Rust stage0
+compiler currently rejects generic enum construction from inside a function
+body; tests cover generic enum values at typed local declarations.
 
 Next, implement parser token consumption and an arena-backed AST, then extend
 it through precedence, grouping, declarations, types, and statements.
