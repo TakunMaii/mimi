@@ -567,6 +567,8 @@ pub ExprNode :: struct {
     end : u64,
     left : *ExprNode,
     right : *ExprNode,
+    payload_start : u64,
+    payload_end : u64,
 }
 
 pub BindingHeader :: struct {
@@ -771,6 +773,10 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
             if !expecting_operand { return mimi_buffer_empty() as *ExprNode }
             node := allocate_expr(storage, token.0 as u64, token.1, token.2, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
             if expression_is_null(node) { return node }
+            if token.0 == 1 || token.0 == 2 || token.0 == 3 {
+                node.payload_start = token.1
+                node.payload_end = token.2
+            }
             stacks.nodes[stacks.node_count] = node
             stacks.node_count = stacks.node_count + 1
             expecting_operand = false
@@ -987,13 +993,15 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
 }
 
 allocate_expr :: fn (storage : *ExpressionArena, kind : u64, start : u64, end : u64, left : *ExprNode, right : *ExprNode) *ExprNode {
-    if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *ExprNode }
+    if mimi_arena_allocate(storage, 56, 8) == 0 { return mimi_buffer_empty() as *ExprNode }
     node := storage.last as *ExprNode
     node.kind = kind
     node.start = start
     node.end = end
     node.left = left
     node.right = right
+    node.payload_start = start
+    node.payload_end = end
     node
 }
 

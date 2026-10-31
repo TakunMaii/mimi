@@ -37,6 +37,7 @@ main :: fn () i32 {
     if atom.end != 1 { return atom.end as i32 }
     string_atom := lexer.parse_expression("\"text\"", &storage)
     if lexer.expression_is_null(string_atom) || string_atom.kind != 3 || string_atom.start != 0 || string_atom.end != 6 { return 86 }
+    if string_atom.payload_start != 0 || string_atom.payload_end != 6 { return 98 }
     true_atom := lexer.parse_expression("true", &storage)
     if lexer.expression_is_null(true_atom) || true_atom.kind != 4 || true_atom.end != 4 { return 87 }
     false_atom := lexer.parse_expression("false", &storage)
