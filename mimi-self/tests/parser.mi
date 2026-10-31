@@ -257,6 +257,14 @@ main :: fn () i32 {
     if defer_statement.start != 0 || defer_statement.end != 15 || defer_statement.value.start != 6 { return 183 }
     empty_defer := lexer.parse_defer_statement("defer", &storage)
     if !lexer.statement_node_is_null(empty_defer) { return 184 }
+    assignment_statement := lexer.parse_assignment_statement("value = value + 1", &storage)
+    if lexer.statement_node_is_null(assignment_statement) || assignment_statement.kind != 284 { return 192 }
+    if assignment_statement.value.kind != 284 || assignment_statement.value.left.kind != 1 || assignment_statement.value.right.kind != 43 { return 193 }
+    if assignment_statement.start != 0 || assignment_statement.end != 17 || assignment_statement.value.right.start != 8 { return 194 }
+    equality_is_not_assignment := lexer.parse_assignment_statement("left == right", &storage)
+    if !lexer.statement_node_is_null(equality_is_not_assignment) { return 195 }
+    malformed_assignment := lexer.parse_assignment_statement("value =", &storage)
+    if !lexer.statement_node_is_null(malformed_assignment) { return 196 }
     tuple_binding := lexer.parse_tuple_binding("first, second := (1, true)", &storage)
     if lexer.tuple_binding_is_null(tuple_binding) || tuple_binding.name_count != 2 || tuple_binding.value.kind != 268 { return 185 }
     if tuple_binding.names.start != 0 || tuple_binding.names.end != 5 { return 186 }

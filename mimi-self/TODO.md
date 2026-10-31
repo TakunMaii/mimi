@@ -62,6 +62,7 @@ two consecutive stages.
 - [x] Parse `return`, `break`, and `continue` into source-aware statement
   nodes.
 - [x] Parse expression-form `defer` statements.
+- [x] Parse simple assignment statements with expression targets and values.
 - [x] Parse tuple destructuring names with atomic tuple literal initializers.
 - [ ] Validate generic function type parameters and parse statement blocks.
 - [ ] Extend tuple literal parsing to arbitrary expressions and parse tuple
@@ -105,8 +106,8 @@ is parsed. Binding headers and declaration AST nodes preserve names, optional
 types, initializers, and source spans. Function headers and named parameters
 have source-aware nodes; callback types are supported in parameter lists.
 Atomic tuple literals and return/break/continue statement nodes have dedicated
-parsers. Expression-form `defer` is parsed as a statement node; block-form
-defer still needs statement blocks. Atomic tuple destructuring is represented
+parsers. Simple assignment and expression-form `defer` are parsed as statement
+nodes; block-form defer still needs statement blocks. Atomic tuple destructuring is represented
 by a dedicated name-list/value node. Generic declarations and parameter
 validation, general tuple expressions and destructuring type checks, statement blocks,
 remaining control-flow statements, and type checking remain open. The parser

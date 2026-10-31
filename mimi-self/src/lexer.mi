@@ -855,6 +855,55 @@ pub parse_defer_statement :: fn (source : []u8, storage : *ExpressionArena) *Sta
     statement
 }
 
+pub parse_assignment_statement :: fn (source : []u8, storage : *ExpressionArena) *StatementNode {
+    cursor : u64 = 0
+    paren_depth : u64 = 0
+    bracket_depth : u64 = 0
+    equal_start : u64 = source.len
+    equal_end : u64 = source.len
+    while cursor < source.len {
+        token := next_token(source, cursor)
+        if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *StatementNode }
+        cursor = token.2
+        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
+            if token.0 == 41 {
+                if paren_depth == 0 { return mimi_buffer_empty() as *StatementNode }
+                paren_depth = paren_depth - 1
+            } else {
+                if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
+                    if token.0 == 93 {
+                        if bracket_depth == 0 { return mimi_buffer_empty() as *StatementNode }
+                        bracket_depth = bracket_depth - 1
+                    } else {
+                        if token.0 == 61 && paren_depth == 0 && bracket_depth == 0 {
+                            if equal_start != source.len { return mimi_buffer_empty() as *StatementNode }
+                            equal_start = token.1
+                            equal_end = token.2
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if equal_start == source.len || paren_depth != 0 || bracket_depth != 0 { return mimi_buffer_empty() as *StatementNode }
+    target := parse_expression(source[0:equal_start], storage)
+    if expression_is_null(target) { return mimi_buffer_empty() as *StatementNode }
+    value := parse_expression(source[equal_end:source.len], storage)
+    if expression_is_null(value) { return mimi_buffer_empty() as *StatementNode }
+    value.start = value.start + equal_end
+    value.end = value.end + equal_end
+    assignment := allocate_expr(storage, 284, target.start, value.end, target, value)
+    if expression_is_null(assignment) { return mimi_buffer_empty() as *StatementNode }
+    if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+    statement := storage.last as *StatementNode
+    statement.kind = 284
+    statement.start = target.start
+    statement.end = value.end
+    statement.value = assignment
+    statement.next = mimi_buffer_empty() as *StatementNode
+    statement
+}
+
 pub tuple_binding_is_null :: fn (binding : *TupleBindingNode) bool {
     binding == (mimi_buffer_empty() as *TupleBindingNode)
 }
