@@ -80,6 +80,14 @@ main :: fn () i32 {
     if lexer.function_header_is_null(function_header) || function_header.name_end != 4 { return 105 }
     if function_header.parameters_start != 12 || function_header.parameters_end != 30 { return 106 }
     if function_header.return_type_start != 32 || function_header.return_type_end != 36 || function_header.body_start != 38 { return 107 }
+    function_definition_source := "work :: fn (value : i32) i32 { if true { text := \"}\" } return value }"
+    function_definition := lexer.parse_function_definition(function_definition_source, &storage)
+    if lexer.function_node_is_null(function_definition) || function_definition.name_end != 4 { return 197 }
+    if function_definition.parameters.data_type.kind != 270 || function_definition.return_type.kind != 270 { return 198 }
+    if function_definition.body.start != 27 || function_definition.body.end != function_definition_source.len { return 199 }
+    if function_definition.body.content_start != 28 || function_definition.body.content_end + 1 != function_definition.body.end { return 200 }
+    unclosed_function_definition := lexer.parse_function_definition("work :: fn () i32 { return 1", &storage)
+    if !lexer.function_node_is_null(unclosed_function_definition) { return 201 }
     parameters := lexer.parse_parameters("work :: fn (x : i32, ptr : *u8) bool {", function_header, &storage)
     if lexer.parameter_list_is_null(parameters) { return 111 }
     if parameters.name_start != 12 || parameters.name_end != 13 { return 115 }

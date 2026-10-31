@@ -661,6 +661,23 @@ pub TupleBindingNode :: struct {
     value : *ExprNode,
 }
 
+pub BlockNode :: struct {
+    start : u64,
+    end : u64,
+    content_start : u64,
+    content_end : u64,
+}
+
+pub FunctionNode :: struct {
+    start : u64,
+    end : u64,
+    name_start : u64,
+    name_end : u64,
+    parameters : *ParameterNode,
+    return_type : *ExprNode,
+    body : *BlockNode,
+}
+
 pub FunctionHeader :: struct {
     start : u64,
     end : u64,
@@ -1016,6 +1033,71 @@ pub parse_function_header :: fn (source : []u8, storage : *ExpressionArena) *Fun
     header.return_type_end = return_type_end
     header.body_start = body_open.2
     header
+}
+
+pub block_node_is_null :: fn (block : *BlockNode) bool {
+    block == (mimi_buffer_empty() as *BlockNode)
+}
+
+pub parse_block_span :: fn (source : []u8, offset : u64, storage : *ExpressionArena) *BlockNode {
+    opening := next_token(source, 0)
+    if opening.0 != 123 { return mimi_buffer_empty() as *BlockNode }
+    cursor := opening.2
+    depth : u64 = 1
+    close_start : u64 = 0
+    close_end : u64 = 0
+    while depth > 0 {
+        token := next_token(source, cursor)
+        if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *BlockNode }
+        cursor = token.2
+        if token.0 == 123 { depth = depth + 1 } else {
+            if token.0 == 125 {
+                depth = depth - 1
+                if depth == 0 {
+                    close_start = token.1
+                    close_end = token.2
+                }
+            }
+        }
+    }
+    if next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *BlockNode }
+    if mimi_arena_allocate(storage, 32, 8) == 0 { return mimi_buffer_empty() as *BlockNode }
+    block := storage.last as *BlockNode
+    block.start = opening.1 + offset
+    block.end = close_end + offset
+    block.content_start = opening.2 + offset
+    block.content_end = close_start + offset
+    block
+}
+
+pub function_node_is_null :: fn (function : *FunctionNode) bool {
+    function == (mimi_buffer_empty() as *FunctionNode)
+}
+
+pub parse_function_definition :: fn (source : []u8, storage : *ExpressionArena) *FunctionNode {
+    header := parse_function_header(source, storage)
+    if function_header_is_null(header) { return mimi_buffer_empty() as *FunctionNode }
+    if header.body_start >= source.len { return mimi_buffer_empty() as *FunctionNode }
+    body := parse_block_span(source[header.body_start:source.len], header.body_start, storage)
+    if block_node_is_null(body) { return mimi_buffer_empty() as *FunctionNode }
+    parameters := parse_parameters(source, header, storage)
+    if header.parameters_start != header.parameters_end && parameter_list_is_null(parameters) {
+        return mimi_buffer_empty() as *FunctionNode
+    }
+    return_type := parse_type(source[header.return_type_start:header.return_type_end], storage)
+    if expression_is_null(return_type) { return mimi_buffer_empty() as *FunctionNode }
+    return_type.start = return_type.start + header.return_type_start
+    return_type.end = return_type.end + header.return_type_start
+    if mimi_arena_allocate(storage, 56, 8) == 0 { return mimi_buffer_empty() as *FunctionNode }
+    function := storage.last as *FunctionNode
+    function.start = header.start
+    function.end = body.end
+    function.name_start = header.name_start
+    function.name_end = header.name_end
+    function.parameters = parameters
+    function.return_type = return_type
+    function.body = body
+    function
 }
 
 pub parameter_list_is_null :: fn (parameter : *ParameterNode) bool {
