@@ -17,6 +17,18 @@ main :: fn () i32 {
     if !lexer.expression_is_null(invalid_type) { return 53 }
     trailing_type := lexer.parse_type("i32 extra", &storage)
     if !lexer.expression_is_null(trailing_type) { return 54 }
+    tuple_type := lexer.parse_tuple_type("(i32, *u8)", &storage)
+    if lexer.expression_is_null(tuple_type) || tuple_type.kind != 275 || tuple_type.left.kind != 276 { return 128 }
+    if tuple_type.left.left.kind != 270 || tuple_type.left.right.kind != 271 || tuple_type.left.right.left.kind != 270 { return 129 }
+    if tuple_type.start != 0 || tuple_type.end != 10 { return 130 }
+    singleton_tuple_type := lexer.parse_tuple_type("(i32)", &storage)
+    if !lexer.expression_is_null(singleton_tuple_type) { return 131 }
+    trailing_tuple_type := lexer.parse_tuple_type("(i32, *u8) extra", &storage)
+    if !lexer.expression_is_null(trailing_tuple_type) { return 132 }
+    unclosed_tuple_array_type := lexer.parse_tuple_type("([2]i32, *u8", &storage)
+    if !lexer.expression_is_null(unclosed_tuple_array_type) { return 133 }
+    unmatched_tuple_array_type := lexer.parse_tuple_type("([2]i32], *u8)", &storage)
+    if !lexer.expression_is_null(unmatched_tuple_array_type) { return 134 }
     inferred_header := lexer.parse_binding_header("count := 1 + 2", &storage)
     if lexer.binding_header_is_null(inferred_header) || inferred_header.binding_kind != 0 { return 89 }
     if inferred_header.name_start != 0 || inferred_header.name_end != 5 || inferred_header.value_end != 14 { return 90 }
