@@ -25,7 +25,8 @@ the feature matrix.
 `lexer.error_code` returns 1 for an unexpected character, 2 for an
 unterminated block comment, 3 for an unterminated string, 4 for an invalid
 escape, and 5 for malformed UTF-8 in an identifier. `lexer.error_span` returns
-the corresponding half-open byte range in the source.
+the corresponding half-open byte range in the source. `lexer.lex_next` combines
+the token kind, span, and error code in one `LexResult`.
 
 `source.render` writes a diagnostic with its path, one-based line and column,
 source line, and byte-span underline to standard error. `ModuleGraph` tracks

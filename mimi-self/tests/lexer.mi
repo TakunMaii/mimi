@@ -75,5 +75,13 @@ main :: fn () i32 {
     if string_span.0 != 0 || string_span.1 != 11 { return 63 }
     escape_span := lexer.error_span("\"bad\\q\"", 4)
     if escape_span.0 != 4 || escape_span.1 != 6 { return 64 }
+    invalid_character := lexer.lex_next("a | b", 2)
+    if invalid_character.kind != 255 || invalid_character.error_code != 1 || invalid_character.start != 2 || invalid_character.end != 3 { return 65 }
+    invalid_escape := lexer.lex_next("\"bad\\q\"", 0)
+    if invalid_escape.error_code != 4 || invalid_escape.start != 4 || invalid_escape.end != 6 { return 66 }
+    unclosed_string := lexer.lex_next("\"unfinished", 0)
+    if unclosed_string.error_code != 3 || unclosed_string.start != 0 || unclosed_string.end != 11 { return 67 }
+    malformed_utf8 := lexer.lex_next([240, 128, 128, 128], 0)
+    if malformed_utf8.error_code != 5 || malformed_utf8.start != 0 || malformed_utf8.end != 1 { return 68 }
     0
 }

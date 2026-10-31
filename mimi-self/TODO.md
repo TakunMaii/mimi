@@ -43,6 +43,7 @@ two consecutive stages.
 - [x] Classify common lexer failures with stable error codes and messages.
 - [x] Return exact half-open byte spans for unexpected bytes, malformed
   escapes, and unterminated strings/comments.
+- [x] Expose token kind, source span, and lexical error code in one result.
 - [x] Reject Unicode symbol codepoints such as emoji at identifier start.
 - [ ] Match Rust's complete Unicode Alphabetic/Alphanumeric identifier
   properties, including combining marks and all scripts.
@@ -82,8 +83,9 @@ T1 containers, runtime, Result/Option, source file records, source-aware
 diagnostic rendering, and module state/cycle tracking are in place. Source
 import resolution and recursive traversal are still open. The T2 lexer
 returns token kinds and byte spans, decodes supported escapes, validates
-UTF-8 sequences, classifies common errors, and handles member-number/decimal
-boundaries. Its Unicode identifier ranges are still approximate. An
+UTF-8 sequences, classifies common errors, returns token/error spans together,
+and handles member-number/decimal boundaries. Its Unicode identifier ranges
+are still approximate. An
 arena-backed expression parser now handles atom, prefix, binary, and grouped
 forms with precedence; declaration, type, call, member, index, and statement
 parsing remain open. The parser currently lives alongside the lexer because

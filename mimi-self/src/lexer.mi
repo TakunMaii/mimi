@@ -128,6 +128,23 @@ pub next_token :: fn (source : []u8, cursor : u64) (u8, u64, u64) {
     (0, source.len, source.len)
 }
 
+pub LexResult :: struct {
+    kind : u8,
+    start : u64,
+    end : u64,
+    error_code : u8,
+}
+
+pub lex_next :: fn (source : []u8, cursor : u64) LexResult {
+    token := next_token(source, cursor)
+    if token.0 != 255 {
+        return LexResult { kind = token.0, start = token.1, end = token.2, error_code = 0 }
+    }
+    code := error_code(source, token.1)
+    span := error_span(source, token.1)
+    LexResult { kind = 255, start = span.0, end = span.1, error_code = code }
+}
+
 pub error_code :: fn (source : []u8, cursor : u64) u8 {
     index : u64 = 0
     in_string := false
