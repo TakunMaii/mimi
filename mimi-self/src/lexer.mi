@@ -655,6 +655,8 @@ pub ModuleDeclarationNode :: struct {
     name_end : u64,
     path_start : u64,
     path_end : u64,
+    value_start : u64,
+    value_end : u64,
     binding : *BindingNode,
     function : *FunctionNode,
     struct_node : *StructNode,
@@ -2869,6 +2871,8 @@ parse_module_declaration :: fn (source : []u8, offset : u64, storage : *Expressi
     enum_node : *EnumNode = mimi_buffer_empty() as *EnumNode
     path_start : u64 = 0
     path_end : u64 = 0
+    value_start : u64 = 0
+    value_end : u64 = 0
     end := source.len
     if is_external {
         if declaration.0 != 160 { return mimi_buffer_empty() as *ModuleDeclarationNode }
@@ -2905,14 +2909,29 @@ parse_module_declaration :: fn (source : []u8, offset : u64, storage : *Expressi
                     open := next_token(source, import_name.2)
                     path := next_token(source, open.2)
                     close := next_token(source, path.2)
-                    if at.0 != 64 || import_name.0 != 1 || path.0 != 3 || close.0 != 41 || next_token(source, close.2).0 != 0 { return mimi_buffer_empty() as *ModuleDeclarationNode }
+                    if at.0 != 64 || import_name.0 != 1 || open.0 != 40 { return mimi_buffer_empty() as *ModuleDeclarationNode }
                     is_import := source_name_equals(source, import_name.1, import_name.2, "import")
                     is_cimport := source_name_equals(source, import_name.1, import_name.2, "cimport")
-                    if !is_import && !is_cimport { return mimi_buffer_empty() as *ModuleDeclarationNode }
-                    kind = 4
-                    if is_cimport { kind = 6 }
-                    path_start = path.1 + offset
-                    path_end = path.2 + offset
+                    is_define := source_name_equals(source, import_name.1, import_name.2, "cDefine")
+                    if path.0 != 3 { return mimi_buffer_empty() as *ModuleDeclarationNode }
+                    if is_define {
+                        comma := next_token(source, path.2)
+                        value := next_token(source, comma.2)
+                        close := next_token(source, value.2)
+                        if comma.0 != 44 || (value.0 != 3 && value.0 != 2) || close.0 != 41 || next_token(source, close.2).0 != 0 { return mimi_buffer_empty() as *ModuleDeclarationNode }
+                        kind = 8
+                        path_start = path.1 + offset
+                        path_end = path.2 + offset
+                        value_start = value.1 + offset
+                        value_end = value.2 + offset
+                    } else {
+                        close := next_token(source, path.2)
+                        if (!is_import && !is_cimport) || close.0 != 41 || next_token(source, close.2).0 != 0 { return mimi_buffer_empty() as *ModuleDeclarationNode }
+                        kind = 4
+                        if is_cimport { kind = 6 }
+                        path_start = path.1 + offset
+                        path_end = path.2 + offset
+                    }
                 } else {
                     binding = parse_binding_declaration(source[name.1:source.len], storage)
                     if binding_node_is_null(binding) { return mimi_buffer_empty() as *ModuleDeclarationNode }
@@ -2924,7 +2943,7 @@ parse_module_declaration :: fn (source : []u8, offset : u64, storage : *Expressi
         }
     }
     }
-    if mimi_arena_allocate(storage, 112, 8) == 0 { return mimi_buffer_empty() as *ModuleDeclarationNode }
+    if mimi_arena_allocate(storage, 128, 8) == 0 { return mimi_buffer_empty() as *ModuleDeclarationNode }
     node := storage.last as *ModuleDeclarationNode
     node.kind = kind
     node.is_public = is_public
@@ -2934,6 +2953,8 @@ parse_module_declaration :: fn (source : []u8, offset : u64, storage : *Expressi
     node.name_end = name.2 + offset
     node.path_start = path_start
     node.path_end = path_end
+    node.value_start = value_start
+    node.value_end = value_end
     node.binding = binding
     node.function = function
     node.struct_node = struct_node

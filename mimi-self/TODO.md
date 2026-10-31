@@ -52,7 +52,7 @@ two consecutive stages.
 - [x] Parse the supported declaration, type, expression, statement, import,
   generic, and control-flow syntax into source-aware AST nodes.
 - [x] Parse `extern` functions into module ASTs.
-- [ ] Parse C define declarations into module ASTs.
+- [x] Parse C define declarations into module ASTs.
 - [x] Parse grouped unary and binary expressions with operator precedence into
   arena-backed AST nodes.
 - [x] Parse chained named and numeric member access in expressions.
