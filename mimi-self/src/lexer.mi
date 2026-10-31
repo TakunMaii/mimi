@@ -678,6 +678,14 @@ pub FunctionNode :: struct {
     body : *BlockNode,
 }
 
+pub IfNode :: struct {
+    start : u64,
+    end : u64,
+    condition : *ExprNode,
+    then_branch : *BlockNode,
+    else_branch : *BlockNode,
+}
+
 pub FunctionHeader :: struct {
     start : u64,
     end : u64,
@@ -1068,6 +1076,64 @@ pub parse_block_span :: fn (source : []u8, offset : u64, storage : *ExpressionAr
     block.content_start = opening.2 + offset
     block.content_end = close_start + offset
     block
+}
+
+pub if_node_is_null :: fn (node : *IfNode) bool {
+    node == (mimi_buffer_empty() as *IfNode)
+}
+
+pub parse_if_statement :: fn (source : []u8, storage : *ExpressionArena) *IfNode {
+    keyword := next_token(source, 0)
+    if keyword.0 != 164 { return mimi_buffer_empty() as *IfNode }
+    cursor := keyword.2
+    paren_depth : u64 = 0
+    condition_end := source.len
+    block_start := source.len
+    found_block := false
+    while cursor < source.len && !found_block {
+        token := next_token(source, cursor)
+        if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *IfNode }
+        cursor = token.2
+        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
+            if token.0 == 41 {
+                if paren_depth == 0 { return mimi_buffer_empty() as *IfNode }
+                paren_depth = paren_depth - 1
+            } else {
+                if token.0 == 123 && paren_depth == 0 {
+                    condition_end = token.1
+                    block_start = token.1
+                    found_block = true
+                }
+            }
+        }
+    }
+    if !found_block || condition_end <= keyword.2 { return mimi_buffer_empty() as *IfNode }
+    condition := parse_expression(source[keyword.2:condition_end], storage)
+    if expression_is_null(condition) { return mimi_buffer_empty() as *IfNode }
+    condition.start = condition.start + keyword.2
+    condition.end = condition.end + keyword.2
+    then_branch := parse_block_span(source[block_start:source.len], block_start, storage)
+    if block_node_is_null(then_branch) { return mimi_buffer_empty() as *IfNode }
+    end := then_branch.end
+    remainder := next_token(source, end)
+    else_branch : *BlockNode = mimi_buffer_empty() as *BlockNode
+    if remainder.0 != 0 {
+        if remainder.0 != 165 { return mimi_buffer_empty() as *IfNode }
+        else_start := next_token(source, remainder.2)
+        if else_start.0 != 123 { return mimi_buffer_empty() as *IfNode }
+        else_branch = parse_block_span(source[else_start.1:source.len], else_start.1, storage)
+        if block_node_is_null(else_branch) { return mimi_buffer_empty() as *IfNode }
+        end = else_branch.end
+        if next_token(source, end).0 != 0 { return mimi_buffer_empty() as *IfNode }
+    }
+    if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *IfNode }
+    node := storage.last as *IfNode
+    node.start = keyword.1
+    node.end = end
+    node.condition = condition
+    node.then_branch = then_branch
+    node.else_branch = else_branch
+    node
 }
 
 pub function_node_is_null :: fn (function : *FunctionNode) bool {

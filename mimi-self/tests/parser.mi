@@ -88,6 +88,18 @@ main :: fn () i32 {
     if function_definition.body.content_start != 28 || function_definition.body.content_end + 1 != function_definition.body.end { return 200 }
     unclosed_function_definition := lexer.parse_function_definition("work :: fn () i32 { return 1", &storage)
     if !lexer.function_node_is_null(unclosed_function_definition) { return 201 }
+    if_statement_source := "if ready { left := 1 } else { right := 2 }"
+    if_statement := lexer.parse_if_statement(if_statement_source, &storage)
+    if lexer.if_node_is_null(if_statement) || if_statement.condition.kind != 1 { return 202 }
+    if if_statement.then_branch.start != 10 || if_statement.then_branch.content_start != 11 { return 203 }
+    if lexer.block_node_is_null(if_statement.else_branch) { return 204 }
+    if if_statement.else_branch.end != if_statement_source.len { return 208 }
+    nested_if_block := lexer.parse_if_statement("if ready { if nested { work() } }", &storage)
+    if lexer.if_node_is_null(nested_if_block) || nested_if_block.then_branch.end != 33 { return 205 }
+    missing_if_body := lexer.parse_if_statement("if ready", &storage)
+    if !lexer.if_node_is_null(missing_if_body) { return 206 }
+    trailing_if_tokens := lexer.parse_if_statement("if ready {} extra", &storage)
+    if !lexer.if_node_is_null(trailing_if_tokens) { return 207 }
     parameters := lexer.parse_parameters("work :: fn (x : i32, ptr : *u8) bool {", function_header, &storage)
     if lexer.parameter_list_is_null(parameters) { return 111 }
     if parameters.name_start != 12 || parameters.name_end != 13 { return 115 }
