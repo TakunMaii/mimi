@@ -2,6 +2,7 @@ extern mimi_process_args_new : fn() *void
 extern mimi_process_args_push : fn(arguments : *void, value : *u8, length : u64) i32
 extern mimi_process_run : fn(arguments : *void, program : *u8, length : u64) i32
 extern mimi_process_args_release : fn(arguments : *void) void
+extern mimi_buffer_empty : fn() *void
 
 pub ProcessArgs :: struct {
     handle : *void,
@@ -21,5 +22,5 @@ pub run :: fn (arguments : *ProcessArgs, program : []u8) i32 {
 
 pub release :: fn (arguments : *ProcessArgs) void {
     mimi_process_args_release(arguments.handle)
-    arguments.handle = mimi_process_args_new()
+    arguments.handle = mimi_buffer_empty()
 }

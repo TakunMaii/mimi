@@ -7,5 +7,7 @@ main :: fn () i32 {
     result := process.run(&arguments, "/bin/sh")
     process.release(&arguments)
     if result != 7 { return 3 }
+    process.release(&arguments)
+    if process.push(&arguments, "unused") { return 4 }
     0
 }

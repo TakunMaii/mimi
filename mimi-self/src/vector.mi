@@ -2,6 +2,7 @@ extern mimi_vector_new : fn() *void
 extern mimi_vector_push : fn(vector : *void, value : u64) i32
 extern mimi_vector_get : fn(vector : *void, index : u64, value : *u64) i32
 extern mimi_vector_release : fn(vector : *void) void
+extern mimi_buffer_empty : fn() *void
 
 pub U64Vector :: struct {
     handle : *void,
@@ -21,5 +22,5 @@ pub get :: fn (vector : *U64Vector, index : u64, value : *u64) bool {
 
 pub release :: fn (vector : *U64Vector) void {
     mimi_vector_release(vector.handle)
-    vector.handle = mimi_vector_new()
+    vector.handle = mimi_buffer_empty()
 }

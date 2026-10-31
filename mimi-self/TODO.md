@@ -25,6 +25,8 @@ two consecutive stages.
   arena-style allocation for AST and IR storage.
 - [x] Provide reliable file, path, directory, and process APIs through a
   minimal standard library or a small C runtime.
+- [x] Make container and process handle release idempotent and leave handles
+  unusable until explicitly reinitialized.
 - [x] Add `Result`/`Option` conventions and error propagation suitable for
   parser and type-checker code.
 - [ ] Complete source file/module loading for the self-hosted compiler,

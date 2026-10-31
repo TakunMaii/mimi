@@ -23,8 +23,8 @@ main :: fn () i32 {
     if !maps.set(&map, "item11", 11) { return 18 }
     if !maps.get(&map, "item11", &value) || value != 11 { return 19 }
     maps.release(&map)
-    if !maps.set(&map, "reused", 9) { return 20 }
-    if !maps.get(&map, "reused", &value) || value != 9 { return 21 }
     maps.release(&map)
+    if maps.set(&map, "reused", 9) { return 20 }
+    if maps.get(&map, "name", &value) { return 21 }
     0
 }

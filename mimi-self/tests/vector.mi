@@ -11,5 +11,7 @@ main :: fn () i32 {
     if !vectors.get(&values, 79, &result) || result != 79 { return 4 }
     if vectors.get(&values, 80, &result) { return 5 }
     vectors.release(&values)
+    vectors.release(&values)
+    if vectors.push(&values, 1) { return 6 }
     0
 }

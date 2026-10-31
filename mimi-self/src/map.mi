@@ -2,6 +2,7 @@ extern mimi_map_new : fn() *void
 extern mimi_map_set : fn(map : *void, key : *u8, key_length : u64, value : u64) i32
 extern mimi_map_get : fn(map : *void, key : *u8, key_length : u64, value : *u64) i32
 extern mimi_map_release : fn(map : *void) void
+extern mimi_buffer_empty : fn() *void
 
 pub StringMap :: struct {
     handle : *void,
@@ -21,5 +22,5 @@ pub get :: fn (map : *StringMap, key : []u8, value : *u64) bool {
 
 pub release :: fn (map : *StringMap) void {
     mimi_map_release(map.handle)
-    map.handle = mimi_map_new()
+    map.handle = mimi_buffer_empty()
 }
