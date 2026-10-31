@@ -117,7 +117,7 @@ Atomic tuple destructuring is represented by a dedicated name-list/value node.
 Generic declarations and parameter validation, general tuple expressions and
 destructuring type checks, statement blocks, and remaining control-flow
 statements remain open. `if` statements and expressions retain conditions and
-then/else block spans, but else-if and block statement composition are not implemented.
+then/else-if/else branch spans; block statement composition is not implemented.
 While/loop/do-while retain condition and body spans. Name
 resolution and type checking remain open. The parser currently lives alongside
 the lexer because stage0 loses imported aliases inside imported module function

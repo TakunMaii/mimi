@@ -104,11 +104,18 @@ main :: fn () i32 {
     if !lexer.if_node_is_null(missing_if_body) { return 206 }
     trailing_if_tokens := lexer.parse_if_statement("if ready {} extra", &storage)
     if !lexer.if_node_is_null(trailing_if_tokens) { return 207 }
+    else_if_source := "if first { one } else if second { two } else { three }"
+    else_if_node := lexer.parse_if_statement(else_if_source, &storage)
+    if lexer.if_node_is_null(else_if_node) || lexer.if_node_is_null(else_if_node.else_if) { return 222 }
+    if else_if_node.else_if.start != 22 || else_if_node.else_if.condition.start != 25 { return 223 }
+    if else_if_node.else_if.else_branch.start != 42 || else_if_node.end != else_if_source.len { return 224 }
     if_expression := lexer.parse_if_expression("if ready { yes } else { no }", &storage)
     if lexer.expression_is_null(if_expression) { return 215 }
     if if_expression.kind != 288 || if_expression.left.kind != 1 { return 218 }
     if if_expression.right.kind != 276 || if_expression.right.left.kind != 289 { return 216 }
     if if_expression.end != 28 { return 219 }
+    else_if_expression := lexer.parse_if_expression("if first { one } else if second { two } else { three }", &storage)
+    if lexer.expression_is_null(else_if_expression) || else_if_expression.right.right.kind != 288 { return 225 }
     while_statement := lexer.parse_loop_statement("while ready { work() }", &storage)
     if lexer.loop_node_is_null(while_statement) || while_statement.kind != 286 || while_statement.condition.kind != 1 { return 209 }
     if while_statement.body.start != 12 || while_statement.end != 24 { return 210 }

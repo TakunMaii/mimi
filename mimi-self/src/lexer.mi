@@ -684,6 +684,7 @@ pub IfNode :: struct {
     condition : *ExprNode,
     then_branch : *BlockNode,
     else_branch : *BlockNode,
+    else_if : *IfNode,
 }
 
 pub LoopNode :: struct {
@@ -1091,6 +1092,10 @@ pub if_node_is_null :: fn (node : *IfNode) bool {
 }
 
 pub parse_if_statement :: fn (source : []u8, storage : *ExpressionArena) *IfNode {
+    parse_if_statement_at(source, 0, storage)
+}
+
+parse_if_statement_at :: fn (source : []u8, offset : u64, storage : *ExpressionArena) *IfNode {
     keyword := next_token(source, 0)
     if keyword.0 != 164 { return mimi_buffer_empty() as *IfNode }
     cursor := keyword.2
@@ -1120,36 +1125,56 @@ pub parse_if_statement :: fn (source : []u8, storage : *ExpressionArena) *IfNode
     if expression_is_null(condition) { return mimi_buffer_empty() as *IfNode }
     condition.start = condition.start + keyword.2
     condition.end = condition.end + keyword.2
-    then_branch := parse_block_span(source[block_start:source.len], block_start, storage)
+    then_branch := parse_block_span(source[block_start:source.len], offset + block_start, storage)
     if block_node_is_null(then_branch) { return mimi_buffer_empty() as *IfNode }
-    end := then_branch.end
+    end := then_branch.end - offset
     remainder := next_token(source, end)
     else_branch : *BlockNode = mimi_buffer_empty() as *BlockNode
+    else_if : *IfNode = mimi_buffer_empty() as *IfNode
     if remainder.0 != 0 {
         if remainder.0 != 165 { return mimi_buffer_empty() as *IfNode }
         else_start := next_token(source, remainder.2)
-        if else_start.0 != 123 { return mimi_buffer_empty() as *IfNode }
-        else_branch = parse_block_span(source[else_start.1:source.len], else_start.1, storage)
-        if block_node_is_null(else_branch) { return mimi_buffer_empty() as *IfNode }
-        end = else_branch.end
-        if next_token(source, end).0 != 0 { return mimi_buffer_empty() as *IfNode }
+        if else_start.0 == 123 {
+            else_branch = parse_block_span(source[else_start.1:source.len], offset + else_start.1, storage)
+            if block_node_is_null(else_branch) { return mimi_buffer_empty() as *IfNode }
+            end = else_branch.end - offset
+            if next_token(source, end).0 != 0 { return mimi_buffer_empty() as *IfNode }
+        } else {
+            if else_start.0 != 164 { return mimi_buffer_empty() as *IfNode }
+            else_if = parse_if_statement_at(source[else_start.1:source.len], offset + else_start.1, storage)
+            if if_node_is_null(else_if) { return mimi_buffer_empty() as *IfNode }
+            end = else_if.end - offset
+        }
     }
     if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *IfNode }
     node := storage.last as *IfNode
-    node.start = keyword.1
-    node.end = end
+    node.start = keyword.1 + offset
+    node.end = end + offset
     node.condition = condition
+    node.condition.start = node.condition.start + offset
+    node.condition.end = node.condition.end + offset
     node.then_branch = then_branch
     node.else_branch = else_branch
+    node.else_if = else_if
     node
 }
 
 pub parse_if_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     statement := parse_if_statement(source, storage)
-    if if_node_is_null(statement) || block_node_is_null(statement.else_branch) { return mimi_buffer_empty() as *ExprNode }
+    if if_node_is_null(statement) { return mimi_buffer_empty() as *ExprNode }
+    parse_if_expression_node(statement, storage)
+}
+
+parse_if_expression_node :: fn (statement : *IfNode, storage : *ExpressionArena) *ExprNode {
+    if if_node_is_null(statement) || (block_node_is_null(statement.else_branch) && if_node_is_null(statement.else_if)) { return mimi_buffer_empty() as *ExprNode }
     then_node := allocate_expr(storage, 289, statement.then_branch.start, statement.then_branch.end, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
     if expression_is_null(then_node) { return then_node }
-    else_node := allocate_expr(storage, 289, statement.else_branch.start, statement.else_branch.end, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+    else_node : *ExprNode = mimi_buffer_empty() as *ExprNode
+    if if_node_is_null(statement.else_if) {
+        else_node = allocate_expr(storage, 289, statement.else_branch.start, statement.else_branch.end, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+    } else {
+        else_node = parse_if_expression_node(statement.else_if, storage)
+    }
     if expression_is_null(else_node) { return else_node }
     branches := allocate_expr(storage, 276, then_node.start, else_node.end, then_node, else_node)
     if expression_is_null(branches) { return branches }
