@@ -604,6 +604,7 @@ pub StatementNode :: struct {
     loop_statement : *LoopNode,
     for_loop : *ForNode,
     match_statement : *MatchNode,
+    tuple_binding : *TupleBindingNode,
 }
 
 pub DestructureNameNode :: struct {
@@ -931,7 +932,7 @@ pub parse_transfer_statement :: fn (source : []u8, storage : *ExpressionArena) *
         }
         if next_token(source, keyword.2).0 != 0 { return mimi_buffer_empty() as *StatementNode }
     }
-    if mimi_arena_allocate(storage, 96, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+    if mimi_arena_allocate(storage, 104, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
     statement := storage.last as *StatementNode
     statement.kind = kind
     statement.start = keyword.1
@@ -945,6 +946,7 @@ pub parse_transfer_statement :: fn (source : []u8, storage : *ExpressionArena) *
     statement.loop_statement = mimi_buffer_empty() as *LoopNode
     statement.for_loop = mimi_buffer_empty() as *ForNode
     statement.match_statement = mimi_buffer_empty() as *MatchNode
+    statement.tuple_binding = mimi_buffer_empty() as *TupleBindingNode
     statement
 }
 
@@ -956,7 +958,7 @@ pub parse_defer_statement :: fn (source : []u8, storage : *ExpressionArena) *Sta
     if next.0 == 123 {
         body := parse_block_span(source[next.1:source.len], next.1, storage)
         if block_node_is_null(body) { return mimi_buffer_empty() as *StatementNode }
-        if mimi_arena_allocate(storage, 96, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+        if mimi_arena_allocate(storage, 104, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
         statement := storage.last as *StatementNode
         statement.kind = 290
         statement.start = keyword.1
@@ -970,13 +972,14 @@ pub parse_defer_statement :: fn (source : []u8, storage : *ExpressionArena) *Sta
         statement.loop_statement = mimi_buffer_empty() as *LoopNode
         statement.for_loop = mimi_buffer_empty() as *ForNode
         statement.match_statement = mimi_buffer_empty() as *MatchNode
+        statement.tuple_binding = mimi_buffer_empty() as *TupleBindingNode
         return statement
     }
     value := parse_expression(source[keyword.2:source.len], storage)
     if expression_is_null(value) { return mimi_buffer_empty() as *StatementNode }
     value.start = value.start + keyword.2
     value.end = value.end + keyword.2
-    if mimi_arena_allocate(storage, 96, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+    if mimi_arena_allocate(storage, 104, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
     statement := storage.last as *StatementNode
     statement.kind = 283
     statement.start = keyword.1
@@ -990,6 +993,7 @@ pub parse_defer_statement :: fn (source : []u8, storage : *ExpressionArena) *Sta
     statement.loop_statement = mimi_buffer_empty() as *LoopNode
     statement.for_loop = mimi_buffer_empty() as *ForNode
     statement.match_statement = mimi_buffer_empty() as *MatchNode
+    statement.tuple_binding = mimi_buffer_empty() as *TupleBindingNode
     statement
 }
 
@@ -1032,7 +1036,7 @@ pub parse_assignment_statement :: fn (source : []u8, storage : *ExpressionArena)
     value.end = value.end + equal_end
     assignment := allocate_expr(storage, 284, target.start, value.end, target, value)
     if expression_is_null(assignment) { return mimi_buffer_empty() as *StatementNode }
-    if mimi_arena_allocate(storage, 96, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+    if mimi_arena_allocate(storage, 104, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
     statement := storage.last as *StatementNode
     statement.kind = 284
     statement.start = target.start
@@ -1046,6 +1050,7 @@ pub parse_assignment_statement :: fn (source : []u8, storage : *ExpressionArena)
     statement.loop_statement = mimi_buffer_empty() as *LoopNode
     statement.for_loop = mimi_buffer_empty() as *ForNode
     statement.match_statement = mimi_buffer_empty() as *MatchNode
+    statement.tuple_binding = mimi_buffer_empty() as *TupleBindingNode
     statement
 }
 
@@ -1287,7 +1292,7 @@ statement_starts_here :: fn (source : []u8, token : (u8, u64, u64)) bool {
         after_colon := next_token(source, separator.2)
         return after_colon.0 == 58 || after_colon.0 == 61
     }
-    separator.0 == 61
+    separator.0 == 61 || separator.0 == 44
 }
 
 parse_statement_piece :: fn (source : []u8, offset : u64, storage : *ExpressionArena) *StatementNode {
@@ -1329,9 +1334,15 @@ parse_statement_piece :: fn (source : []u8, offset : u64, storage : *ExpressionA
         if first.0 == 172 {
             statement = parse_defer_statement(source, storage)
         } else {
+            tuple_value : *TupleBindingNode = mimi_buffer_empty() as *TupleBindingNode
+            if next_token(source, first.2).0 == 44 { tuple_value = parse_tuple_binding(source, storage) }
+            if !tuple_binding_is_null(tuple_value) {
+                statement = allocate_control_statement(storage, 309, tuple_value.start, tuple_value.end)
+                statement.tuple_binding = tuple_value
+            } else {
             binding := parse_binding_declaration(source, storage)
             if !binding_node_is_null(binding) {
-                if mimi_arena_allocate(storage, 96, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+                if mimi_arena_allocate(storage, 104, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
                 statement = storage.last as *StatementNode
                 statement.kind = 285
                 statement.start = binding.start
@@ -1345,12 +1356,13 @@ parse_statement_piece :: fn (source : []u8, offset : u64, storage : *ExpressionA
                 statement.loop_statement = mimi_buffer_empty() as *LoopNode
                 statement.for_loop = mimi_buffer_empty() as *ForNode
                 statement.match_statement = mimi_buffer_empty() as *MatchNode
+                statement.tuple_binding = mimi_buffer_empty() as *TupleBindingNode
             } else {
                 statement = parse_assignment_statement(source, storage)
                 if statement_node_is_null(statement) {
                     value := parse_expression(source, storage)
                     if expression_is_null(value) { return mimi_buffer_empty() as *StatementNode }
-                    if mimi_arena_allocate(storage, 96, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+                    if mimi_arena_allocate(storage, 104, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
                     statement = storage.last as *StatementNode
                     statement.kind = 303
                     statement.start = value.start
@@ -1364,7 +1376,9 @@ parse_statement_piece :: fn (source : []u8, offset : u64, storage : *ExpressionA
                     statement.loop_statement = mimi_buffer_empty() as *LoopNode
                     statement.for_loop = mimi_buffer_empty() as *ForNode
                     statement.match_statement = mimi_buffer_empty() as *MatchNode
+                    statement.tuple_binding = mimi_buffer_empty() as *TupleBindingNode
                 }
+            }
             }
         }
     }
@@ -1411,7 +1425,7 @@ compose_block_contents :: fn (source : []u8, block : *BlockNode, storage : *Expr
 }
 
 allocate_control_statement :: fn (storage : *ExpressionArena, kind : u64, start : u64, end : u64) *StatementNode {
-    if mimi_arena_allocate(storage, 96, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
+    if mimi_arena_allocate(storage, 104, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
     statement := storage.last as *StatementNode
     statement.kind = kind
     statement.start = start
@@ -1425,6 +1439,7 @@ allocate_control_statement :: fn (storage : *ExpressionArena, kind : u64, start 
     statement.loop_statement = mimi_buffer_empty() as *LoopNode
     statement.for_loop = mimi_buffer_empty() as *ForNode
     statement.match_statement = mimi_buffer_empty() as *MatchNode
+    statement.tuple_binding = mimi_buffer_empty() as *TupleBindingNode
     statement
 }
 
@@ -1480,6 +1495,18 @@ shift_control_statement :: fn (statement : *StatementNode, offset : u64) void {
             shift_expression_tree(arm.value, offset)
             arm = arm.next
         }
+    }
+    if statement.tuple_binding != (mimi_buffer_empty() as *TupleBindingNode) {
+        node := statement.tuple_binding
+        node.start = node.start + offset
+        node.end = node.end + offset
+        name := node.names
+        while name != (mimi_buffer_empty() as *DestructureNameNode) {
+            name.start = name.start + offset
+            name.end = name.end + offset
+            name = name.next
+        }
+        shift_expression_tree(node.value, offset)
     }
 }
 

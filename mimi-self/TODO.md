@@ -76,8 +76,8 @@ two consecutive stages.
 - [x] Parse tuple destructuring names with atomic tuple literal initializers.
 - [x] Build function definition nodes with balanced block source spans.
 - [ ] Validate generic function type parameters.
-- [x] Compose binding, assignment, transfer, defer, and expression statements
-  into block statement lists.
+- [x] Compose binding, tuple destructuring, assignment, transfer, defer, and
+  expression statements into block statement lists.
 - [x] Recursively compose control-flow statements and nested block contents.
 - [x] Extend tuple literal parsing to arbitrary expressions and parse tuple
   types and destructuring bindings.
@@ -129,7 +129,7 @@ Generic parameter lists, enum variant declarations with payload types, and
 struct field declarations with defaults/mutability are parsed; struct methods
 remain pending.
 Function definitions have balanced body spans. `parse_statement_block`
-composes binding, assignment, transfer, defer, expression, if/if-let, loop,
+composes binding, tuple destructuring, assignment, transfer, defer, expression, if/if-let, loop,
 for, and match statements into source-aware linked lists; nested control-flow
 and defer blocks are recursively composed.
 Tuple literals accept arbitrary expressions and nested calls; simple-name

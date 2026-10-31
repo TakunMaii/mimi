@@ -120,6 +120,10 @@ main :: fn () i32 {
     match_composed_block := lexer.parse_statement_block("{ match choice { some(value) => value, none => 0, } return 0 }", 40, &storage)
     if lexer.block_node_is_null(match_composed_block) || match_composed_block.statements.kind != 308 || match_composed_block.statements.match_statement.arm_count != 2 { return 304 }
     if match_composed_block.statements.match_statement.value.start != 48 || match_composed_block.statements.next.kind != 280 { return 305 }
+    destructure_composed_block := lexer.parse_statement_block("{ first, second := (1, true) return first }", 60, &storage)
+    if lexer.block_node_is_null(destructure_composed_block) || destructure_composed_block.statements.kind != 309 { return 308 }
+    if destructure_composed_block.statements.tuple_binding.name_count != 2 || destructure_composed_block.statements.tuple_binding.names.start != 62 { return 309 }
+    if destructure_composed_block.statements.tuple_binding.value.start != 82 || destructure_composed_block.statements.next.kind != 280 { return 310 }
     unclosed_function_definition := lexer.parse_function_definition("work :: fn () i32 { return 1", &storage)
     if !lexer.function_node_is_null(unclosed_function_definition) { return 201 }
     if_statement_source := "if ready { left := 1 } else { right := 2 }"
