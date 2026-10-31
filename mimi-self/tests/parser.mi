@@ -327,6 +327,10 @@ main :: fn () i32 {
     defer_statement := lexer.parse_defer_statement("defer cleanup()", &storage)
     if lexer.statement_node_is_null(defer_statement) || defer_statement.kind != 283 || defer_statement.value.kind != 263 { return 182 }
     if defer_statement.start != 0 || defer_statement.end != 15 || defer_statement.value.start != 6 { return 183 }
+    defer_block_source := "defer { cleanup() }"
+    defer_block := lexer.parse_defer_statement(defer_block_source, &storage)
+    if lexer.statement_node_is_null(defer_block) || defer_block.kind != 290 || !lexer.expression_is_null(defer_block.value) { return 242 }
+    if lexer.block_node_is_null(defer_block.body) || defer_block.body.start != 6 || defer_block.end != defer_block_source.len { return 243 }
     empty_defer := lexer.parse_defer_statement("defer", &storage)
     if !lexer.statement_node_is_null(empty_defer) { return 184 }
     assignment_statement := lexer.parse_assignment_statement("value = value + 1", &storage)

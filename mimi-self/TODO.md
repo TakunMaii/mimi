@@ -62,6 +62,7 @@ two consecutive stages.
 - [x] Parse `return`, `break`, and `continue` into source-aware statement
   nodes.
 - [x] Parse expression-form `defer` statements.
+- [x] Parse block-form `defer` statements with body spans.
 - [x] Parse simple assignment statements with expression targets and values.
 - [x] Parse plain `if` statements with optional `else` block spans.
 - [x] Parse `while`, `loop`, and `do-while` condition/body spans.
@@ -114,8 +115,9 @@ types, initializers, and source spans. Function headers and named parameters
 have source-aware nodes; callback types are supported in parameter lists.
 Function definitions have balanced body spans, but body statements are not yet
 composed into an AST. Atomic tuple literals and return/break/continue statement
-nodes have dedicated parsers. Simple assignment and expression-form `defer`
-are parsed as statement nodes; block-form defer still needs statement parsing.
+nodes have dedicated parsers. Simple assignment and both expression/block
+forms of `defer` are parsed as statement nodes; deferred block contents are
+not yet recursively parsed.
 Atomic tuple destructuring is represented by a dedicated name-list/value node.
 Generic declarations and parameter validation, general tuple expressions and
 destructuring type checks, statement blocks, and remaining control-flow
