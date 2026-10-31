@@ -86,7 +86,7 @@ fn builds_and_runs_explicit_numeric_casts() {
         std::env::temp_dir().join(format!("mimi_cast_executable_{}", std::process::id()));
     std::fs::write(
         &source,
-        "main :: fn () i32 { narrowed := 258 as i8 widened := narrowed as i32 from_float := 12.75 as i32 to_float := 3 as f64 converted_float := to_float as f32 result := if narrowed == 2 && widened == 2 && from_float == 12 && converted_float == 3.0 { 0 } else { 1 } result }",
+        "main :: fn () i32 { narrowed := 258 as i8 widened := narrowed as i32 from_float := 12.75 as i32 from_f32 := (12.75 as f32) as i32 to_float := 3 as f64 converted_float := to_float as f32 result := if narrowed == 2 && widened == 2 && from_float == 12 && from_f32 == 12 && converted_float == 3.0 { 0 } else { 1 } result }",
     )
     .unwrap();
     build_file(
