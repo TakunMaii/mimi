@@ -34,6 +34,13 @@ main :: fn () i32 {
     if lexer.function_header_is_null(function_header) || function_header.name_end != 4 { return 105 }
     if function_header.parameters_start != 12 || function_header.parameters_end != 30 { return 106 }
     if function_header.return_type_start != 32 || function_header.return_type_end != 36 || function_header.body_start != 38 { return 107 }
+    parameters := lexer.parse_parameters("work :: fn (x : i32, ptr : *u8) bool {", function_header, &storage)
+    if lexer.parameter_list_is_null(parameters) { return 111 }
+    if parameters.name_start != 12 || parameters.name_end != 13 { return 115 }
+    if parameters.data_type.kind != 270 || parameters.data_type.start != 16 || parameters.data_type.end != 19 { return 112 }
+    if lexer.parameter_list_is_null(parameters.next) || parameters.next.name_start != 21 || parameters.next.data_type.kind != 271 { return 113 }
+    if parameters.next.data_type.start != 27 { return 116 }
+    if parameters.next.data_type.end != 30 { return 114 }
     malformed_function := lexer.parse_function_header("work :: fn (x : i32 bool {", &storage)
     if !lexer.function_header_is_null(malformed_function) { return 108 }
     callback_header := lexer.parse_function_header("visit :: fn (callback : fn (i32) bool) []u8 {", &storage)
