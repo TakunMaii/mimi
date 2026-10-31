@@ -150,6 +150,15 @@ main :: fn () i32 {
     if enum_node.variants.next.name_start != 31 || !lexer.expression_is_null(enum_node.variants.next.payload_type) { return 252 }
     invalid_enum_payload := lexer.parse_enum_declaration("enum { some(i32 extra) }", &storage)
     if !lexer.enum_node_is_null(invalid_enum_payload) { return 253 }
+    struct_source := "struct <T> { item : T, fixed : f32 : 32, mutable : f32 = 3.0, }"
+    struct_node := lexer.parse_struct_declaration(struct_source, &storage)
+    if lexer.struct_node_is_null(struct_node) || struct_node.field_count != 3 || struct_node.parameters.count != 1 { return 254 }
+    if struct_node.fields.name_start != 15 || struct_node.fields.data_type.kind != 270 || struct_node.fields.mutable != true { return 255 }
+    if struct_node.fields.next.mutable != false || struct_node.fields.next.default_value.kind != 2 { return 256 }
+    if struct_node.fields.next.next.mutable != true || struct_node.fields.next.next.default_value.kind != 2 { return 257 }
+    if struct_node.fields.next.next.default_value.start != 59 || struct_node.end != struct_source.len { return 258 }
+    malformed_struct_field := lexer.parse_struct_declaration("struct { item : }", &storage)
+    if !lexer.struct_node_is_null(malformed_struct_field) { return 259 }
     while_statement := lexer.parse_loop_statement("while ready { work() }", &storage)
     if lexer.loop_node_is_null(while_statement) || while_statement.kind != 286 || while_statement.condition.kind != 1 { return 209 }
     if while_statement.body.start != 12 || while_statement.end != 24 { return 210 }

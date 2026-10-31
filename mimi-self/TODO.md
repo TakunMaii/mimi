@@ -72,6 +72,7 @@ two consecutive stages.
 - [x] Parse enum `if let` variant tests with optional bindings.
 - [x] Parse generic parameter lists and reject duplicate names.
 - [x] Parse enum variants and optional payload types into declaration nodes.
+- [x] Parse struct fields, defaults, mutability, and generic parameters.
 - [x] Parse tuple destructuring names with atomic tuple literal initializers.
 - [x] Build function definition nodes with balanced block source spans.
 - [ ] Validate generic function type parameters and parse statement blocks.
@@ -115,8 +116,9 @@ fixed-array, nested tuple, nested function, and generic application type syntax
 is parsed. Binding headers and declaration AST nodes preserve names, optional
 types, initializers, and source spans. Function headers and named parameters
 have source-aware nodes; callback types are supported in parameter lists.
-Generic parameter lists and enum variant declarations with payload type nodes
-are parsed.
+Generic parameter lists, enum variant declarations with payload types, and
+struct field declarations with defaults/mutability are parsed; struct methods
+remain pending.
 Function definitions have balanced body spans, but body statements are not yet
 composed into an AST. Atomic tuple literals and return/break/continue statement
 nodes have dedicated parsers. Simple assignment and both expression/block

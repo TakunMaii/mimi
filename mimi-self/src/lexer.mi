@@ -769,6 +769,25 @@ pub EnumNode :: struct {
     variants : *EnumVariantNode,
 }
 
+pub StructFieldNode :: struct {
+    start : u64,
+    end : u64,
+    name_start : u64,
+    name_end : u64,
+    mutable : bool,
+    data_type : *ExprNode,
+    default_value : *ExprNode,
+    next : *StructFieldNode,
+}
+
+pub StructNode :: struct {
+    start : u64,
+    end : u64,
+    parameters : *GenericParameterList,
+    field_count : u64,
+    fields : *StructFieldNode,
+}
+
 pub FunctionHeader :: struct {
     start : u64,
     end : u64,
@@ -1847,6 +1866,166 @@ pub parse_enum_declaration :: fn (source : []u8, storage : *ExpressionArena) *En
     node.parameters = parameters
     node.variant_count = count
     node.variants = first
+    node
+}
+
+pub struct_node_is_null :: fn (node : *StructNode) bool {
+    node == (mimi_buffer_empty() as *StructNode)
+}
+
+pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *StructNode {
+    keyword := next_token(source, 0)
+    if keyword.0 != 163 { return mimi_buffer_empty() as *StructNode }
+    cursor := keyword.2
+    parameters : *GenericParameterList = mimi_buffer_empty() as *GenericParameterList
+    next := next_token(source, cursor)
+    if next.0 == 60 {
+        close_cursor := next.2
+        found_close := false
+        while close_cursor < source.len && !found_close {
+            token := next_token(source, close_cursor)
+            if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *StructNode }
+            close_cursor = token.2
+            if token.0 == 62 { found_close = true }
+        }
+        if !found_close { return mimi_buffer_empty() as *StructNode }
+        parameters = parse_generic_parameters(source[next.1:close_cursor], storage)
+        if generic_parameter_list_is_null(parameters) { return mimi_buffer_empty() as *StructNode }
+        parameters.start = parameters.start + next.1
+        parameters.end = parameters.end + next.1
+        cursor = close_cursor
+    }
+    opening := next_token(source, cursor)
+    if opening.0 != 123 { return mimi_buffer_empty() as *StructNode }
+    cursor = opening.2
+    first : *StructFieldNode = mimi_buffer_empty() as *StructFieldNode
+    last : *StructFieldNode = mimi_buffer_empty() as *StructFieldNode
+    count : u64 = 0
+    close_end := source.len
+    while cursor < source.len {
+        if next_token(source, cursor).0 == 125 {
+            close := next_token(source, cursor)
+            close_end = close.2
+            break
+        }
+        segment_start := cursor
+        segment_end := source.len
+        paren_depth : u64 = 0
+        bracket_depth : u64 = 0
+        angle_depth : u64 = 0
+        found_separator := false
+        while cursor < source.len && !found_separator {
+            token := next_token(source, cursor)
+            if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *StructNode }
+            cursor = token.2
+            if token.0 == 40 { paren_depth = paren_depth + 1 } else {
+                if token.0 == 41 {
+                    if paren_depth == 0 { return mimi_buffer_empty() as *StructNode }
+                    paren_depth = paren_depth - 1
+                } else {
+                    if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
+                        if token.0 == 93 {
+                            if bracket_depth == 0 { return mimi_buffer_empty() as *StructNode }
+                            bracket_depth = bracket_depth - 1
+                        } else {
+                            if token.0 == 60 { angle_depth = angle_depth + 1 } else {
+                                if token.0 == 62 && angle_depth > 0 { angle_depth = angle_depth - 1 } else {
+                                    if token.0 == 123 { return mimi_buffer_empty() as *StructNode } else {
+                                        if token.0 == 125 && paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 {
+                                            segment_end = token.1
+                                            close_end = token.2
+                                            found_separator = true
+                                        } else {
+                                            if token.0 == 44 && paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 {
+                                                segment_end = token.1
+                                                found_separator = true
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !found_separator || paren_depth != 0 || bracket_depth != 0 || angle_depth != 0 { return mimi_buffer_empty() as *StructNode }
+        field_source := source[segment_start:segment_end]
+        name := next_token(field_source, 0)
+        colon := next_token(field_source, name.2)
+        if name.0 != 1 || colon.0 != 58 { return mimi_buffer_empty() as *StructNode }
+        scan := colon.2
+        local_paren : u64 = 0
+        local_bracket : u64 = 0
+        local_angle : u64 = 0
+        marker_kind : u8 = 0
+        marker_start : u64 = 0
+        marker_end : u64 = 0
+        while scan < field_source.len && marker_kind == 0 {
+            token := next_token(field_source, scan)
+            if token.0 == 40 { local_paren = local_paren + 1 } else {
+                if token.0 == 41 && local_paren > 0 { local_paren = local_paren - 1 } else {
+                    if token.0 == 91 { local_bracket = local_bracket + 1 } else {
+                        if token.0 == 93 && local_bracket > 0 { local_bracket = local_bracket - 1 } else {
+                            if token.0 == 60 { local_angle = local_angle + 1 } else {
+                                if token.0 == 62 && local_angle > 0 { local_angle = local_angle - 1 } else {
+                                    if local_paren == 0 && local_bracket == 0 && local_angle == 0 && (token.0 == 58 || token.0 == 61) {
+                                        marker_kind = token.0
+                                        marker_start = token.1
+                                        marker_end = token.2
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            scan = token.2
+        }
+        type_end := field_source.len
+        mutable := true
+        default_value : *ExprNode = mimi_buffer_empty() as *ExprNode
+        if marker_kind != 0 {
+            type_end = marker_start
+            default_value = parse_expression(field_source[marker_end:field_source.len], storage)
+            if expression_is_null(default_value) { return mimi_buffer_empty() as *StructNode }
+            default_value.start = default_value.start + marker_end + segment_start
+            default_value.end = default_value.end + marker_end + segment_start
+            mutable = marker_kind == 61
+        }
+        data_type := parse_type(field_source[colon.2:type_end], storage)
+        if expression_is_null(data_type) { return mimi_buffer_empty() as *StructNode }
+        data_type.start = data_type.start + colon.2 + segment_start
+        data_type.end = data_type.end + colon.2 + segment_start
+        if mimi_arena_allocate(storage, 64, 8) == 0 { return mimi_buffer_empty() as *StructNode }
+        field := storage.last as *StructFieldNode
+        field.start = name.1 + segment_start
+        field.end = segment_end
+        field.name_start = name.1 + segment_start
+        field.name_end = name.2 + segment_start
+        field.mutable = mutable
+        field.data_type = data_type
+        field.default_value = default_value
+        field.next = mimi_buffer_empty() as *StructFieldNode
+        if last == (mimi_buffer_empty() as *StructFieldNode) { first = field } else { last.next = field }
+        last = field
+        count = count + 1
+        separator := next_token(source, segment_end)
+        if separator.0 == 125 {
+            close_end = separator.2
+            break
+        }
+        if separator.0 != 44 { return mimi_buffer_empty() as *StructNode }
+        cursor = separator.2
+    }
+    if close_end == source.len || next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *StructNode }
+    if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *StructNode }
+    node := storage.last as *StructNode
+    node.start = keyword.1
+    node.end = close_end
+    node.parameters = parameters
+    node.field_count = count
+    node.fields = first
     node
 }
 
