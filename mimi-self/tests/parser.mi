@@ -30,6 +30,15 @@ main :: fn () i32 {
     if lexer.binding_header_is_null(constant_header) || constant_header.binding_kind != 2 || constant_header.value_start != 9 { return 93 }
     missing_initializer := lexer.parse_binding_header("count :=", &storage)
     if !lexer.binding_header_is_null(missing_initializer) { return 94 }
+    function_header := lexer.parse_function_header("work :: fn (x : i32, ptr : *u8) bool {", &storage)
+    if lexer.function_header_is_null(function_header) || function_header.name_end != 4 { return 105 }
+    if function_header.parameters_start != 12 || function_header.parameters_end != 30 { return 106 }
+    if function_header.return_type_start != 32 || function_header.return_type_end != 36 || function_header.body_start != 38 { return 107 }
+    malformed_function := lexer.parse_function_header("work :: fn (x : i32 bool {", &storage)
+    if !lexer.function_header_is_null(malformed_function) { return 108 }
+    callback_header := lexer.parse_function_header("visit :: fn (callback : fn (i32) bool) []u8 {", &storage)
+    if lexer.function_header_is_null(callback_header) || callback_header.parameters_end != 37 { return 109 }
+    if callback_header.return_type_start != 39 || callback_header.return_type_end != 43 { return 110 }
     atom := lexer.parse_expression("1", &storage)
     if lexer.expression_is_null(atom) { return 1 }
     if atom.kind != 2 { return atom.kind as i32 }

@@ -58,7 +58,7 @@ two consecutive stages.
 - [x] Parse nested calls and comma-separated arguments.
 - [x] Parse bounded and open-ended slices using `:` and `..` separators.
 - [ ] Build declaration AST nodes from binding headers and initializer
-  expressions; parse function signatures, tuples, and statement blocks.
+  expressions; parse parameter declarations, tuples, and statement blocks.
 - [ ] Implement name resolution, type checking, generic specialization, and
   diagnostics.
 - [x] Add a Python differential smoke suite for accepted programs and
