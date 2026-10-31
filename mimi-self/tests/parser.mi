@@ -218,6 +218,10 @@ main :: fn () i32 {
     public_module := lexer.parse_module("pub answer :: 42", &storage)
     if lexer.module_node_is_null(public_module) || public_module.declarations.kind != 5 || !public_module.declarations.is_public { return 329 }
     if public_module.declarations.start != 0 || public_module.declarations.name_start != 4 || public_module.declarations.binding.initializer.start != 13 { return 330 }
+    external_module := lexer.parse_module("extern puts : fn (text : []u8) i32", &storage)
+    if lexer.module_node_is_null(external_module) || external_module.declaration_count != 1 || external_module.declarations.kind != 7 { return 331 }
+    if !external_module.declarations.is_external || external_module.declarations.function.parameters.data_type.kind != 272 || external_module.declarations.function.return_type.kind != 270 { return 332 }
+    if !lexer.block_node_is_null(external_module.declarations.function.body) || external_module.declarations.function.name_start != 7 { return 333 }
     malformed_struct_field := lexer.parse_struct_declaration("struct { item : }", &storage)
     if !lexer.struct_node_is_null(malformed_struct_field) { return 259 }
     duplicate_struct_field := lexer.parse_struct_declaration("struct { item : i32, item : bool, }", &storage)

@@ -51,7 +51,8 @@ two consecutive stages.
   validation, and useful lexical errors to the self-hosted compiler API.
 - [x] Parse the supported declaration, type, expression, statement, import,
   generic, and control-flow syntax into source-aware AST nodes.
-- [ ] Parse `extern` functions and C define/import declarations into module ASTs.
+- [x] Parse `extern` functions into module ASTs.
+- [ ] Parse C define declarations into module ASTs.
 - [x] Parse grouped unary and binary expressions with operator precedence into
   arena-backed AST nodes.
 - [x] Parse chained named and numeric member access in expressions.
