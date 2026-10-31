@@ -598,8 +598,8 @@ pub expression_is_null :: fn (node : *ExprNode) bool {
 }
 
 pub parse_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
-    if source.len > 1000000000000000000 { return mimi_buffer_empty() as *ExprNode }
-    if mimi_arena_allocate(storage, source.len * 16 + 16, 8) == 0 { return mimi_buffer_empty() as *ExprNode }
+    if source.len > 500000000000000000 { return mimi_buffer_empty() as *ExprNode }
+    if mimi_arena_allocate(storage, source.len * 32 + 32, 8) == 0 { return mimi_buffer_empty() as *ExprNode }
     prefixes := storage.last as *ExprOperator
     prefix_count : u64 = 0
     cursor : u64 = 0
@@ -674,7 +674,7 @@ pub parse_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
 
 pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     // Bound the stack-size calculations below before multiplying source.len.
-    if source.len > 1000000000000000000 { return mimi_buffer_empty() as *ExprNode }
+    if source.len > 500000000000000000 { return mimi_buffer_empty() as *ExprNode }
     first := next_token(source, 0)
     if first.0 == 1 || first.0 == 2 || first.0 == 3 || first.0 == 4 || first.0 == 5 {
         if next_token(source, first.2).0 == 0 {
