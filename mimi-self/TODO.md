@@ -78,6 +78,7 @@ two consecutive stages.
 - [ ] Validate generic function type parameters and parse statement blocks.
 - [x] Extend tuple literal parsing to arbitrary expressions and parse tuple
   types and destructuring bindings.
+- [x] Parse simple-name struct literal fields and nested values.
 - [ ] Validate destructuring tuple value types and arity.
 - [ ] Implement name resolution, type checking, generic specialization, and
   diagnostics.
@@ -122,7 +123,8 @@ struct field declarations with defaults/mutability are parsed; struct methods
 remain pending.
 Function definitions have balanced body spans, but body statements are not yet
 composed into an AST. Tuple literals accept arbitrary expressions and nested
-calls. Return/break/continue statement nodes have dedicated parsers. Simple
+calls; simple-name struct literal fields and nested values are also parsed.
+Return/break/continue statement nodes have dedicated parsers. Simple
 assignment and both expression/block forms of `defer` are parsed as statement
 nodes; deferred block contents are not yet recursively parsed. Atomic tuple
 destructuring is represented by a dedicated name-list/value node, but its

@@ -172,6 +172,13 @@ main :: fn () i32 {
     if fresh_tuple.start != 0 || fresh_tuple.end != 22 { return 265 }
     fresh_singleton_tuple := lexer.parse_tuple_literal("(value,)", &fresh_storage)
     if lexer.expression_is_null(fresh_singleton_tuple) || fresh_singleton_tuple.kind != 268 || fresh_singleton_tuple.left.kind != 1 { return 266 }
+    struct_literal_expression := lexer.parse_expression("Point { x = 1, y = 2, }", &fresh_storage)
+    if lexer.expression_is_null(struct_literal_expression) || struct_literal_expression.kind != 291 || struct_literal_expression.left.kind != 270 { return 267 }
+    if struct_literal_expression.right.kind != 262 || struct_literal_expression.right.left.kind != 292 || struct_literal_expression.right.right.right.kind != 2 { return 268 }
+    nested_struct_literal := lexer.parse_expression("Outer { point = Point { x = 2 } }", &fresh_storage)
+    if lexer.expression_is_null(nested_struct_literal) || nested_struct_literal.right.kind != 292 || nested_struct_literal.right.right.kind != 291 { return 269 }
+    malformed_struct_literal := lexer.parse_expression("Point { x }", &fresh_storage)
+    if !lexer.expression_is_null(malformed_struct_literal) { return 270 }
     while_statement := lexer.parse_loop_statement("while ready { work() }", &storage)
     if lexer.loop_node_is_null(while_statement) || while_statement.kind != 286 || while_statement.condition.kind != 1 { return 209 }
     if while_statement.body.start != 12 || while_statement.end != 24 { return 210 }
