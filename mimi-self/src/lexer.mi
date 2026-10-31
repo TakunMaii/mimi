@@ -2104,41 +2104,64 @@ pub parse_tuple_literal :: fn (source : []u8, storage : *ExpressionArena) *ExprN
     opening := next_token(source, 0)
     if opening.0 != 40 { return mimi_buffer_empty() as *ExprNode }
     cursor := opening.2
-    token := next_token(source, cursor)
-    if token.0 != 1 && token.0 != 2 && token.0 != 3 && token.0 != 4 && token.0 != 5 {
-        return mimi_buffer_empty() as *ExprNode
-    }
-    first := allocate_expr(storage, token.0 as u64, token.1, token.2, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
-    if expression_is_null(first) { return first }
-    first.payload_start = token.1
-    first.payload_end = token.2
-    items := first
-    cursor = token.2
-    saw_comma := false
+    items : *ExprNode = mimi_buffer_empty() as *ExprNode
+    count : u64 = 0
     while true {
-        separator := next_token(source, cursor)
+        if next_token(source, cursor).0 == 41 { return mimi_buffer_empty() as *ExprNode }
+        segment_start := cursor
+        segment_end := source.len
+        paren_depth : u64 = 0
+        bracket_depth : u64 = 0
+        found_separator := false
+        while cursor < source.len && !found_separator {
+            token := next_token(source, cursor)
+            if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *ExprNode }
+            cursor = token.2
+            if token.0 == 40 { paren_depth = paren_depth + 1 } else {
+                if token.0 == 41 {
+                    if paren_depth > 0 { paren_depth = paren_depth - 1 } else {
+                        if bracket_depth == 0 {
+                            segment_end = token.1
+                            found_separator = true
+                        }
+                    }
+                } else {
+                    if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
+                        if token.0 == 93 {
+                            if bracket_depth == 0 { return mimi_buffer_empty() as *ExprNode }
+                            bracket_depth = bracket_depth - 1
+                        } else {
+                            if token.0 == 44 && paren_depth == 0 && bracket_depth == 0 {
+                                segment_end = token.1
+                                found_separator = true
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !found_separator || paren_depth != 0 || bracket_depth != 0 { return mimi_buffer_empty() as *ExprNode }
+        item := parse_expression(source[segment_start:segment_end], storage)
+        if expression_is_null(item) { return item }
+        item.start = item.start + segment_start
+        item.end = item.end + segment_start
+        if count == 0 { items = item } else {
+            items = allocate_expr(storage, 262, items.start, item.end, items, item)
+            if expression_is_null(items) { return items }
+        }
+        count = count + 1
+        separator := next_token(source, segment_end)
         if separator.0 == 41 {
-            if !saw_comma || next_token(source, separator.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
+            if count < 2 || next_token(source, separator.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
             return allocate_expr(storage, 268, opening.1, separator.2, items, mimi_buffer_empty() as *ExprNode)
         }
         if separator.0 != 44 { return mimi_buffer_empty() as *ExprNode }
-        saw_comma = true
         cursor = separator.2
-        token = next_token(source, cursor)
-        if token.0 == 41 {
-            if next_token(source, token.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
-            return allocate_expr(storage, 268, opening.1, token.2, items, mimi_buffer_empty() as *ExprNode)
+        trailing_close := next_token(source, cursor)
+        if trailing_close.0 == 41 {
+            if next_token(source, trailing_close.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
+            return allocate_expr(storage, 268, opening.1, trailing_close.2, items, mimi_buffer_empty() as *ExprNode)
         }
-        if token.0 != 1 && token.0 != 2 && token.0 != 3 && token.0 != 4 && token.0 != 5 {
-            return mimi_buffer_empty() as *ExprNode
-        }
-        item := allocate_expr(storage, token.0 as u64, token.1, token.2, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
-        if expression_is_null(item) { return item }
-        item.payload_start = token.1
-        item.payload_end = token.2
-        items = allocate_expr(storage, 262, items.start, item.end, items, item)
-        if expression_is_null(items) { return items }
-        cursor = token.2
     }
     mimi_buffer_empty() as *ExprNode
 }

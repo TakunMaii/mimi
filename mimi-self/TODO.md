@@ -76,8 +76,9 @@ two consecutive stages.
 - [x] Parse tuple destructuring names with atomic tuple literal initializers.
 - [x] Build function definition nodes with balanced block source spans.
 - [ ] Validate generic function type parameters and parse statement blocks.
-- [ ] Extend tuple literal parsing to arbitrary expressions and parse tuple
-  types/destructuring.
+- [x] Extend tuple literal parsing to arbitrary expressions and parse tuple
+  types and destructuring bindings.
+- [ ] Validate destructuring tuple value types and arity.
 - [ ] Implement name resolution, type checking, generic specialization, and
   diagnostics.
 - [x] Add a Python differential smoke suite for accepted programs and
@@ -120,13 +121,13 @@ Generic parameter lists, enum variant declarations with payload types, and
 struct field declarations with defaults/mutability are parsed; struct methods
 remain pending.
 Function definitions have balanced body spans, but body statements are not yet
-composed into an AST. Atomic tuple literals and return/break/continue statement
-nodes have dedicated parsers. Simple assignment and both expression/block
-forms of `defer` are parsed as statement nodes; deferred block contents are
-not yet recursively parsed.
-Atomic tuple destructuring is represented by a dedicated name-list/value node.
-Generic declarations and parameter validation, general tuple expressions and
-destructuring type checks, statement blocks, and remaining control-flow
+composed into an AST. Tuple literals accept arbitrary expressions and nested
+calls. Return/break/continue statement nodes have dedicated parsers. Simple
+assignment and both expression/block forms of `defer` are parsed as statement
+nodes; deferred block contents are not yet recursively parsed. Atomic tuple
+destructuring is represented by a dedicated name-list/value node, but its
+initializer types and arity are not checked. Generic declarations and
+parameter validation, statement blocks, and remaining control-flow
 statements remain open. `if` statements and expressions retain conditions and
 then/else-if/else branch spans. Match nodes preserve the scrutinee and variant
 arm/binding/result spans. Block statement composition, enum exhaustiveness,

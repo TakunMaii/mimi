@@ -159,6 +159,19 @@ main :: fn () i32 {
     if struct_node.fields.next.next.default_value.start != 59 || struct_node.end != struct_source.len { return 258 }
     malformed_struct_field := lexer.parse_struct_declaration("struct { item : }", &storage)
     if !lexer.struct_node_is_null(malformed_struct_field) { return 259 }
+    fresh_storage := lexer.expression_arena_init()
+    fresh_binary := lexer.parse_expression("1 + 2", &fresh_storage)
+    if lexer.expression_is_null(fresh_binary) || fresh_binary.kind != 43 { return 260 }
+    fresh_call := lexer.parse_expression("f(2, 3)", &fresh_storage)
+    if lexer.expression_is_null(fresh_call) || fresh_call.kind != 263 { return 261 }
+    fresh_grouped := lexer.parse_expression("(1 + 2) * 3", &fresh_storage)
+    if lexer.expression_is_null(fresh_grouped) || fresh_grouped.kind != 42 { return 262 }
+    fresh_tuple := lexer.parse_tuple_literal("(left + 1, f(2, 3),)", &fresh_storage)
+    if lexer.expression_is_null(fresh_tuple) || fresh_tuple.kind != 268 { return 263 }
+    if fresh_tuple.left.kind != 262 || fresh_tuple.left.left.kind != 43 || fresh_tuple.left.right.kind != 263 { return 264 }
+    if fresh_tuple.start != 0 || fresh_tuple.end != 22 { return 265 }
+    fresh_singleton_tuple := lexer.parse_tuple_literal("(value,)", &fresh_storage)
+    if lexer.expression_is_null(fresh_singleton_tuple) || fresh_singleton_tuple.kind != 268 || fresh_singleton_tuple.left.kind != 1 { return 266 }
     while_statement := lexer.parse_loop_statement("while ready { work() }", &storage)
     if lexer.loop_node_is_null(while_statement) || while_statement.kind != 286 || while_statement.condition.kind != 1 { return 209 }
     if while_statement.body.start != 12 || while_statement.end != 24 { return 210 }
