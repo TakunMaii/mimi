@@ -50,6 +50,8 @@ two consecutive stages.
   validation, and useful lexical errors to the self-hosted compiler API.
 - [ ] Implement the parser and AST for declarations, types, expressions,
   statements, imports, generics, and control flow.
+- [x] Parse grouped unary and binary expressions with operator precedence into
+  arena-backed AST nodes.
 - [ ] Implement name resolution, type checking, generic specialization, and
   diagnostics.
 - [x] Add a Python differential smoke suite for accepted programs and
@@ -79,13 +81,13 @@ two consecutive stages.
 T1 containers, runtime, Result/Option, source file records, source-aware
 diagnostic rendering, and module state/cycle tracking are in place. Source
 import resolution and recursive traversal are still open. The T2 lexer
-returns token kinds and byte spans, decodes
-supported escapes, validates UTF-8 sequences, classifies common errors, and
-handles member-number/decimal boundaries. Its Unicode identifier ranges are
-still approximate, and its API reports an error code/message separately from
-the token result. It still lacks a reusable parser and AST. The Rust stage0
-compiler currently rejects generic enum construction from inside a function
-body; tests cover generic enum values at typed local declarations.
+returns token kinds and byte spans, decodes supported escapes, validates
+UTF-8 sequences, classifies common errors, and handles member-number/decimal
+boundaries. Its Unicode identifier ranges are still approximate. An
+arena-backed expression parser now handles atom, prefix, binary, and grouped
+forms with precedence; declaration, type, call, member, index, and statement
+parsing remain open. The parser currently lives alongside the lexer because
+stage0 loses imported aliases inside imported module function bodies.
 
-Next, implement parser token consumption and an arena-backed AST, then extend
-it through precedence, grouping, declarations, types, and statements.
+Next, extend the expression AST with calls/member/index access, then parse
+declarations, types, and statements before name resolution and type checking.

@@ -439,3 +439,188 @@ pub token_count :: fn (source : []u8) i32 {
     }
     count
 }
+
+extern mimi_arena_empty : fn() *void
+extern mimi_arena_allocate : fn(arena : *ExpressionArena, size : u64, alignment : u64) i32
+extern mimi_arena_release : fn(arena : *ExpressionArena) void
+extern mimi_buffer_empty : fn() *void
+
+pub ExpressionArena :: struct {
+    head : *void,
+    last : *void,
+}
+
+pub ExprNode :: struct {
+    kind : u64,
+    start : u64,
+    end : u64,
+    left : *ExprNode,
+    right : *ExprNode,
+}
+
+ExprOperator :: struct {
+    kind : u64,
+    start : u64,
+}
+
+ExpressionStacks :: struct {
+    storage : *ExpressionArena,
+    nodes : **ExprNode,
+    operators : *ExprOperator,
+    node_count : u64,
+    operator_count : u64,
+}
+
+pub expression_arena_init :: fn () ExpressionArena {
+    empty := mimi_arena_empty()
+    ExpressionArena { head = empty, last = empty }
+}
+
+pub expression_arena_release :: fn (storage : *ExpressionArena) void {
+    mimi_arena_release(storage)
+}
+
+pub expression_is_null :: fn (node : *ExprNode) bool {
+    node == (mimi_buffer_empty() as *ExprNode)
+}
+
+pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
+    // Bound the stack-size calculations below before multiplying source.len.
+    if source.len > 1000000000000000000 { return mimi_buffer_empty() as *ExprNode }
+    first := next_token(source, 0)
+    if first.0 == 1 || first.0 == 2 || first.0 == 3 || first.0 == 4 || first.0 == 5 {
+        if next_token(source, first.2).0 == 0 {
+            return allocate_expr(storage, first.0 as u64, first.1, first.2, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+        }
+    }
+    if mimi_arena_allocate(storage, source.len * 8 + 8, 8) == 0 { return mimi_buffer_empty() as *ExprNode }
+    node_stack := storage.last as **ExprNode
+    if mimi_arena_allocate(storage, source.len * 16 + 16, 8) == 0 { return mimi_buffer_empty() as *ExprNode }
+    operator_stack := storage.last as *ExprOperator
+    stacks := ExpressionStacks { storage = storage, nodes = node_stack, operators = operator_stack, node_count = 0, operator_count = 0 }
+    cursor : u64 = 0
+    expecting_operand := true
+    while true {
+        token := next_token(source, cursor)
+        if token.0 == 0 { break }
+        if token.0 == 255 { return mimi_buffer_empty() as *ExprNode }
+        cursor = token.2
+
+        if token.0 == 1 || token.0 == 2 || token.0 == 3 || token.0 == 4 || token.0 == 5 {
+            if !expecting_operand { return mimi_buffer_empty() as *ExprNode }
+            node := allocate_expr(storage, token.0 as u64, token.1, token.2, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+            if expression_is_null(node) { return node }
+            stacks.nodes[stacks.node_count] = node
+            stacks.node_count = stacks.node_count + 1
+            expecting_operand = false
+            while stacks.operator_count > 0 && is_prefix_operator(stacks.operators[stacks.operator_count - 1].kind) {
+                if !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
+            }
+        } else {
+            if token.0 == 40 {
+                if !expecting_operand { return mimi_buffer_empty() as *ExprNode }
+                stacks.operators[stacks.operator_count] = ExprOperator { kind = 40, start = token.1 }
+                stacks.operator_count = stacks.operator_count + 1
+            } else {
+                if token.0 == 41 {
+                    if expecting_operand { return mimi_buffer_empty() as *ExprNode }
+                    found_open := false
+                    while stacks.operator_count > 0 && !found_open {
+                        top := stacks.operators[stacks.operator_count - 1]
+                        if top.kind == 40 {
+                            stacks.operator_count = stacks.operator_count - 1
+                            found_open = true
+                        } else {
+                            if !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
+                        }
+                    }
+                    if !found_open { return mimi_buffer_empty() as *ExprNode }
+                    if stacks.node_count == 0 { return mimi_buffer_empty() as *ExprNode }
+                    stacks.nodes[stacks.node_count - 1].start = stacks.operators[stacks.operator_count].start
+                    stacks.nodes[stacks.node_count - 1].end = token.2
+                    expecting_operand = false
+                } else {
+                    if expecting_operand {
+                        if token.0 != 45 && token.0 != 33 { return mimi_buffer_empty() as *ExprNode }
+                        stacks.operators[stacks.operator_count] = ExprOperator { kind = 250 + token.0 as u64, start = token.1 }
+                        stacks.operator_count = stacks.operator_count + 1
+                    } else {
+                        precedence := expression_precedence(token.0)
+                        if precedence == 0 { return mimi_buffer_empty() as *ExprNode }
+                        while stacks.operator_count > 0 {
+                            top := stacks.operators[stacks.operator_count - 1]
+                            if top.kind == 40 { break }
+                            top_precedence := expression_operator_precedence(top.kind)
+                            if top_precedence < precedence { break }
+                            if !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
+                        }
+                        stacks.operators[stacks.operator_count] = ExprOperator { kind = token.0 as u64, start = token.1 }
+                        stacks.operator_count = stacks.operator_count + 1
+                        expecting_operand = true
+                    }
+                }
+            }
+        }
+    }
+
+    if expecting_operand || stacks.node_count == 0 { return mimi_buffer_empty() as *ExprNode }
+    while stacks.operator_count > 0 {
+        if stacks.operators[stacks.operator_count - 1].kind == 40 { return mimi_buffer_empty() as *ExprNode }
+        if !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
+    }
+    if stacks.node_count != 1 { return mimi_buffer_empty() as *ExprNode }
+    stacks.nodes[0]
+}
+
+allocate_expr :: fn (storage : *ExpressionArena, kind : u64, start : u64, end : u64, left : *ExprNode, right : *ExprNode) *ExprNode {
+    if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *ExprNode }
+    node := storage.last as *ExprNode
+    node.kind = kind
+    node.start = start
+    node.end = end
+    node.left = left
+    node.right = right
+    node
+}
+
+reduce_expression :: fn (stacks : *ExpressionStacks) bool {
+    if stacks.operator_count == 0 { return false }
+    operator := stacks.operators[stacks.operator_count - 1]
+    stacks.operator_count = stacks.operator_count - 1
+    if is_prefix_operator(operator.kind) {
+        if stacks.node_count < 1 { return false }
+        operand := stacks.nodes[stacks.node_count - 1]
+        node := allocate_expr(stacks.storage, operator.kind, operator.start, operand.end, operand, mimi_buffer_empty() as *ExprNode)
+        if expression_is_null(node) { return false }
+        stacks.nodes[stacks.node_count - 1] = node
+        return true
+    }
+    if stacks.node_count < 2 { return false }
+    right := stacks.nodes[stacks.node_count - 1]
+    left := stacks.nodes[stacks.node_count - 2]
+    stacks.node_count = stacks.node_count - 2
+    node := allocate_expr(stacks.storage, operator.kind, left.start, right.end, left, right)
+    if expression_is_null(node) { return false }
+    stacks.nodes[stacks.node_count] = node
+    stacks.node_count = stacks.node_count + 1
+    true
+}
+
+is_prefix_operator :: fn (kind : u64) bool {
+    kind == 295 || kind == 283
+}
+
+expression_operator_precedence :: fn (kind : u64) u8 {
+    if is_prefix_operator(kind) { return 7 }
+    expression_precedence(kind as u8)
+}
+
+expression_precedence :: fn (kind : u8) u8 {
+    if kind == 133 { return 1 }
+    if kind == 132 { return 2 }
+    if kind == 128 || kind == 129 { return 3 }
+    if kind == 60 || kind == 62 || kind == 130 || kind == 131 { return 4 }
+    if kind == 43 || kind == 45 { return 5 }
+    if kind == 42 || kind == 47 || kind == 37 { return 6 }
+    0
+}

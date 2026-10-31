@@ -16,10 +16,11 @@ When `--compiler` is set, the suite also compares accepted/rejected smoke
 cases and their first diagnostic against the Rust stage0 compiler. Pass
 `--reference-compiler /path/to/stage0` to select a different reference binary.
 
-The current milestone is the self-hosted lexer with byte spans, string escape
-decoding, UTF-8 identifier validation, and categorized errors. Stage0 is the
-Rust compiler. See [TODO.md](TODO.md) for the parity roadmap and
-[FEATURES.md](FEATURES.md) for the feature matrix.
+The current milestone is the self-hosted lexer and an arena-backed expression
+parser for grouped unary and binary expressions. The parser handles operator
+precedence and left associativity. Stage0 is the Rust compiler. See
+[TODO.md](TODO.md) for the parity roadmap and [FEATURES.md](FEATURES.md) for
+the feature matrix.
 
 `lexer.error_code` returns 1 for an unexpected character, 2 for an
 unterminated block comment, 3 for an unterminated string, 4 for an invalid

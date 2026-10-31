@@ -1,0 +1,40 @@
+lexer :: @import("../src/lexer.mi")
+
+main :: fn () i32 {
+    storage := lexer.expression_arena_init()
+    atom := lexer.parse_expression("1", &storage)
+    if lexer.expression_is_null(atom) { return 1 }
+    if atom.kind != 2 { return atom.kind as i32 }
+    if atom.start != 0 { return 12 }
+    if atom.end != 1 { return atom.end as i32 }
+    expression := lexer.parse_expression("1 + 2 * 3", &storage)
+    if lexer.expression_is_null(expression) { return 2 }
+    if expression.kind != 43 || expression.start != 0 || expression.end != 9 { return 2 }
+    if expression.left.kind != 2 || expression.right.kind != 42 { return 3 }
+    if expression.right.left.kind != 2 || expression.right.right.kind != 2 { return 4 }
+
+    grouped := lexer.parse_expression("(1 + 2) * 3", &storage)
+    if lexer.expression_is_null(grouped) || grouped.kind != 42 { return 5 }
+    if grouped.left.kind != 43 || grouped.left.start != 0 || grouped.left.end != 7 { return 6 }
+
+    associative := lexer.parse_expression("a - b - c", &storage)
+    if lexer.expression_is_null(associative) || associative.kind != 45 { return 7 }
+    if associative.left.kind != 45 || associative.right.kind != 1 { return 8 }
+
+    logical := lexer.parse_expression("a || b && !c", &storage)
+    if lexer.expression_is_null(logical) || logical.kind != 133 { return 13 }
+    if logical.right.kind != 132 || logical.right.right.kind != 283 { return 14 }
+
+    unary := lexer.parse_expression("-(a + 2)", &storage)
+    if lexer.expression_is_null(unary) || unary.kind != 295 { return 9 }
+    if unary.left.kind != 43 { return 10 }
+
+    invalid := lexer.parse_expression("1 + )", &storage)
+    if !lexer.expression_is_null(invalid) { return 11 }
+    unmatched := lexer.parse_expression("(1 + 2", &storage)
+    if !lexer.expression_is_null(unmatched) { return 15 }
+    adjacent := lexer.parse_expression("a b", &storage)
+    if !lexer.expression_is_null(adjacent) { return 16 }
+    lexer.expression_arena_release(&storage)
+    0
+}
