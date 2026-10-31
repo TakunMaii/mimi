@@ -1037,6 +1037,21 @@ pub parse_tuple_binding :: fn (source : []u8, storage : *ExpressionArena) *Tuple
     while true {
         name := next_token(source, cursor)
         if name.0 != 1 { return mimi_buffer_empty() as *TupleBindingNode }
+        previous := names
+        duplicate := false
+        while previous != (mimi_buffer_empty() as *DestructureNameNode) && !duplicate {
+            if previous.end - previous.start == name.2 - name.1 {
+                equal := true
+                index : u64 = 0
+                while index < name.2 - name.1 && equal {
+                    if source[previous.start + index] != source[name.1 + index] { equal = false }
+                    index = index + 1
+                }
+                if equal { duplicate = true }
+            }
+            previous = previous.next
+        }
+        if duplicate { return mimi_buffer_empty() as *TupleBindingNode }
         if mimi_arena_allocate(storage, 24, 8) == 0 { return mimi_buffer_empty() as *TupleBindingNode }
         item := storage.last as *DestructureNameNode
         item.start = name.1

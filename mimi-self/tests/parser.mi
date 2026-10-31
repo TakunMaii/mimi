@@ -420,6 +420,8 @@ main :: fn () i32 {
     if !lexer.tuple_binding_is_null(one_name_binding) { return 189 }
     repeated_name_separator := lexer.parse_tuple_binding("first,,second := (1, true)", &storage)
     if !lexer.tuple_binding_is_null(repeated_name_separator) { return 190 }
+    duplicate_tuple_names := lexer.parse_tuple_binding("first, first := (1, true)", &storage)
+    if !lexer.tuple_binding_is_null(duplicate_tuple_names) { return 287 }
     non_tuple_binding := lexer.parse_tuple_binding("first, second := value", &storage)
     if !lexer.tuple_binding_is_null(non_tuple_binding) { return 191 }
     mismatched_tuple_binding := lexer.parse_tuple_binding("first, second := (1,)", &storage)
