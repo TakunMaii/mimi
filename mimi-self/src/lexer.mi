@@ -2775,6 +2775,11 @@ pub parse_module :: fn (source : []u8, storage : *ExpressionArena) *ModuleNode {
         if at_top && token.1 > segment_start && module_declaration_starts(source, token) {
             declaration := parse_module_declaration(source[segment_start:token.1], segment_start, storage)
             if declaration == (mimi_buffer_empty() as *ModuleDeclarationNode) { return mimi_buffer_empty() as *ModuleNode }
+            previous := first
+            while previous != (mimi_buffer_empty() as *ModuleDeclarationNode) {
+                if source_names_equal(source, previous.name_start, previous.name_end, declaration.name_start, declaration.name_end) { return mimi_buffer_empty() as *ModuleNode }
+                previous = previous.next
+            }
             if first == (mimi_buffer_empty() as *ModuleDeclarationNode) { first = declaration } else { last.next = declaration }
             last = declaration
             count = count + 1
@@ -2801,6 +2806,11 @@ pub parse_module :: fn (source : []u8, storage : *ExpressionArena) *ModuleNode {
     if trailing.0 != 0 {
         declaration := parse_module_declaration(source[segment_start:source.len], segment_start, storage)
         if declaration == (mimi_buffer_empty() as *ModuleDeclarationNode) { return mimi_buffer_empty() as *ModuleNode }
+        previous := first
+        while previous != (mimi_buffer_empty() as *ModuleDeclarationNode) {
+            if source_names_equal(source, previous.name_start, previous.name_end, declaration.name_start, declaration.name_end) { return mimi_buffer_empty() as *ModuleNode }
+            previous = previous.next
+        }
         if first == (mimi_buffer_empty() as *ModuleDeclarationNode) { first = declaration } else { last.next = declaration }
         last = declaration
         count = count + 1
