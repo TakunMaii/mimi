@@ -1144,6 +1144,18 @@ pub parse_if_statement :: fn (source : []u8, storage : *ExpressionArena) *IfNode
     node
 }
 
+pub parse_if_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
+    statement := parse_if_statement(source, storage)
+    if if_node_is_null(statement) || block_node_is_null(statement.else_branch) { return mimi_buffer_empty() as *ExprNode }
+    then_node := allocate_expr(storage, 289, statement.then_branch.start, statement.then_branch.end, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+    if expression_is_null(then_node) { return then_node }
+    else_node := allocate_expr(storage, 289, statement.else_branch.start, statement.else_branch.end, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+    if expression_is_null(else_node) { return else_node }
+    branches := allocate_expr(storage, 276, then_node.start, else_node.end, then_node, else_node)
+    if expression_is_null(branches) { return branches }
+    allocate_expr(storage, 288, statement.start, statement.end, statement.condition, branches)
+}
+
 pub loop_node_is_null :: fn (node : *LoopNode) bool {
     node == (mimi_buffer_empty() as *LoopNode)
 }

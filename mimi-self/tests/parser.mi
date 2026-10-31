@@ -100,6 +100,11 @@ main :: fn () i32 {
     if !lexer.if_node_is_null(missing_if_body) { return 206 }
     trailing_if_tokens := lexer.parse_if_statement("if ready {} extra", &storage)
     if !lexer.if_node_is_null(trailing_if_tokens) { return 207 }
+    if_expression := lexer.parse_if_expression("if ready { yes } else { no }", &storage)
+    if lexer.expression_is_null(if_expression) { return 215 }
+    if if_expression.kind != 288 || if_expression.left.kind != 1 { return 218 }
+    if if_expression.right.kind != 276 || if_expression.right.left.kind != 289 { return 216 }
+    if if_expression.end != 28 { return 219 }
     while_statement := lexer.parse_loop_statement("while ready { work() }", &storage)
     if lexer.loop_node_is_null(while_statement) || while_statement.kind != 286 || while_statement.condition.kind != 1 { return 209 }
     if while_statement.body.start != 12 || while_statement.end != 24 { return 210 }
