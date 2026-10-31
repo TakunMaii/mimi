@@ -999,6 +999,7 @@ fn numeric_parts(data_type: &HirType) -> Result<(u16, bool, bool), String> {
     match data_type {
         HirType::Integer { bits, signed } => Ok((*bits, *signed, false)),
         HirType::Float { bits } => Ok((*bits, true, true)),
+        HirType::Pointer(_) => Ok((64, false, false)),
         _ => Err(format!("unsupported numeric cast type {data_type:?}")),
     }
 }

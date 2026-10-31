@@ -1628,6 +1628,7 @@ fn numeric_convert_words(from_type: &HirType, to_type: &HirType) -> Result<usize
 fn numeric_type_parts(data_type: &HirType) -> Result<(u16, bool), String> {
     match data_type {
         HirType::Integer { bits, .. } => Ok((*bits, false)),
+        HirType::Pointer(_) => Ok((64, false)),
         HirType::Float { bits: 32 | 64 } => {
             if let HirType::Float { bits } = data_type {
                 Ok((*bits, true))
@@ -1794,6 +1795,7 @@ fn encode_numeric_convert(
 fn numeric_type_parts_detail(data_type: &HirType) -> Result<(u16, bool, bool), String> {
     match data_type {
         HirType::Integer { bits, signed } => Ok((*bits, *signed, false)),
+        HirType::Pointer(_) => Ok((64, false, false)),
         HirType::Float { bits: 32 | 64 } => {
             if let HirType::Float { bits } = data_type {
                 Ok((*bits, true, true))

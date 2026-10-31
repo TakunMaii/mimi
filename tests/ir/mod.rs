@@ -104,6 +104,35 @@ fn builds_and_runs_explicit_numeric_casts() {
 }
 
 #[test]
+fn builds_and_runs_pointer_casts() {
+    let source = std::env::temp_dir().join(format!(
+        "mimi_pointer_cast_source_{}.mi",
+        std::process::id()
+    ));
+    let executable = std::env::temp_dir().join(format!(
+        "mimi_pointer_cast_executable_{}",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { value := 123 byte_pointer := (&value) as *u8 pointer := byte_pointer as *i32 result := if *pointer == 123 { 0 } else { 1 } result }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        executable.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
 fn builds_and_runs_tuple_destructuring_once() {
     let source =
         std::env::temp_dir().join(format!("mimi_destructure_source_{}.mi", std::process::id()));

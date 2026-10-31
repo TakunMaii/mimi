@@ -2103,9 +2103,13 @@ fn infer_expression(
         Expression::Cast { value, data_type } => {
             validate_generic_type_use(*data_type, structs)?;
             let source_type = infer_expression(value, scopes, functions, structs, None)?;
-            if !supports_explicit_cast(source_type) || !supports_explicit_cast(*data_type) {
+            let pointer_cast = matches!(source_type, DataType::Pointer(_))
+                && matches!(data_type, DataType::Pointer(_));
+            if !pointer_cast
+                && (!supports_explicit_cast(source_type) || !supports_explicit_cast(*data_type))
+            {
                 return Err(error(format!(
-                    "'as' casts currently support i8/i16/i32/i64, u8/u16/u32/u64, f32, and f64; found {source_type} as {data_type}"
+                    "'as' casts support numeric scalar conversions and pointer-to-pointer conversions; found {source_type} as {data_type}"
                 )));
             }
             Ok(*data_type)
