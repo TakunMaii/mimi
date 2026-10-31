@@ -117,8 +117,8 @@ T1 containers, runtime, Result/Option, source file records, source-aware
 diagnostic rendering, and iterative module import traversal are in place. The
 T2 lexer returns token kinds and byte spans, decodes supported escapes, validates
 UTF-8 sequences, classifies common errors, returns token/error spans together,
-and handles member-number/decimal boundaries. Its Unicode identifier ranges
-are still approximate. An arena-backed expression parser handles atom, prefix,
+and handles member-number/decimal boundaries. Unicode identifier checks use
+complete Rust Alphabetic/Alphanumeric property tables. An arena-backed expression parser handles atom, prefix,
 binary, grouped, member, indexed, sliced, and call forms with precedence.
 Number/string/boolean atoms retain source spans. Named, pointer, slice,
 fixed-array, nested tuple, nested function, and generic application type syntax
@@ -128,9 +128,10 @@ have source-aware nodes; callback types are supported in parameter lists.
 Generic parameter lists, enum variant declarations with payload types, and
 struct field declarations with defaults/mutability are parsed; struct methods
 remain pending.
-Function definitions have balanced body spans. `parse_statement_block` also
-composes binding, assignment, transfer, defer, and expression statements into
-source-aware linked lists; recursive control-flow statement composition is
+Function definitions have balanced body spans. `parse_statement_block`
+composes binding, assignment, transfer, defer, expression, if/if-let, loop,
+for, and match statements into source-aware linked lists; nested control-flow
+and defer blocks are recursively composed.
 Tuple literals accept arbitrary expressions and nested calls; simple-name
 struct literal fields and nested values are also parsed.
 Return/break/continue statement nodes have dedicated parsers. Simple
@@ -142,8 +143,8 @@ Scalar, pointer, generic, and tuple casts bind to the preceding operand in
 unparenthesized binary expressions.
 Generic declarations and parameter validation remain open. `if` statements and expressions retain conditions and
 then/else-if/else branch spans. Match nodes preserve the scrutinee and variant
-arm/binding/result spans. Block statement composition, enum exhaustiveness,
-and semantic validation are not implemented.
+arm/binding/result spans. Enum exhaustiveness and semantic validation are not
+implemented.
 While/loop/do-while and collection/range for loops retain their header and
 body spans. Name
 resolution and type checking remain open. The parser currently lives alongside

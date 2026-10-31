@@ -115,6 +115,9 @@ main :: fn () i32 {
     if lexer.block_node_is_null(if_let_composed_block) || if_let_composed_block.statements.kind != 305 || if_let_composed_block.statements.if_let.variant_start != 14 { return 300 }
     for_composed_block := lexer.parse_statement_block("{ for item in values { work(item) } return 0 }", 30, &storage)
     if lexer.block_node_is_null(for_composed_block) || for_composed_block.statements.kind != 307 || for_composed_block.statements.for_loop.variable_start != 35 { return 301 }
+    match_composed_block := lexer.parse_statement_block("{ match choice { some(value) => value, none => 0, } return 0 }", 40, &storage)
+    if lexer.block_node_is_null(match_composed_block) || match_composed_block.statements.kind != 308 || match_composed_block.statements.match_statement.arm_count != 2 { return 304 }
+    if match_composed_block.statements.match_statement.value.start != 48 || match_composed_block.statements.next.kind != 280 { return 305 }
     unclosed_function_definition := lexer.parse_function_definition("work :: fn () i32 { return 1", &storage)
     if !lexer.function_node_is_null(unclosed_function_definition) { return 201 }
     if_statement_source := "if ready { left := 1 } else { right := 2 }"
