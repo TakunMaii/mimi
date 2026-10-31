@@ -170,6 +170,9 @@ main :: fn () i32 {
     if lexer.expression_is_null(fresh_tuple) || fresh_tuple.kind != 268 { return 263 }
     if fresh_tuple.left.kind != 262 || fresh_tuple.left.left.kind != 43 || fresh_tuple.left.right.kind != 263 { return 264 }
     if fresh_tuple.start != 0 || fresh_tuple.end != 22 { return 265 }
+    expression_tuple_binding := lexer.parse_tuple_binding("first, second := (left + 1, f(2))", &fresh_storage)
+    if lexer.tuple_binding_is_null(expression_tuple_binding) || expression_tuple_binding.name_count != 2 { return 278 }
+    if expression_tuple_binding.value.left.kind != 262 || expression_tuple_binding.value.left.left.kind != 43 || expression_tuple_binding.value.left.right.kind != 263 { return 279 }
     fresh_singleton_tuple := lexer.parse_tuple_literal("(value,)", &fresh_storage)
     if lexer.expression_is_null(fresh_singleton_tuple) || fresh_singleton_tuple.kind != 268 || fresh_singleton_tuple.left.kind != 1 { return 266 }
     struct_literal_expression := lexer.parse_expression("Point { x = 1, y = 2, }", &fresh_storage)
@@ -409,6 +412,10 @@ main :: fn () i32 {
     if !lexer.tuple_binding_is_null(repeated_name_separator) { return 190 }
     non_tuple_binding := lexer.parse_tuple_binding("first, second := value", &storage)
     if !lexer.tuple_binding_is_null(non_tuple_binding) { return 191 }
+    mismatched_tuple_binding := lexer.parse_tuple_binding("first, second := (1,)", &storage)
+    if !lexer.tuple_binding_is_null(mismatched_tuple_binding) { return 280 }
+    mismatched_expression_tuple_binding := lexer.parse_tuple_binding("first, second := (left + 1,)", &storage)
+    if !lexer.tuple_binding_is_null(mismatched_expression_tuple_binding) { return 281 }
     lexer.expression_arena_release(&storage)
     0
 }

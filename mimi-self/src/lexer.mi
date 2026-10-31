@@ -1070,6 +1070,12 @@ pub tuple_binding_is_null :: fn (binding : *TupleBindingNode) bool {
     binding == (mimi_buffer_empty() as *TupleBindingNode)
 }
 
+tuple_expression_item_count :: fn (items : *ExprNode) u64 {
+    if expression_is_null(items) { return 0 }
+    if items.kind == 262 { return tuple_expression_item_count(items.left) + 1 }
+    1
+}
+
 pub parse_tuple_binding :: fn (source : []u8, storage : *ExpressionArena) *TupleBindingNode {
     cursor : u64 = 0
     names : *DestructureNameNode = mimi_buffer_empty() as *DestructureNameNode
@@ -1101,6 +1107,7 @@ pub parse_tuple_binding :: fn (source : []u8, storage : *ExpressionArena) *Tuple
     if count < 2 { return mimi_buffer_empty() as *TupleBindingNode }
     value := parse_tuple_literal(source[value_start:source.len], storage)
     if expression_is_null(value) { return mimi_buffer_empty() as *TupleBindingNode }
+    if tuple_expression_item_count(value.left) != count { return mimi_buffer_empty() as *TupleBindingNode }
     value.start = value.start + value_start
     value.end = value.end + value_start
     if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *TupleBindingNode }

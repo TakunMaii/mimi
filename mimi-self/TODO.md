@@ -82,7 +82,8 @@ two consecutive stages.
 - [ ] Match cast precedence inside unparenthesized binary expressions.
 - [x] Parse simple-name struct literal fields and nested values.
 - [x] Parse generic struct literal type applications.
-- [ ] Validate destructuring tuple value types and arity.
+- [x] Validate tuple destructuring initializer arity when it is a tuple literal.
+- [ ] Validate destructuring tuple element types during semantic analysis.
 - [ ] Implement name resolution, type checking, generic specialization, and
   diagnostics.
 - [x] Add a Python differential smoke suite for accepted programs and
@@ -130,8 +131,9 @@ calls; simple-name struct literal fields and nested values are also parsed.
 Return/break/continue statement nodes have dedicated parsers. Simple
 assignment and both expression/block forms of `defer` are parsed as statement
 nodes; deferred block contents are not yet recursively parsed. Atomic tuple
-destructuring is represented by a dedicated name-list/value node, but its
-initializer types and arity are not checked. Generic declarations and
+destructuring is represented by a dedicated name-list/value node; tuple literal
+initializer arity is checked, while element types require semantic analysis.
+Generic declarations and
 parameter validation, statement blocks, and remaining control-flow
 statements remain open. `if` statements and expressions retain conditions and
 then/else-if/else branch spans. Match nodes preserve the scrutinee and variant
