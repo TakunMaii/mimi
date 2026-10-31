@@ -61,6 +61,7 @@ two consecutive stages.
   parsed types, and initializer expressions.
 - [x] Parse `return`, `break`, and `continue` into source-aware statement
   nodes.
+- [x] Parse expression-form `defer` statements.
 - [ ] Validate generic function type parameters and parse statement blocks.
 - [ ] Extend tuple literal parsing to arbitrary expressions and parse tuple
   types/destructuring.
@@ -103,9 +104,10 @@ is parsed. Binding headers and declaration AST nodes preserve names, optional
 types, initializers, and source spans. Function headers and named parameters
 have source-aware nodes; callback types are supported in parameter lists.
 Atomic tuple literals and return/break/continue statement nodes have dedicated
-parsers. Generic declarations and parameter validation, general tuple
-expressions and destructuring, statement blocks, remaining control-flow
-statements, and type checking remain open. The parser
+parsers. Expression-form `defer` is parsed as a statement node; block-form
+defer still needs statement blocks. Generic declarations and parameter
+validation, general tuple expressions and destructuring, statement blocks,
+remaining control-flow statements, and type checking remain open. The parser
 currently lives alongside the lexer because stage0 loses imported aliases
 inside imported module function bodies.
 

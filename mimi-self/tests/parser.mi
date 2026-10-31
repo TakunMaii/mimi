@@ -252,6 +252,11 @@ main :: fn () i32 {
     if lexer.statement_node_is_null(continue_statement) || continue_statement.kind != 282 || continue_statement.end != 8 { return 180 }
     invalid_break := lexer.parse_transfer_statement("break 1", &storage)
     if !lexer.statement_node_is_null(invalid_break) { return 181 }
+    defer_statement := lexer.parse_defer_statement("defer cleanup()", &storage)
+    if lexer.statement_node_is_null(defer_statement) || defer_statement.kind != 283 || defer_statement.value.kind != 263 { return 182 }
+    if defer_statement.start != 0 || defer_statement.end != 15 || defer_statement.value.start != 6 { return 183 }
+    empty_defer := lexer.parse_defer_statement("defer", &storage)
+    if !lexer.statement_node_is_null(empty_defer) { return 184 }
     lexer.expression_arena_release(&storage)
     0
 }
