@@ -57,9 +57,9 @@ two consecutive stages.
 - [x] Parse indexed expressions with full binary expression precedence.
 - [x] Parse nested calls and comma-separated arguments.
 - [x] Parse bounded and open-ended slices using `:` and `..` separators.
-- [ ] Build declaration AST nodes from binding headers and initializer
-  expressions; validate function type parameters and parse tuples and
-  statement blocks.
+- [x] Build variable/constant declaration AST nodes from binding headers,
+  parsed types, and initializer expressions.
+- [ ] Validate generic function type parameters and parse statement blocks.
 - [ ] Extend tuple literal parsing to arbitrary expressions and parse tuple
   types/destructuring.
 - [ ] Implement name resolution, type checking, generic specialization, and
@@ -93,18 +93,18 @@ diagnostic rendering, and iterative module import traversal are in place. The
 T2 lexer returns token kinds and byte spans, decodes supported escapes, validates
 UTF-8 sequences, classifies common errors, returns token/error spans together,
 and handles member-number/decimal boundaries. Its Unicode identifier ranges
-are still approximate. An
-arena-backed expression parser now handles atom, prefix, binary, grouped,
-member, indexed, sliced, and call forms with precedence. Number/string/boolean
-atoms retain source spans. Named, pointer, slice, fixed-array, nested tuple,
-and nested function type syntax is parsed, and binding headers expose
-declaration/type/initializer spans. Function headers and named parameters have
-source-aware nodes; atomic tuple literals have a dedicated parser. Generic
-generic declarations and parameter validation, general tuple expressions
-and destructuring, declaration AST construction, control-flow statements,
-and type checking remain open. The
-parser currently lives alongside the lexer because stage0 loses imported
-aliases inside imported module function bodies.
+are still approximate. An arena-backed expression parser handles atom, prefix,
+binary, grouped, member, indexed, sliced, and call forms with precedence.
+Number/string/boolean atoms retain source spans. Named, pointer, slice,
+fixed-array, nested tuple, nested function, and generic application type syntax
+is parsed. Binding headers and declaration AST nodes preserve names, optional
+types, initializers, and source spans. Function headers and named parameters
+have source-aware nodes; callback types are supported in parameter lists.
+Atomic tuple literals have a dedicated parser. Generic declarations and
+parameter validation, general tuple expressions and destructuring, statement
+blocks, control-flow statements, and type checking remain open. The parser
+currently lives alongside the lexer because stage0 loses imported aliases
+inside imported module function bodies.
 
 Next, parse declarations, types, and statements before name resolution and
 type checking.

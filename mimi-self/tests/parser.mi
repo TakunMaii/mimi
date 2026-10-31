@@ -228,6 +228,19 @@ main :: fn () i32 {
     if !lexer.expression_is_null(missing_index) { return 25 }
     unclosed_index := lexer.parse_expression("items[1", &storage)
     if !lexer.expression_is_null(unclosed_index) { return 26 }
+    inferred_declaration := lexer.parse_binding_declaration("count := 1 + 2", &storage)
+    if lexer.binding_node_is_null(inferred_declaration) || inferred_declaration.binding_kind != 0 { return 139 }
+    if inferred_declaration.initializer.kind != 43 || inferred_declaration.start != 0 || inferred_declaration.end != 14 { return 140 }
+    if !lexer.expression_is_null(inferred_declaration.data_type) { return 141 }
+    typed_declaration := lexer.parse_binding_declaration("items : []*u8 = make()", &storage)
+    if lexer.binding_node_is_null(typed_declaration) || typed_declaration.binding_kind != 1 { return 142 }
+    if typed_declaration.data_type.kind != 272 || typed_declaration.data_type.start != 8 || typed_declaration.data_type.end != 14 { return 143 }
+    if typed_declaration.initializer.kind != 263 || typed_declaration.initializer.start != 17 || typed_declaration.end != 23 { return 144 }
+    constant_declaration := lexer.parse_binding_declaration("answer :: 42", &storage)
+    if lexer.binding_node_is_null(constant_declaration) || constant_declaration.binding_kind != 2 || constant_declaration.initializer.kind != 2 { return 145 }
+    if !lexer.expression_is_null(constant_declaration.data_type) || constant_declaration.initializer.start != 10 { return 146 }
+    malformed_declaration := lexer.parse_binding_declaration("value := 1 +", &storage)
+    if !lexer.binding_node_is_null(malformed_declaration) { return 147 }
     lexer.expression_arena_release(&storage)
     0
 }

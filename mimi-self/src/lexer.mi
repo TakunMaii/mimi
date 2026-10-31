@@ -629,6 +629,16 @@ pub BindingHeader :: struct {
     value_end : u64,
 }
 
+pub BindingNode :: struct {
+    start : u64,
+    end : u64,
+    name_start : u64,
+    name_end : u64,
+    binding_kind : u64,
+    data_type : *ExprNode,
+    initializer : *ExprNode,
+}
+
 pub FunctionHeader :: struct {
     start : u64,
     end : u64,
@@ -740,6 +750,36 @@ pub parse_binding_header :: fn (source : []u8, storage : *ExpressionArena) *Bind
     header.value_start = value_start
     header.value_end = source.len
     header
+}
+
+pub binding_node_is_null :: fn (binding : *BindingNode) bool {
+    binding == (mimi_buffer_empty() as *BindingNode)
+}
+
+pub parse_binding_declaration :: fn (source : []u8, storage : *ExpressionArena) *BindingNode {
+    header := parse_binding_header(source, storage)
+    if binding_header_is_null(header) { return mimi_buffer_empty() as *BindingNode }
+    initializer := parse_expression(source[header.value_start:header.value_end], storage)
+    if expression_is_null(initializer) { return mimi_buffer_empty() as *BindingNode }
+    initializer.start = initializer.start + header.value_start
+    initializer.end = initializer.end + header.value_start
+    data_type : *ExprNode = mimi_buffer_empty() as *ExprNode
+    if header.binding_kind == 1 {
+        data_type = parse_type(source[header.type_start:header.type_end], storage)
+        if expression_is_null(data_type) { return mimi_buffer_empty() as *BindingNode }
+        data_type.start = data_type.start + header.type_start
+        data_type.end = data_type.end + header.type_start
+    }
+    if mimi_arena_allocate(storage, 56, 8) == 0 { return mimi_buffer_empty() as *BindingNode }
+    binding := storage.last as *BindingNode
+    binding.start = header.start
+    binding.end = initializer.end
+    binding.name_start = header.name_start
+    binding.name_end = header.name_end
+    binding.binding_kind = header.binding_kind
+    binding.data_type = data_type
+    binding.initializer = initializer
+    binding
 }
 
 pub function_header_is_null :: fn (header : *FunctionHeader) bool {
