@@ -27,7 +27,7 @@ def build(compiler: Path, source: Path, output: Path) -> None:
     run(
         [
             str(compiler), "build", str(source), "-o", str(output),
-            "--c-source", str(RUNTIME),
+            "--c-source", str(RUNTIME), "--no-cache",
         ]
     )
 

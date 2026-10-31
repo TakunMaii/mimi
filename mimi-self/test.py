@@ -55,7 +55,7 @@ def test_compile_diagnostics(compiler: Path) -> None:
             result = run(
                 [
                     str(compiler), "build", str(input_path), "-o", str(output_path),
-                    "--c-source", str(RUNTIME),
+                    "--c-source", str(RUNTIME), "--no-cache",
                 ],
                 expected_status=1,
             )
@@ -113,7 +113,7 @@ def test_compiler_parity(reference: Path, candidate: Path) -> None:
                 result = subprocess.run(
                     [
                         str(compiler), "build", str(source_path), "-o", str(output_path),
-                        "--c-source", str(RUNTIME),
+                        "--c-source", str(RUNTIME), "--no-cache",
                     ],
                     cwd=ROOT,
                     text=True,
@@ -184,7 +184,7 @@ main :: fn () i32 {{
         run(
             [
                 str(compiler), "build", str(source_path), "-o", str(executable),
-                "--c-source", str(RUNTIME),
+                "--c-source", str(RUNTIME), "--no-cache",
             ]
         )
         run([str(executable)])
@@ -244,7 +244,7 @@ main :: fn () i32 {{
         run(
             [
                 str(compiler), "build", str(source_path), "-o", str(executable),
-                "--c-source", str(RUNTIME),
+                "--c-source", str(RUNTIME), "--no-cache",
             ]
         )
         run([str(executable)])
@@ -287,7 +287,7 @@ main :: fn () i32 {{
         run(
             [
                 str(compiler), "build", str(source_path), "-o", str(executable),
-                "--c-source", str(RUNTIME),
+                "--c-source", str(RUNTIME), "--no-cache",
             ]
         )
         result = run([str(executable)])
@@ -328,7 +328,7 @@ main :: fn () i32 {{
         run(
             [
                 str(compiler), "build", str(program), "-o", str(executable),
-                "--c-source", str(RUNTIME),
+                "--c-source", str(RUNTIME), "--no-cache",
             ]
         )
         run([str(executable)])
@@ -370,7 +370,7 @@ main :: fn () i32 {{
         run(
             [
                 str(compiler), "build", str(graph_program), "-o", str(graph_executable),
-                "--c-source", str(RUNTIME),
+                "--c-source", str(RUNTIME), "--no-cache",
             ]
         )
         run([str(graph_executable)])
@@ -404,7 +404,7 @@ def main() -> None:
             run(
                 [
                     str(compiler), "build", str(fixture), "-o", str(executable),
-                    "--c-source", str(RUNTIME),
+                    "--c-source", str(RUNTIME), "--no-cache",
                 ]
             )
             run([str(executable)])
