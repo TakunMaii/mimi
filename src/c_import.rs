@@ -671,6 +671,7 @@ fn rewrite_callback_expression(
         | Expression::Not(inner)
         | Expression::AddressOf(inner)
         | Expression::Dereference(inner)
+        | Expression::Cast { value: inner, .. }
         | Expression::MemberAccess { object: inner, .. } => {
             rewrite_callback_expression(inner, adapters)
         }

@@ -155,6 +155,12 @@ pub(crate) enum LirInstruction {
         from_width: u16,
         to_width: u16,
     },
+    NumericConvert {
+        destination: ValueId,
+        value: ValueId,
+        from_type: HirType,
+        to_type: HirType,
+    },
     Not {
         destination: ValueId,
         value: ValueId,
@@ -393,6 +399,17 @@ fn lower_function(
                             value: *value,
                             from_width: *from_width,
                             to_width: *to_width,
+                        },
+                        MirInstruction::NumericConvert {
+                            result,
+                            value,
+                            from_type,
+                            to_type,
+                        } => LirInstruction::NumericConvert {
+                            destination: *result,
+                            value: *value,
+                            from_type: from_type.clone(),
+                            to_type: to_type.clone(),
                         },
                         MirInstruction::Not { result, value } => LirInstruction::Not {
                             destination: *result,

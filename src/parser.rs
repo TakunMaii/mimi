@@ -46,6 +46,10 @@ pub(crate) enum Expression {
     Not(Box<Expression>),
     AddressOf(Box<Expression>),
     Dereference(Box<Expression>),
+    Cast {
+        value: Box<Expression>,
+        data_type: DataType,
+    },
     Add(Box<Expression>, Box<Expression>),
     Subtract(Box<Expression>, Box<Expression>),
     Multiply(Box<Expression>, Box<Expression>),
@@ -1693,6 +1697,19 @@ where
             lhs = Expression::MemberAccess {
                 object: Box::new(lhs),
                 member,
+            };
+            continue;
+        }
+        if matches!(tokens.peek(), Some(Token::As)) {
+            let precedence = 6;
+            if precedence < min_precedence {
+                break;
+            }
+            tokens.next();
+            let data_type = parse_type(tokens);
+            lhs = Expression::Cast {
+                value: Box::new(lhs),
+                data_type,
             };
             continue;
         }

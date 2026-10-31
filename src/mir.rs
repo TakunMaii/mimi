@@ -101,6 +101,12 @@ pub(crate) enum MirInstruction {
         from_width: u16,
         to_width: u16,
     },
+    NumericConvert {
+        result: ValueId,
+        value: ValueId,
+        from_type: HirType,
+        to_type: HirType,
+    },
     Not {
         result: ValueId,
         value: ValueId,
@@ -682,6 +688,23 @@ impl Builder {
                 if let Some(data_type) = data_type {
                     self.value_types.insert(result, data_type);
                 }
+                Some(result)
+            }
+            Expression::Cast { value, data_type } => {
+                let from_type = self.expression_type(value)?;
+                let to_type: HirType = (*data_type).into();
+                let value = self.expression_expected(value, &from_type)?;
+                if from_type == to_type {
+                    return Some(value);
+                }
+                let result = self.value();
+                self.emit(MirInstruction::NumericConvert {
+                    result,
+                    value,
+                    from_type,
+                    to_type: to_type.clone(),
+                });
+                self.value_types.insert(result, to_type);
                 Some(result)
             }
             Expression::StructLiteral { type_name, fields } => {
@@ -2818,6 +2841,7 @@ impl Builder {
                 Some(HirType::Pointer(inner)) => Some(*inner),
                 _ => None,
             },
+            Expression::Cast { data_type, .. } => Some((*data_type).into()),
             Expression::StructLiteral {
                 type_name: Some(name),
                 ..
