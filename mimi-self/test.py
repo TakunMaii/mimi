@@ -31,16 +31,24 @@ def test_compile_diagnostics(compiler: Path) -> None:
             "parse-error",
             "main :: fn () i32 { 1 + }",
             "error[parse]",
+            ("1:25", "^"),
+        ),
+        (
+            "lex-error",
+            "main :: fn () i32 { 1 | 2 }",
+            "error[lex]",
+            ("1:23", "^"),
         ),
         (
             "type-error",
             "main :: fn () i32 { missing_name }",
             "undefined identifier 'missing_name'",
+            ("1:1", "^~~~"),
         ),
     ]
     with tempfile.TemporaryDirectory(prefix="mimi-self-errors-") as temporary:
         directory = Path(temporary)
-        for name, source, expected_diagnostic in cases:
+        for name, source, expected_diagnostic, expected_location in cases:
             input_path = directory / f"{name}.mi"
             output_path = directory / name
             input_path.write_text(source, encoding="utf-8")
@@ -56,11 +64,35 @@ def test_compile_diagnostics(compiler: Path) -> None:
                     f"{name}: expected {expected_diagnostic!r} in stderr, "
                     f"got:\n{result.stderr}"
                 )
+            actual_location = diagnostic_location(result.stderr)
+            if actual_location != expected_location:
+                raise AssertionError(
+                    f"{name}: expected location {expected_location!r}, "
+                    f"got {actual_location!r}:\n{result.stderr}"
+                )
+
+
+def diagnostic_location(stderr: str) -> tuple[str, str] | None:
+    lines = stderr.splitlines()
+    location = next((line.strip() for line in lines if line.startswith(" --> ")), None)
+    underline_index = next(
+        (index for index, line in enumerate(lines) if line.startswith("  | ")),
+        None,
+    )
+    if location is None or underline_index is None:
+        return None
+    location_suffix = location.rsplit(":", 2)
+    if len(location_suffix) != 3:
+        return None
+    underline = lines[underline_index].split("|", 1)[1].strip()
+    return f"{location_suffix[-2]}:{location_suffix[-1]}", underline
 
 
 def test_compiler_parity(reference: Path, candidate: Path) -> None:
     cases = [
-        ("accepted", "main :: fn () i32 { 0 }", 0, None),
+        ("accepted-zero", "main :: fn () i32 { 0 }", 0, None),
+        ("accepted-arithmetic", "main :: fn () i32 { value := 6 * 7 if value != 42 { return 1 } 0 }", 0, None),
+        ("accepted-control", "main :: fn () i32 { value := 3 if value == 3 { return 0 } return 1 }", 0, None),
         ("parse-error", "main :: fn () i32 { 1 + }", 1, "error[parse]"),
         ("lex-error", "main :: fn () i32 { 1 | 2 }", 1, "error[lex]"),
         (
@@ -75,7 +107,7 @@ def test_compiler_parity(reference: Path, candidate: Path) -> None:
         for name, source, expected_status, expected_diagnostic in cases:
             source_path = directory / f"{name}.mi"
             source_path.write_text(source, encoding="utf-8")
-            observations: list[tuple[bool, int | None, str | None]] = []
+            observations: list[tuple[bool, int | None, str | None, tuple[str, str] | None]] = []
             for label, compiler in (("stage0", reference), ("candidate", candidate)):
                 output_path = directory / f"{name}-{label}"
                 result = subprocess.run(
@@ -95,6 +127,7 @@ def test_compiler_parity(reference: Path, candidate: Path) -> None:
                     )
                 program_status = None
                 diagnostic = None
+                location = None
                 if accepted:
                     program = run([str(output_path)])
                     program_status = program.returncode
@@ -103,12 +136,17 @@ def test_compiler_parity(reference: Path, candidate: Path) -> None:
                         (line for line in result.stderr.splitlines() if line.startswith("error[")),
                         None,
                     )
+                    location = diagnostic_location(result.stderr)
+                    if location is None:
+                        raise AssertionError(
+                            f"{label} {name}: missing primary diagnostic location:\n{result.stderr}"
+                        )
                     if expected_diagnostic not in result.stderr:
                         raise AssertionError(
                             f"{label} {name}: expected diagnostic {expected_diagnostic!r}, "
                             f"got:\n{result.stderr}"
                         )
-                observations.append((accepted, program_status, diagnostic))
+                observations.append((accepted, program_status, diagnostic, location))
             if observations[0] != observations[1]:
                 raise AssertionError(
                     f"compiler behavior differs for {name}: "
