@@ -18,8 +18,12 @@ def run(command: list[str], *, cwd: Path = ROOT) -> None:
     subprocess.run(command, cwd=cwd, check=True)
 
 
+def artifact_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def artifact_record(path: Path) -> str:
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = artifact_digest(path)
     return f"{path}: {path.stat().st_size} bytes, sha256 {digest}"
 
 
@@ -58,6 +62,10 @@ def main() -> None:
     print("Stage artifacts:")
     print(artifact_record(stage1))
     print(artifact_record(stage2))
+    if artifact_digest(stage1) == artifact_digest(stage2):
+        print("Stage1 and stage2 artifacts are byte-identical.")
+    else:
+        print("Stage1 and stage2 artifacts differ; review the bootstrap output.")
 
 
 if __name__ == "__main__":
