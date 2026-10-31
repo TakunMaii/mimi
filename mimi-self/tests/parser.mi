@@ -38,6 +38,11 @@ main :: fn () i32 {
     if !lexer.expression_is_null(malformed_function_type) { return 158 }
     singleton_tuple_type := lexer.parse_tuple_type("(i32)", &storage)
     if !lexer.expression_is_null(singleton_tuple_type) { return 131 }
+    singleton_trailing_tuple_type := lexer.parse_type("(i32,)", &storage)
+    if lexer.expression_is_null(singleton_trailing_tuple_type) || singleton_trailing_tuple_type.kind != 275 || singleton_trailing_tuple_type.left.kind != 270 { return 159 }
+    if singleton_trailing_tuple_type.start != 0 || singleton_trailing_tuple_type.end != 6 { return 160 }
+    trailing_multi_tuple_type := lexer.parse_type("(i32, *u8,)", &storage)
+    if lexer.expression_is_null(trailing_multi_tuple_type) || trailing_multi_tuple_type.kind != 275 || trailing_multi_tuple_type.left.kind != 276 { return 161 }
     trailing_tuple_type := lexer.parse_tuple_type("(i32, *u8) extra", &storage)
     if !lexer.expression_is_null(trailing_tuple_type) { return 132 }
     unclosed_tuple_array_type := lexer.parse_tuple_type("([2]i32, *u8", &storage)

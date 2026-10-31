@@ -1039,7 +1039,11 @@ pub parse_tuple_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
         }
         if separator.0 != 44 { return mimi_buffer_empty() as *ExprNode }
         cursor = separator.2
-        if next_token(source, cursor).0 == 41 { return mimi_buffer_empty() as *ExprNode }
+        trailing_close := next_token(source, cursor)
+        if trailing_close.0 == 41 {
+            if count == 0 || next_token(source, trailing_close.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
+            return allocate_expr(storage, 275, opening.1, trailing_close.2, elements, mimi_buffer_empty() as *ExprNode)
+        }
     }
     mimi_buffer_empty() as *ExprNode
 }
