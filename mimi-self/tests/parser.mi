@@ -120,6 +120,12 @@ main :: fn () i32 {
     if lexer.parameter_list_is_null(nested_callback_parameters) || nested_callback_parameters.data_type.kind != 277 { return 170 }
     if nested_callback_parameters.data_type.left.kind != 276 || lexer.parameter_list_is_null(nested_callback_parameters.next) { return 171 }
     if nested_callback_parameters.next.data_type.kind != 272 { return 172 }
+    higher_order_source := "factory :: fn () fn (i32) *Pair<bool> {"
+    higher_order_header := lexer.parse_function_header(higher_order_source, &storage)
+    if lexer.function_header_is_null(higher_order_header) { return 173 }
+    higher_order_return := lexer.parse_type(higher_order_source[higher_order_header.return_type_start:higher_order_header.return_type_end], &storage)
+    if lexer.expression_is_null(higher_order_return) || higher_order_return.kind != 277 { return 174 }
+    if higher_order_return.right.kind != 271 || higher_order_return.right.left.kind != 278 { return 175 }
     atom := lexer.parse_expression("1", &storage)
     if lexer.expression_is_null(atom) { return 1 }
     if atom.kind != 2 { return atom.kind as i32 }
