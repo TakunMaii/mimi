@@ -30,8 +30,9 @@ for reproducibility comparisons.
 The current milestone is the self-hosted lexer, an arena-backed expression
 parser for grouped unary/binary expressions, member/index/slice access and
 nested calls, named/pointer/slice/fixed-array type syntax, and binding header
-span parsing. Literal expression nodes retain their token spans. The expression
-parser handles operator precedence and left associativity. Stage0
+span parsing. Function header/parameter nodes and atomic tuple literals are
+also available. Literal expression nodes retain their token spans. The
+expression parser handles operator precedence and left associativity. Stage0
 is the Rust compiler. See
 [TODO.md](TODO.md) for the parity roadmap and [FEATURES.md](FEATURES.md) for
 the feature matrix.
