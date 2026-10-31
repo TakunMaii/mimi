@@ -177,6 +177,9 @@ main :: fn () i32 {
     if struct_literal_expression.right.kind != 262 || struct_literal_expression.right.left.kind != 292 || struct_literal_expression.right.right.right.kind != 2 { return 268 }
     nested_struct_literal := lexer.parse_expression("Outer { point = Point { x = 2 } }", &fresh_storage)
     if lexer.expression_is_null(nested_struct_literal) || nested_struct_literal.right.kind != 292 || nested_struct_literal.right.right.kind != 291 { return 269 }
+    generic_struct_literal := lexer.parse_expression("Pair<i32> { value = 1 }", &fresh_storage)
+    if lexer.expression_is_null(generic_struct_literal) || generic_struct_literal.kind != 291 || generic_struct_literal.left.kind != 278 { return 271 }
+    if generic_struct_literal.left.start != 0 || generic_struct_literal.left.end != 9 { return 272 }
     malformed_struct_literal := lexer.parse_expression("Point { x }", &fresh_storage)
     if !lexer.expression_is_null(malformed_struct_literal) { return 270 }
     while_statement := lexer.parse_loop_statement("while ready { work() }", &storage)

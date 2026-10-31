@@ -79,6 +79,7 @@ two consecutive stages.
 - [x] Extend tuple literal parsing to arbitrary expressions and parse tuple
   types and destructuring bindings.
 - [x] Parse simple-name struct literal fields and nested values.
+- [x] Parse generic struct literal type applications.
 - [ ] Validate destructuring tuple value types and arity.
 - [ ] Implement name resolution, type checking, generic specialization, and
   diagnostics.
