@@ -247,3 +247,43 @@ pub render :: fn (diagnostic : Diagnostic, source : *SourceFile) void {
         diagnostic.span.end
     )
 }
+
+pub analyze_text :: fn (text : []u8) Diagnostic {
+    cursor : u64 = 0
+    while cursor < text.len {
+        token := lexer.lex_next(text, cursor)
+        if token.kind == 255 {
+            return Diagnostic {
+                code = "E_LEX",
+                message = lexer.error_message(text, token.start),
+                span = Span { start = token.start, end = token.end },
+            }
+        }
+        if token.kind == 0 { break }
+        cursor = token.end
+    }
+    storage := lexer.expression_arena_init()
+    module := lexer.parse_module(text, &storage)
+    if lexer.module_node_is_null(module) {
+        lexer.expression_arena_release(&storage)
+        return Diagnostic {
+            code = "E_PARSE",
+            message = "could not parse module",
+            span = Span { start = 0, end = 0 },
+        }
+    }
+    issue := lexer.resolve_module_names(text, module, &storage)
+    if issue.code == 0 { issue = lexer.check_module_tuple_types(text, module, &storage) }
+    lexer.expression_arena_release(&storage)
+    if issue.code == 0 {
+        return Diagnostic { code = "", message = "", span = Span { start = 0, end = 0 } }
+    }
+    code : []u8 = "E_INTERNAL"
+    if issue.code == 1 || issue.code == 2 { code = "E_NAME" }
+    if issue.code >= 4 && issue.code <= 6 { code = "E_TYPE" }
+    Diagnostic {
+        code = code,
+        message = lexer.name_issue_message(issue.code),
+        span = Span { start = issue.start, end = issue.end },
+    }
+}

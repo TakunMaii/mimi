@@ -97,6 +97,9 @@ two consecutive stages.
 - [x] Resolve module, parameter, and local names across nested statement blocks;
   report undefined and duplicate local names with source spans.
 - [x] Validate destructuring tuple element types during semantic analysis.
+- [x] Check explicit and trailing expression return types for scalar functions.
+- [x] Expose a front-end entry point that reports lexical, parse, name, and
+  initial type diagnostics through the source renderer.
 - [ ] Implement name resolution, type checking, generic specialization, and
   diagnostics.
 - [x] Add a Python differential smoke suite for accepted programs and
@@ -164,8 +167,10 @@ While/loop/do-while and collection/range for loops retain their header and
 recursively composed bodies. The first semantic pass resolves module, parameter,
 and local names in parsed statements and reports source-spanned name errors.
 An initial type pass checks scalar bindings, tuple element uses, arithmetic,
-logical operations, assignments, and conditions in functions and methods;
-full type checking and generic specialization remain open.
+logical operations, assignments, conditions, and explicit/trailing returns in
+functions and methods. `source.analyze_text` connects lexing, parsing, and
+semantic checking to source-aware diagnostics. Parse errors still need precise
+failure spans; full type checking and generic specialization remain open.
 The parser currently lives alongside
 the lexer because stage0 loses imported aliases inside imported module function
 bodies.

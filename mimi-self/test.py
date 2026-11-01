@@ -259,6 +259,8 @@ def test_source_model(compiler: Path) -> None:
         source_path = directory / "source-model.mi"
         executable = directory / "source-model"
         input_path.write_bytes(b"alpha\n\x00x\n")
+        semantic_path = directory / "semantic input.mi"
+        semantic_path.write_text("main :: fn () i32 { missing }", encoding="utf-8")
         module_path = mimi_quote(SELF / "src" / "source.mi")
         source_path.write_text(
             f'''source :: @import({module_path})
@@ -273,6 +275,16 @@ main :: fn () i32 {{
     if diagnostic.span.end - diagnostic.span.start != 3 {{ return 5 }}
     source.render(diagnostic, &loaded)
     source.release(&loaded)
+    semantic_source := source.init()
+    if !source.load({mimi_quote(semantic_path)}, &semantic_source) {{ return 12 }}
+    semantic_issue := source.analyze_text("main :: fn () i32 {{ missing }}")
+    if semantic_issue.code.len != 6 || semantic_issue.span.start != 20 || semantic_issue.span.end != 27 {{ return 13 }}
+    source.render(semantic_issue, &semantic_source)
+    source.release(&semantic_source)
+    lexical_issue := source.analyze_text("main :: fn () i32 {{ 1 | 2 }}")
+    if lexical_issue.code.len != 5 || lexical_issue.span.start != 22 {{ return 14 }}
+    valid := source.analyze_text("main :: fn () i32 {{ 0 }}")
+    if valid.code.len != 0 {{ return 15 }}
     graph := source.module_graph_init()
     if !source.module_begin(&graph, "root.mi") {{ return 6 }}
     if source.module_begin(&graph, "root.mi") {{ return 7 }}
@@ -299,6 +311,9 @@ main :: fn () i32 {{
             f" --> {input_path}:1:3",
             "1 | alpha",
             "  |   ^~~",
+            "error[E_NAME]: undefined identifier",
+            f" --> {semantic_path}:1:21",
+            "  |                     ^~~~~~~",
         ]
         for fragment in expected_diagnostic:
             if fragment not in result.stderr:

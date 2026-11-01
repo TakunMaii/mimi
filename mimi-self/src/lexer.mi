@@ -4155,6 +4155,7 @@ type_annotation_tag :: fn (source : []u8, data_type : *ExprNode) u64 {
     token := next_token(source, data_type.start)
     if token.0 != 1 { return 0 }
     if source_name_equals(source, token.1, token.2, "bool") { return 2 }
+    if source_name_equals(source, token.1, token.2, "void") { return 6 }
     if source_name_equals(source, token.1, token.2, "f32") || source_name_equals(source, token.1, token.2, "f64") { return 3 }
     if source_name_equals(source, token.1, token.2, "i8") || source_name_equals(source, token.1, token.2, "i16") || source_name_equals(source, token.1, token.2, "i32") || source_name_equals(source, token.1, token.2, "i64") || source_name_equals(source, token.1, token.2, "u8") || source_name_equals(source, token.1, token.2, "u16") || source_name_equals(source, token.1, token.2, "u32") || source_name_equals(source, token.1, token.2, "u64") { return 1 }
     0
@@ -4254,15 +4255,15 @@ type_check_condition :: fn (source : []u8, condition : *ExprNode, locals : *Type
     true
 }
 
-type_check_if :: fn (source : []u8, node : *IfNode, locals : *TypeSymbol, storage : *ExpressionArena, issue : *NameIssue) bool {
+type_check_if :: fn (source : []u8, node : *IfNode, locals : *TypeSymbol, storage : *ExpressionArena, expected_return : u64, issue : *NameIssue) bool {
     if if_node_is_null(node) { return true }
     if !type_check_condition(source, node.condition, locals, issue) { return false }
-    if !type_check_block(source, node.then_branch, locals, storage, issue) { return false }
-    if !type_check_block(source, node.else_branch, locals, storage, issue) { return false }
-    type_check_if(source, node.else_if, locals, storage, issue)
+    if !type_check_block(source, node.then_branch, locals, storage, expected_return, false, issue) { return false }
+    if !type_check_block(source, node.else_branch, locals, storage, expected_return, false, issue) { return false }
+    type_check_if(source, node.else_if, locals, storage, expected_return, issue)
 }
 
-type_check_block :: fn (source : []u8, block : *BlockNode, incoming : *TypeSymbol, storage : *ExpressionArena, issue : *NameIssue) bool {
+type_check_block :: fn (source : []u8, block : *BlockNode, incoming : *TypeSymbol, storage : *ExpressionArena, expected_return : u64, check_tail : bool, issue : *NameIssue) bool {
     if block_node_is_null(block) { return true }
     locals := incoming
     statement := block.statements
@@ -4292,20 +4293,20 @@ type_check_block :: fn (source : []u8, block : *BlockNode, incoming : *TypeSymbo
                 }
             } else {
                 if statement.kind == 304 {
-                    if !type_check_if(source, statement.if_statement, locals, storage, issue) { return false }
+                    if !type_check_if(source, statement.if_statement, locals, storage, expected_return, issue) { return false }
                 } else {
                     if statement.kind == 305 {
                         node := statement.if_let
                         infer_expression_tag(source, node.value, locals, issue)
                         then_locals := locals
                         if node.binding_end > node.binding_start { then_locals = type_symbol_push(storage, locals, node.binding_start, node.binding_end, 0) }
-                        if issue.code != 0 || !type_check_block(source, node.then_branch, then_locals, storage, issue) { return false }
-                        if !type_check_block(source, node.else_branch, locals, storage, issue) { return false }
+                        if issue.code != 0 || !type_check_block(source, node.then_branch, then_locals, storage, expected_return, false, issue) { return false }
+                        if !type_check_block(source, node.else_branch, locals, storage, expected_return, false, issue) { return false }
                     } else {
                         if statement.kind == 306 {
                             node := statement.loop_statement
                             if !type_check_condition(source, node.condition, locals, issue) { return false }
-                            if !type_check_block(source, node.body, locals, storage, issue) { return false }
+                            if !type_check_block(source, node.body, locals, storage, expected_return, false, issue) { return false }
                         } else {
                             if statement.kind == 307 {
                                 node := statement.for_loop
@@ -4313,7 +4314,7 @@ type_check_block :: fn (source : []u8, block : *BlockNode, incoming : *TypeSymbo
                                 infer_expression_tag(source, node.range_start, locals, issue)
                                 infer_expression_tag(source, node.range_end, locals, issue)
                                 loop_locals := type_symbol_push(storage, locals, node.variable_start, node.variable_end, 0)
-                                if issue.code != 0 || loop_locals == (mimi_buffer_empty() as *TypeSymbol) || !type_check_block(source, node.body, loop_locals, storage, issue) { return false }
+                                if issue.code != 0 || loop_locals == (mimi_buffer_empty() as *TypeSymbol) || !type_check_block(source, node.body, loop_locals, storage, expected_return, false, issue) { return false }
                             } else {
                                 if statement.kind == 308 {
                                     node := statement.match_statement
@@ -4327,8 +4328,22 @@ type_check_block :: fn (source : []u8, block : *BlockNode, incoming : *TypeSymbo
                                         arm = arm.next
                                     }
                                 } else {
-                                    infer_expression_tag(source, statement.value, locals, issue)
-                                    if issue.code != 0 || !type_check_block(source, statement.body, locals, storage, issue) { return false }
+                                    inferred := infer_expression_tag(source, statement.value, locals, issue)
+                                    if issue.code != 0 { return false }
+                                    if statement.kind == 280 && expected_return != 0 {
+                                        if expression_is_null(statement.value) { inferred = 6 }
+                                        if !type_assignable(expected_return, inferred) {
+                                            issue.code = 5
+                                            issue.start = statement.start
+                                            issue.end = statement.end
+                                            return false
+                                        }
+                                    }
+                                    if check_tail && statement.kind == 303 && statement_node_is_null(statement.next) && expected_return != 0 && !type_assignable(expected_return, inferred) {
+                                        type_fail(issue, 5, statement.value)
+                                        return false
+                                    }
+                                    if !type_check_block(source, statement.body, locals, storage, expected_return, false, issue) { return false }
                                 }
                             }
                         }
@@ -4352,7 +4367,7 @@ type_check_function :: fn (source : []u8, function : *FunctionNode, storage : *E
         if locals == (mimi_buffer_empty() as *TypeSymbol) { issue.code = 3 return false }
         parameter = parameter.next
     }
-    type_check_block(source, function.body, locals, storage, issue)
+    type_check_block(source, function.body, locals, storage, type_annotation_tag(source, function.return_type), true, issue)
 }
 
 pub check_module_tuple_types :: fn (source : []u8, module : *ModuleNode, storage : *ExpressionArena) NameIssue {

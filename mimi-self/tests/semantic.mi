@@ -69,17 +69,23 @@ main :: fn () i32 {
     if lexer.name_issue_message(1).len != 20 { return 13 }
     if !check_type("main :: fn () i32 { left, right := (1, true) left + 1 }", 0) { return 14 }
     if !check_type("main :: fn () i32 { left, right := (1, true) right + 1 }", 4) { return 15 }
-    if !check_type("main :: fn () i32 { left, right := (1, true) right && false }", 0) { return 16 }
+    if !check_type("main :: fn () bool { left, right := (1, true) right && false }", 0) { return 16 }
     if !check_type("main :: fn () i32 { left, right := (1, true) left && right }", 4) { return 17 }
     if !check_type("main :: fn () i32 { left, right := (1, true) right = 42 }", 5) { return 18 }
     if !check_type("main :: fn () i32 { value : bool = 3 value }", 5) { return 19 }
-    if !check_type("main :: fn () i32 { value : bool = true value }", 0) { return 20 }
+    if !check_type("main :: fn () bool { value : bool = true value }", 0) { return 20 }
     if !check_type("main :: fn () i32 { if 1 { 0 } 0 }", 4) { return 21 }
     if !check_type("main :: fn () i32 { if true { 0 } else if 3 { 0 } else { 0 } 0 }", 4) { return 22 }
     if !check_type("main :: fn () i32 { while 3 { 0 } 0 }", 4) { return 23 }
     if !check_type("Box :: struct { x : bool, bad() :: fn (self : Self) i32 { value := true value + 1 } } main :: fn () i32 { 0 }", 4) { return 24 }
     if !check_type("main :: fn () i32 { value : i32 = 1.5 value }", 5) { return 25 }
-    if !check_type("main :: fn () i32 { value : f64 = 1 value }", 0) { return 26 }
+    if !check_type("main :: fn () f64 { value : f64 = 1 value }", 0) { return 26 }
     if !check_type_span("main :: fn () i32 { left, right := (1, true) right + 1 }", 4, 45, 54) { return 27 }
+    if !check_type("main :: fn () i32 { return true }", 5) { return 28 }
+    if !check_type("main :: fn () i32 { true }", 5) { return 29 }
+    if !check_type("main :: fn () i32 { return 3 }", 0) { return 30 }
+    if !check_type("main :: fn () void { return }", 0) { return 31 }
+    if !check_type("main :: fn () void { return 3 }", 5) { return 32 }
+    if !check_type("main :: fn () i32 { if true { return true } return 1 }", 5) { return 33 }
     0
 }

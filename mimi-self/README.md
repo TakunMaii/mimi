@@ -31,8 +31,10 @@ The current milestone includes a Unicode-aware lexer, arena-backed expression
 and type parsing, declarations for functions/structs/enums, tuple destructuring,
 casts, and source-aware statement ASTs. Function bodies recursively retain
 bindings, assignments, expressions, control flow, match, and defer blocks.
-An initial semantic pass resolves local names and checks scalar and tuple
-element uses. Full type checking and code generation are still open; stage0 is
+An initial semantic pass resolves local names and checks scalar, tuple element,
+and return types. `source.analyze_text` returns a diagnostic for lexical,
+parse, name, or initial type errors, which `source.render` can display with
+source context. Full type checking and code generation are still open; stage0 is
 the Rust compiler. See
 [TODO.md](TODO.md) for the parity roadmap and [FEATURES.md](FEATURES.md) for
 the feature matrix.
