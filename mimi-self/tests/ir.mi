@@ -30,7 +30,7 @@ main :: fn () i32 {
     ir.release(&storage)
     if !check_issue("main :: fn () i32 { true + 1 }", 3) { return 8 }
     if !check_issue("main :: fn () i32 { missing }", 2) { return 9 }
-    if !check_issue("main :: fn () i32 { if true { return 1 } }", 5) { return 10 }
+    if !check_issue("main :: fn () i32 { if true { return 1 } }", 3) { return 10 }
     if !check_issue("main :: fn (value : i32) i32 { value }", 6) { return 11 }
     if !check_issue("main :: fn () f64 { 1.5 as f64 }", 0) { return 12 }
     if !check_issue("main :: fn () bool { true && false }", 0) { return 13 }
@@ -54,5 +54,11 @@ main :: fn () i32 {
     if !check_issue(forward, 0) { return 21 }
     if !check_issue("add :: fn (left : i32, right : i32) i32 { left + right } main :: fn () i32 { add(20) }", 3) { return 22 }
     if !check_issue("add :: fn (left : i32, right : i32) i32 { left + right } main :: fn () i32 { add(true, 22) }", 3) { return 23 }
+    if !check_issue("main :: fn () i32 { value := 0 while value < 3 { value = value + 1 } value }", 0) { return 24 }
+    if !check_issue("main :: fn () i32 { if true { return 42 } else { return 0 } }", 3) { return 25 }
+    if !check_issue("main :: fn () i32 { if true { return 42 } else { return 0 } 0 }", 0) { return 29 }
+    if !check_issue("main :: fn () i32 { value := 0 do { value = value + 1 } while value < 3 value }", 0) { return 26 }
+    if !check_issue("main :: fn () i32 { break }", 5) { return 27 }
+    if !check_issue("main :: fn () i32 { if 1 { return 42 } return 0 }", 3) { return 28 }
     0
 }

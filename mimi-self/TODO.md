@@ -119,6 +119,8 @@ two consecutive stages.
   `build` command.
 - [x] Compare stage0 and stage1 runtime results on arithmetic, casts, and
   booleans; check rejected-program diagnostics.
+- [x] Lower scalar assignments, `if`/`else`, `while`, `loop`, `do-while`,
+  `break`, and `continue` to C; compare runtime behavior with stage0.
 - [ ] Extend typed IR and C generation to control flow, aggregates, generics,
   imports, C ABI calls, and the remaining language features.
 - [ ] Implement a typed IR and lowering for the language feature matrix.
@@ -185,8 +187,8 @@ The parser currently lives alongside
 the lexer because stage0 loses imported aliases inside imported module function
 bodies.
 
-The first stage1 executable compiles scalar functions and direct calls through
-a typed IR and C backend, then invokes `cc`. `main` still takes no parameters.
-The subset excludes control flow, aggregates, imports, C ABI calls, and generic
-specialization; stage2 cannot yet compile `compiler.mi`. Next, extend typing
-and IR lowering across those features.
+The first stage1 executable compiles scalar functions, direct calls, assignments,
+and basic control flow through a typed IR and C backend, then invokes `cc`.
+`main` still takes no parameters. The subset excludes `for`, match, defer,
+aggregates, imports, C ABI calls, and generic specialization; stage2 cannot yet
+compile `compiler.mi`. Next, extend typing and IR lowering across those features.

@@ -371,6 +371,10 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             ("boolean", "main :: fn () i32 { check := 2 < 3 check 1 }", 1),
             ("call", "main :: fn () i32 { add(20, 22) } add :: fn (left : i32, right : i32) i32 { left + right }", 42),
             ("typed-float", "helper :: fn (value : f64) f64 { value + 1 } main :: fn () i32 { result : f64 = helper(41) result as i32 }", 42),
+            ("while", "main :: fn () i32 { value := 0 while value < 5 { value = value + 1 } if value == 5 { return 42 } return 1 }", 42),
+            ("do", "main :: fn () i32 { value := 0 do { value = value + 1 } while value < 3 value + 39 }", 42),
+            ("loop", "main :: fn () i32 { value := 40 loop { value = value + 1 if value == 42 { break } } value }", 42),
+            ("conditional", "main :: fn () i32 { if true { return 42 } else { return 0 } 0 }", 42),
         ]
         for name, text, expected_exit in cases:
             program = directory / f"{name} program.mi"
@@ -396,7 +400,7 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
         rejected = [
             ("name", "main :: fn () i32 { missing }", "error[E_NAME]"),
             ("type", "main :: fn () i32 { true }", "error[E_TYPE]"),
-            ("lower", "main :: fn () i32 { if true { return 1 } 0 }", "error[E_LOWER]"),
+            ("lower", "main :: fn () i32 { left, right := (1, 2) left + right }", "error[E_LOWER]"),
             ("arity", "add :: fn (left : i32, right : i32) i32 { left + right } main :: fn () i32 { add(20) }", "error[E_LOWER]"),
         ]
         for name, text, expected in rejected:
