@@ -16,8 +16,20 @@ When `--compiler` is set, the suite also compares accepted/rejected smoke
 cases and their first diagnostic against the Rust stage0 compiler. Pass
 `--reference-compiler /path/to/stage0` to select a different reference binary.
 
-Once a self-hosted compiler source is available, build and test both bootstrap
-stages with:
+The first stage1 compiler can be built with:
+
+```sh
+target/debug/mimi build mimi-self/src/compiler.mi -o /tmp/mimi-stage1 --c-source mimi-self/runtime.c --no-cache
+/tmp/mimi-stage1 build scalar.mi -o scalar --no-cache
+```
+
+Stage1 currently accepts no-argument scalar functions with bindings,
+arithmetic, boolean expressions, numeric casts, and returns. It writes
+temporary C, invokes the host `cc`, and removes the C file. Parameters, calls,
+control flow, aggregates, imports, and generics remain unsupported in stage1.
+The Python suite checks stage1 against stage0 on supported programs.
+
+Once stage1 can compile its own source, test both bootstrap stages with:
 
 ```sh
 python3 mimi-self/bootstrap.py mimi-self/src/compiler.mi --output-dir /tmp/mimi-bootstrap

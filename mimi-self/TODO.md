@@ -111,6 +111,14 @@ two consecutive stages.
 
 ## T3: Self-hosted code generation
 
+- [x] Lower no-argument scalar functions, bindings, expressions, and returns
+  into arena-backed typed IR with source-spanned unsupported errors.
+- [x] Emit C for this scalar subset and compile it with the first self-hosted
+  `build` command.
+- [x] Compare stage0 and stage1 runtime results on arithmetic, casts, and
+  booleans; check rejected-program diagnostics.
+- [ ] Extend typed IR and C generation to parameters, calls, control flow,
+  aggregates, generics, and modules.
 - [ ] Implement a typed IR and lowering for the language feature matrix.
 - [ ] Generate native code or a stable C representation and link programs.
 - [ ] Match Rust compiler behavior for ABI, C imports, callbacks, and supported
@@ -120,7 +128,7 @@ two consecutive stages.
 
 ## T4: Bootstrap parity
 
-- [ ] Compile the Mimi compiler with the Rust compiler (stage1).
+- [x] Compile the Mimi compiler with the Rust compiler (stage1).
 - [ ] Compile the same compiler source with stage1 (stage2).
 - [ ] Run the full Python suite under Rust, stage1, and stage2 compilers.
 - [ ] Check reproducibility and document remaining differences from Rust.
@@ -175,5 +183,8 @@ The parser currently lives alongside
 the lexer because stage0 loses imported aliases inside imported module function
 bodies.
 
-Next, expand semantic typing to structured values, calls, returns, and generics
-before typed IR lowering.
+The first stage1 executable compiles no-argument scalar functions through a
+typed IR and C backend, then invokes `cc`. Its subset excludes parameters,
+calls, control flow, aggregates, imports, and generic specialization; stage2
+cannot yet compile `compiler.mi`. Next, extend typing and IR lowering across
+those features.

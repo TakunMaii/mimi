@@ -322,6 +322,91 @@ main :: fn () i32 {{
                 )
 
 
+def test_scalar_codegen(compiler: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="mimi-self-codegen-") as temporary:
+        directory = Path(temporary)
+        driver = directory / "emit.mi"
+        emitter = directory / "emit"
+        generated = directory / "program.c"
+        executable = directory / "program"
+        program = "main :: fn () i32 { value := 6 * 7 check := value == 42 check result := value as i32 result - 42 }"
+        driver.write_text(
+            f'''ir :: @import({mimi_quote(SELF / "src" / "lexer.mi")})
+main :: fn () i32 {{
+    source := "{program}"
+    storage := ir.init()
+    lowered := ir.lower_text(source, &storage)
+    if lowered.issue.code != 0 {{ return 1 }}
+    if !ir.emit_c_to_file(source, lowered.module, {mimi_quote(generated)}) {{ return 2 }}
+    ir.release(&storage)
+    0
+}}
+''',
+            encoding="utf-8",
+        )
+        run(
+            [
+                str(compiler), "build", str(driver), "-o", str(emitter),
+                "--c-source", str(RUNTIME), "--no-cache",
+            ]
+        )
+        run([str(emitter)])
+        run(["cc", "-std=c11", "-O2", str(generated), "-o", str(executable)])
+        run([str(executable)])
+
+
+def test_partial_compiler_bootstrap(stage0: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="mimi-self-stage1-") as temporary:
+        directory = Path(temporary)
+        stage1 = directory / "mimi-stage1"
+        run(
+            [
+                str(stage0), "build", str(SELF / "src" / "compiler.mi"),
+                "-o", str(stage1), "--c-source", str(RUNTIME), "--no-cache",
+            ]
+        )
+        cases = [
+            ("arithmetic", "main :: fn () i32 { value := 6 * 7 value }", 42),
+            ("cast", "main :: fn () i32 { value := 41 as i32 value + 1 }", 42),
+            ("boolean", "main :: fn () i32 { check := 2 < 3 check 1 }", 1),
+        ]
+        for name, text, expected_exit in cases:
+            program = directory / f"{name} program.mi"
+            program.write_text(text, encoding="utf-8")
+            reference = directory / f"{name}-stage0"
+            candidate = directory / f"{name}-stage1"
+            run(
+                [
+                    str(stage0), "build", str(program), "-o", str(reference),
+                    "--c-source", str(RUNTIME), "--no-cache",
+                ]
+            )
+            run(
+                [
+                    str(stage1), "build", str(program), "-o", str(candidate),
+                    "--c-source", str(RUNTIME), "--no-cache",
+                ]
+            )
+            run([str(reference)], expected_status=expected_exit)
+            run([str(candidate)], expected_status=expected_exit)
+            if candidate.with_name(candidate.name + ".mimi.c").exists():
+                raise AssertionError("stage1 left temporary C source after --no-cache")
+        rejected = [
+            ("name", "main :: fn () i32 { missing }", "error[E_NAME]"),
+            ("type", "main :: fn () i32 { true }", "error[E_TYPE]"),
+            ("lower", "main :: fn () i32 { if true { return 1 } 0 }", "error[E_LOWER]"),
+        ]
+        for name, text, expected in rejected:
+            program = directory / f"{name}.mi"
+            program.write_text(text, encoding="utf-8")
+            result = run(
+                [str(stage1), "build", str(program), "-o", str(directory / name)],
+                expected_status=1,
+            )
+            if expected not in result.stderr or diagnostic_location(result.stderr) is None:
+                raise AssertionError(f"stage1 {name}: bad diagnostic:\n{result.stderr}")
+
+
 def test_module_loading(compiler: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="mimi-self-modules-") as temporary:
         directory = Path(temporary)
@@ -454,6 +539,9 @@ def main() -> None:
     test_file_io(compiler)
     test_path_api(compiler)
     test_source_model(compiler)
+    test_scalar_codegen(compiler)
+    if arguments.compiler is None:
+        test_partial_compiler_bootstrap(compiler)
     test_module_loading(compiler)
     if arguments.compiler is not None:
         reference = arguments.reference_compiler

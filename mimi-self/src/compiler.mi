@@ -1,0 +1,131 @@
+bytes :: @import("bytes.mi")
+lexer :: @import("lexer.mi")
+process :: @import("process.mi")
+source :: @import("source.mi")
+
+extern mimi_remove_file : fn(path : *u8, length : u64) i32
+extern mimi_stderr_write : fn(data : *u8, length : u64) void
+extern mimi_slice_from_raw : fn(data : *u8, length : u64, output : *[]u8) void
+
+print_error :: fn (message : []u8) void {
+    mimi_stderr_write(message.ptr, message.len)
+    mimi_stderr_write("\n".ptr, 1)
+}
+
+argument :: fn (argv : **u8, index : u64) []u8 {
+    value := argv[index]
+    length : u64 = 0
+    while value[length] != 0 { length = length + 1 }
+    result : []u8 = ""
+    mimi_slice_from_raw(value, length, &result)
+    result
+}
+
+equal :: fn (left : []u8, right : []u8) bool {
+    if left.len != right.len { return false }
+    index : u64 = 0
+    while index < left.len {
+        if left[index] != right[index] { return false }
+        index = index + 1
+    }
+    true
+}
+
+generated_path :: fn (output : []u8, result : *bytes.ByteBuffer) bool {
+    index : u64 = 0
+    while index < output.len {
+        if !bytes.push(result, output[index]) { return false }
+        index = index + 1
+    }
+    suffix := ".mimi.c"
+    index = 0
+    while index < suffix.len {
+        if !bytes.push(result, suffix[index]) { return false }
+        index = index + 1
+    }
+    true
+}
+
+build :: fn (input : []u8, output : []u8, extra_c : []u8) i32 {
+    file := source.init()
+    if !source.load(input, &file) {
+        print_error("error[io]: could not read source file")
+        return 1
+    }
+    text : []u8 = ""
+    mimi_slice_from_raw(file.contents.data, file.contents.len, &text)
+    diagnostic := source.analyze_text(text)
+    if diagnostic.code.len != 0 {
+        source.render(diagnostic, &file)
+        source.release(&file)
+        return 1
+    }
+    storage := lexer.init()
+    lowered := lexer.lower_text(text, &storage)
+    if lowered.issue.code != 0 {
+        issue := source.Diagnostic {
+            code = "E_LOWER",
+            message = lexer.lower_issue_message(lowered.issue.code),
+            span = source.Span { start = lowered.issue.start, end = lowered.issue.end },
+        }
+        source.render(issue, &file)
+        lexer.release(&storage)
+        source.release(&file)
+        return 1
+    }
+    generated := bytes.init()
+    if !generated_path(output, &generated) {
+        print_error("error[io]: could not create temporary C path")
+        bytes.release(&generated)
+        lexer.release(&storage)
+        source.release(&file)
+        return 1
+    }
+    generated_name : []u8 = ""
+    mimi_slice_from_raw(generated.data, generated.len, &generated_name)
+    if !lexer.emit_c_to_file(text, lowered.module, generated_name) {
+        print_error("error[codegen]: could not write C output")
+        bytes.release(&generated)
+        lexer.release(&storage)
+        source.release(&file)
+        return 1
+    }
+    arguments := process.init()
+    valid := process.push(&arguments, "-std=c11") && process.push(&arguments, "-O2") && process.push(&arguments, generated_name)
+    if valid && extra_c.len != 0 { valid = process.push(&arguments, extra_c) }
+    if valid { valid = process.push(&arguments, "-o") && process.push(&arguments, output) }
+    status : i32 = 1
+    if valid { status = process.run(&arguments, "cc") }
+    process.release(&arguments)
+    removed := mimi_remove_file(generated_name.ptr, generated_name.len) != 0
+    bytes.release(&generated)
+    lexer.release(&storage)
+    source.release(&file)
+    if !removed { print_error("error[io]: could not remove temporary C output") return 1 }
+    if status != 0 { print_error("error[link]: C compiler failed") return 1 }
+    0
+}
+
+main :: fn (argc : i32, argv : **u8) i32 {
+    if argc < 3 || !equal(argument(argv, 1), "build") {
+        print_error("usage: mimi-stage1 build FILE -o OUTPUT [--c-source FILE] [--no-cache]")
+        return 2
+    }
+    input := argument(argv, 2)
+    output : []u8 = ""
+    extra_c : []u8 = ""
+    index : u64 = 3
+    while index < argc as u64 {
+        flag := argument(argv, index)
+        if equal(flag, "-o") || equal(flag, "--c-source") {
+            if index + 1 >= argc as u64 { print_error("error[cli]: missing option value") return 2 }
+            index = index + 1
+            if equal(flag, "-o") { output = argument(argv, index) } else { extra_c = argument(argv, index) }
+        } else {
+            if !equal(flag, "--no-cache") { print_error("error[cli]: unknown option") return 2 }
+        }
+        index = index + 1
+    }
+    if output.len == 0 { print_error("error[cli]: -o OUTPUT is required") return 2 }
+    build(input, output, extra_c)
+}

@@ -4195,8 +4195,10 @@ infer_expression_tag :: fn (source : []u8, expression : *ExprNode, locals : *Typ
     if expression.kind == 3 { return 4 }
     if expression.kind == 4 || expression.kind == 5 { return 2 }
     if expression.kind == 293 {
-        infer_expression_tag(source, expression.left, locals, issue)
-        return type_annotation_tag(source, expression.right)
+        original := infer_expression_tag(source, expression.left, locals, issue)
+        target := type_annotation_tag(source, expression.right)
+        if original == 2 || target == 2 { return type_fail(issue, 4, expression) }
+        return target
     }
     if expression.kind == 260 { infer_expression_tag(source, expression.left, locals, issue) return 0 }
     if expression.kind == 291 || expression.kind == 292 {
@@ -4386,4 +4388,488 @@ pub check_module_tuple_types :: fn (source : []u8, module : *ModuleNode, storage
         declaration = declaration.next
     }
     issue
+}
+
+pub Storage :: struct {
+    head : *void,
+    last : *void,
+}
+
+pub init :: fn () Storage {
+    empty := mimi_arena_empty()
+    Storage { head = empty, last = empty }
+}
+
+pub release :: fn (storage : *Storage) void { mimi_arena_release(storage as *ExpressionArena) }
+
+allocate :: fn (storage : *Storage, size : u64) bool {
+    mimi_arena_allocate(storage as *ExpressionArena, size, 8) != 0
+}
+
+pub Expr :: struct {
+    kind : u64,
+    type_tag : u64,
+    start : u64,
+    end : u64,
+    payload_start : u64,
+    payload_end : u64,
+    left : *Expr,
+    right : *Expr,
+}
+
+pub Statement :: struct {
+    kind : u64,
+    start : u64,
+    end : u64,
+    name_start : u64,
+    name_end : u64,
+    value : *Expr,
+    next : *Statement,
+}
+
+pub Function :: struct {
+    name_start : u64,
+    name_end : u64,
+    return_tag : u64,
+    body : *Statement,
+    next : *Function,
+}
+
+pub Module :: struct {
+    functions : *Function,
+    function_count : u64,
+}
+
+pub LowerIssue :: struct {
+    code : u64,
+    start : u64,
+    end : u64,
+}
+
+pub LowerResult :: struct {
+    module : *Module,
+    issue : LowerIssue,
+}
+
+pub lower_issue_message :: fn (code : u64) []u8 {
+    if code == 1 { return "expression is not supported by the C backend" }
+    if code == 2 { return "identifier has no supported scalar type" }
+    if code == 3 { return "scalar expression or return has an incompatible type" }
+    if code == 4 { return "out of memory while lowering" }
+    if code == 5 { return "statement is not supported by the C backend" }
+    if code == 6 { return "declaration is not supported by the C backend" }
+    "unknown lowering failure"
+}
+
+Symbol :: struct {
+    start : u64,
+    end : u64,
+    type_tag : u64,
+    next : *Symbol,
+}
+
+pub expr_is_null :: fn (value : *Expr) bool { value == (mimi_buffer_empty() as *Expr) }
+pub statement_is_null :: fn (value : *Statement) bool { value == (mimi_buffer_empty() as *Statement) }
+pub module_is_null :: fn (value : *Module) bool { value == (mimi_buffer_empty() as *Module) }
+
+fail :: fn (issue : *LowerIssue, code : u64, start : u64, end : u64) void {
+    if issue.code != 0 { return }
+    issue.code = code
+    issue.start = start
+    issue.end = end
+}
+
+same_name :: fn (source : []u8, first_start : u64, first_end : u64, second_start : u64, second_end : u64) bool {
+    if first_end - first_start != second_end - second_start { return false }
+    index : u64 = 0
+    while index < first_end - first_start {
+        if source[first_start + index] != source[second_start + index] { return false }
+        index = index + 1
+    }
+    true
+}
+
+name_is :: fn (source : []u8, start : u64, end : u64, expected : []u8) bool {
+    if end - start != expected.len { return false }
+    index : u64 = 0
+    while index < expected.len {
+        if source[start + index] != expected[index] { return false }
+        index = index + 1
+    }
+    true
+}
+
+type_tag :: fn (source : []u8, node : *ExprNode) u64 {
+    if expression_is_null(node) || node.kind != 270 { return 0 }
+    token := next_token(source, node.start)
+    if token.0 != 1 { return 0 }
+    if name_is(source, token.1, token.2, "bool") { return 2 }
+    if name_is(source, token.1, token.2, "void") { return 6 }
+    if name_is(source, token.1, token.2, "f32") || name_is(source, token.1, token.2, "f64") { return 3 }
+    if name_is(source, token.1, token.2, "i8") || name_is(source, token.1, token.2, "i16") || name_is(source, token.1, token.2, "i32") || name_is(source, token.1, token.2, "i64") || name_is(source, token.1, token.2, "u8") || name_is(source, token.1, token.2, "u16") || name_is(source, token.1, token.2, "u32") || name_is(source, token.1, token.2, "u64") { return 1 }
+    0
+}
+
+symbol_type :: fn (source : []u8, start : u64, end : u64, head : *Symbol) u64 {
+    symbol := head
+    while symbol != (mimi_buffer_empty() as *Symbol) {
+        if same_name(source, start, end, symbol.start, symbol.end) { return symbol.type_tag }
+        symbol = symbol.next
+    }
+    0
+}
+
+symbol_push :: fn (storage : *Storage, head : *Symbol, start : u64, end : u64, tag : u64) *Symbol {
+    if !allocate(storage, 32) { return mimi_buffer_empty() as *Symbol }
+    item := storage.last as *Symbol
+    item.start = start
+    item.end = end
+    item.type_tag = tag
+    item.next = head
+    item
+}
+
+allocate_ir_expr :: fn (storage : *Storage, source_node : *ExprNode, tag : u64, left : *Expr, right : *Expr) *Expr {
+    if !allocate(storage, 64) { return mimi_buffer_empty() as *Expr }
+    item := storage.last as *Expr
+    item.kind = source_node.kind
+    item.type_tag = tag
+    item.start = source_node.start
+    item.end = source_node.end
+    item.payload_start = source_node.payload_start
+    item.payload_end = source_node.payload_end
+    item.left = left
+    item.right = right
+    item
+}
+
+numeric :: fn (tag : u64) bool { tag == 1 || tag == 3 }
+
+lower_expr :: fn (source : []u8, node : *ExprNode, locals : *Symbol, storage : *Storage, issue : *LowerIssue) *Expr {
+    empty : *Expr = mimi_buffer_empty() as *Expr
+    if expression_is_null(node) { fail(issue, 1, 0, 0) return empty }
+    if node.kind == 1 {
+        tag := symbol_type(source, node.payload_start, node.payload_end, locals)
+        if tag == 0 { fail(issue, 2, node.start, node.end) return empty }
+        return allocate_ir_expr(storage, node, tag, empty, empty)
+    }
+    if node.kind == 2 {
+        tag : u64 = 1
+        index := node.payload_start
+        while index < node.payload_end {
+            if source[index] == 46 { tag = 3 }
+            index = index + 1
+        }
+        return allocate_ir_expr(storage, node, tag, empty, empty)
+    }
+    if node.kind == 4 || node.kind == 5 { return allocate_ir_expr(storage, node, 2, empty, empty) }
+    if node.kind == 293 {
+        value := lower_expr(source, node.left, locals, storage, issue)
+        tag := type_tag(source, node.right)
+        if expr_is_null(value) || tag == 0 { fail(issue, 1, node.start, node.end) return empty }
+        if !numeric(value.type_tag) || !numeric(tag) { fail(issue, 3, node.start, node.end) return empty }
+        return allocate_ir_expr(storage, node, tag, value, empty)
+    }
+    if node.kind == 295 || node.kind == 283 {
+        value := lower_expr(source, node.left, locals, storage, issue)
+        if expr_is_null(value) { return empty }
+        if (node.kind == 295 && !numeric(value.type_tag)) || (node.kind == 283 && value.type_tag != 2) {
+            fail(issue, 3, node.start, node.end)
+            return empty
+        }
+        tag : u64 = if node.kind == 283 { 2 } else { value.type_tag }
+        return allocate_ir_expr(storage, node, tag, value, empty)
+    }
+    if node.kind == 43 || node.kind == 45 || node.kind == 42 || node.kind == 47 || node.kind == 37 || node.kind == 128 || node.kind == 129 || node.kind == 130 || node.kind == 131 || node.kind == 60 || node.kind == 62 || node.kind == 132 || node.kind == 133 {
+        left := lower_expr(source, node.left, locals, storage, issue)
+        right := lower_expr(source, node.right, locals, storage, issue)
+        if expr_is_null(left) || expr_is_null(right) { return empty }
+        tag : u64 = 2
+        if node.kind == 132 || node.kind == 133 {
+            if left.type_tag != 2 || right.type_tag != 2 { fail(issue, 3, node.start, node.end) return empty }
+        } else {
+            if node.kind == 128 || node.kind == 129 {
+                if left.type_tag != right.type_tag && !(numeric(left.type_tag) && numeric(right.type_tag)) { fail(issue, 3, node.start, node.end) return empty }
+            } else {
+                if !numeric(left.type_tag) || !numeric(right.type_tag) { fail(issue, 3, node.start, node.end) return empty }
+            }
+            if node.kind == 43 || node.kind == 45 || node.kind == 42 || node.kind == 47 || node.kind == 37 {
+                tag = if left.type_tag == 3 || right.type_tag == 3 { 3 } else { 1 }
+            }
+        }
+        return allocate_ir_expr(storage, node, tag, left, right)
+    }
+    fail(issue, 1, node.start, node.end)
+    empty
+}
+
+allocate_statement :: fn (storage : *Storage, node : *StatementNode, value : *Expr) *Statement {
+    if !allocate(storage, 56) { return mimi_buffer_empty() as *Statement }
+    item := storage.last as *Statement
+    item.kind = node.kind
+    item.start = node.start
+    item.end = node.end
+    item.name_start = 0
+    item.name_end = 0
+    item.value = value
+    item.next = mimi_buffer_empty() as *Statement
+    item
+}
+
+lower_body :: fn (source : []u8, body : *BlockNode, storage : *Storage, expected_return : u64, issue : *LowerIssue) *Statement {
+    empty : *Statement = mimi_buffer_empty() as *Statement
+    first : *Statement = empty
+    last : *Statement = empty
+    locals : *Symbol = mimi_buffer_empty() as *Symbol
+    node := body.statements
+    while !statement_node_is_null(node) {
+        if node.kind != 285 && node.kind != 280 && node.kind != 303 {
+            fail(issue, 5, node.start, node.end)
+            return empty
+        }
+        value : *Expr = mimi_buffer_empty() as *Expr
+        if node.kind == 285 {
+            value = lower_expr(source, node.binding.initializer, locals, storage, issue)
+        } else {
+            if !expression_is_null(node.value) { value = lower_expr(source, node.value, locals, storage, issue) }
+        }
+        if issue.code != 0 { return empty }
+        if node.kind == 280 {
+            actual : u64 = if expr_is_null(value) { 6 } else { value.type_tag }
+            if !type_assignable(expected_return, actual) { fail(issue, 3, node.start, node.end) return empty }
+        }
+        if node.kind == 303 && statement_node_is_null(node.next) && !type_assignable(expected_return, value.type_tag) {
+            fail(issue, 3, node.start, node.end)
+            return empty
+        }
+        item := allocate_statement(storage, node, value)
+        if statement_is_null(item) { fail(issue, 4, node.start, node.end) return empty }
+        if node.kind == 285 {
+            item.name_start = node.binding.name_start
+            item.name_end = node.binding.name_end
+            tag := value.type_tag
+            annotated := type_tag(source, node.binding.data_type)
+            if annotated != 0 {
+                if !type_assignable(annotated, tag) { fail(issue, 3, node.start, node.end) return empty }
+                tag = annotated
+            }
+            locals = symbol_push(storage, locals, item.name_start, item.name_end, tag)
+            if locals == (mimi_buffer_empty() as *Symbol) { fail(issue, 4, node.start, node.end) return empty }
+        }
+        if statement_is_null(first) { first = item } else { last.next = item }
+        last = item
+        node = node.next
+    }
+    if expected_return != 6 && (statement_is_null(last) || (last.kind != 280 && last.kind != 303)) {
+        fail(issue, 3, body.start, body.end)
+        return empty
+    }
+    first
+}
+
+lower_module :: fn (source : []u8, parsed : *ModuleNode, storage : *Storage) LowerResult {
+    issue := LowerIssue { code = 0, start = 0, end = 0 }
+    empty : *Module = mimi_buffer_empty() as *Module
+    if module_node_is_null(parsed) { fail(&issue, 6, 0, 0) return LowerResult { module = empty, issue = issue } }
+    if !allocate(storage, 16) { fail(&issue, 4, 0, 0) return LowerResult { module = empty, issue = issue } }
+    result := storage.last as *Module
+    result.functions = mimi_buffer_empty() as *Function
+    result.function_count = 0
+    last : *Function = mimi_buffer_empty() as *Function
+    declaration := parsed.declarations
+    while declaration != (mimi_buffer_empty() as *ModuleDeclarationNode) {
+        if declaration.kind != 1 || function_node_is_null(declaration.function) || parameter_list_is_null(declaration.function.parameters) == false {
+            fail(&issue, 6, declaration.start, declaration.end)
+            return LowerResult { module = empty, issue = issue }
+        }
+        function := declaration.function
+        tag := type_tag(source, function.return_type)
+        if tag == 0 { fail(&issue, 6, function.start, function.end) return LowerResult { module = empty, issue = issue } }
+        body := lower_body(source, function.body, storage, tag, &issue)
+        if issue.code != 0 { return LowerResult { module = empty, issue = issue } }
+        if !allocate(storage, 40) { fail(&issue, 4, function.start, function.end) return LowerResult { module = empty, issue = issue } }
+        item := storage.last as *Function
+        item.name_start = function.name_start
+        item.name_end = function.name_end
+        item.return_tag = tag
+        item.body = body
+        item.next = mimi_buffer_empty() as *Function
+        if result.function_count == 0 { result.functions = item } else { last.next = item }
+        last = item
+        result.function_count = result.function_count + 1
+        declaration = declaration.next
+    }
+    LowerResult { module = result, issue = issue }
+}
+
+pub lower_text :: fn (source : []u8, storage : *Storage) LowerResult {
+    syntax := expression_arena_init()
+    parsed := parse_module(source, &syntax)
+    result := lower_module(source, parsed, storage)
+    expression_arena_release(&syntax)
+    result
+}
+
+extern mimi_buffer_resize : fn(buffer : *CBuffer, size : u64) i32
+extern mimi_buffer_release : fn(buffer : *CBuffer) void
+extern mimi_write_file : fn(path : *u8, path_length : u64, data : *u8, length : u64) i32
+
+pub CBuffer :: struct {
+    data : *u8,
+    len : u64,
+    capacity : u64,
+    released : bool,
+}
+
+pub c_buffer_init :: fn () CBuffer {
+    CBuffer { data = mimi_buffer_empty() as *u8, len = 0, capacity = 0, released = false }
+}
+
+pub c_buffer_release :: fn (buffer : *CBuffer) void {
+    if buffer.released { return }
+    mimi_buffer_release(buffer)
+    buffer.len = 0
+    buffer.capacity = 0
+    buffer.released = true
+}
+
+c_push :: fn (output : *CBuffer, value : u8) bool {
+    if output.released { return false }
+    if output.len == output.capacity {
+        capacity : u64 = if output.capacity == 0 { 256 } else { output.capacity * 2 }
+        if mimi_buffer_resize(output, capacity) == 0 { return false }
+        output.capacity = capacity
+    }
+    output.data[output.len] = value
+    output.len = output.len + 1
+    true
+}
+
+c_text :: fn (output : *CBuffer, value : []u8) bool {
+    index : u64 = 0
+    while index < value.len {
+        if !c_push(output, value[index]) { return false }
+        index = index + 1
+    }
+    true
+}
+
+c_span :: fn (output : *CBuffer, source : []u8, start : u64, end : u64) bool {
+    if end < start || end > source.len { return false }
+    index := start
+    while index < end {
+        if !c_push(output, source[index]) { return false }
+        index = index + 1
+    }
+    true
+}
+
+c_name :: fn (output : *CBuffer, source : []u8, start : u64, end : u64, prefix : []u8) bool {
+    if end <= start || end > source.len || !c_text(output, prefix) { return false }
+    digits := "0123456789abcdef"
+    index := start
+    while index < end {
+        byte := source[index]
+        if !c_push(output, digits[(byte / 16) as u64]) || !c_push(output, digits[(byte % 16) as u64]) { return false }
+        index = index + 1
+    }
+    true
+}
+
+c_type :: fn (output : *CBuffer, tag : u64) bool {
+    if tag == 1 { return c_text(output, "int64_t") }
+    if tag == 2 { return c_text(output, "_Bool") }
+    if tag == 3 { return c_text(output, "double") }
+    if tag == 6 { return c_text(output, "void") }
+    false
+}
+
+c_operator :: fn (output : *CBuffer, kind : u64) bool {
+    if kind == 128 { return c_text(output, "==") }
+    if kind == 129 { return c_text(output, "!=") }
+    if kind == 130 { return c_text(output, "<=") }
+    if kind == 131 { return c_text(output, ">=") }
+    if kind == 132 { return c_text(output, "&&") }
+    if kind == 133 { return c_text(output, "||") }
+    if kind == 43 || kind == 45 || kind == 42 || kind == 47 || kind == 37 || kind == 60 || kind == 62 {
+        return c_push(output, kind as u8)
+    }
+    false
+}
+
+c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
+    if expr_is_null(value) { return false }
+    if value.kind == 1 { return c_name(output, source, value.payload_start, value.payload_end, "v_") }
+    if value.kind == 2 { return c_span(output, source, value.payload_start, value.payload_end) }
+    if value.kind == 4 { return c_text(output, "1") }
+    if value.kind == 5 { return c_text(output, "0") }
+    if value.kind == 293 {
+        if !c_text(output, "((") || !c_type(output, value.type_tag) || !c_text(output, ")") { return false }
+        if !c_expr(output, source, value.left) { return false }
+        return c_text(output, ")")
+    }
+    if value.kind == 295 || value.kind == 283 {
+        if !c_push(output, 40) { return false }
+        if !c_push(output, if value.kind == 295 { 45 as u8 } else { 33 as u8 }) { return false }
+        if !c_expr(output, source, value.left) { return false }
+        return c_push(output, 41)
+    }
+    if !c_push(output, 40) || !c_expr(output, source, value.left) || !c_operator(output, value.kind) || !c_expr(output, source, value.right) {
+        return false
+    }
+    c_push(output, 41)
+}
+
+c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_tag : u64) bool {
+    if item.kind == 285 {
+        if !c_text(output, "  ") || !c_type(output, item.value.type_tag) || !c_push(output, 32) { return false }
+        if !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, " = ") { return false }
+        if !c_expr(output, source, item.value) { return false }
+        return c_text(output, ";\n")
+    }
+    if item.kind == 280 || (item.kind == 303 && statement_is_null(item.next) && return_tag != 6) {
+        if !c_text(output, "  return") { return false }
+        if !expr_is_null(item.value) {
+            if !c_push(output, 32) || !c_expr(output, source, item.value) { return false }
+        }
+        return c_text(output, ";\n")
+    }
+    if item.kind == 303 {
+        if !c_text(output, "  ") || !c_expr(output, source, item.value) { return false }
+        return c_text(output, ";\n")
+    }
+    false
+}
+
+pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
+    if module_is_null(module) || !c_text(output, "#include <stdint.h>\n#include <stdbool.h>\n\n") { return false }
+    has_main := false
+    function := module.functions
+    while function != (mimi_buffer_empty() as *Function) {
+        is_main := name_is(source, function.name_start, function.name_end, "main")
+        if is_main {
+            if has_main || function.return_tag != 1 { return false }
+            has_main = true
+            if !c_text(output, "int main(void) {\n") { return false }
+        } else {
+            if !c_text(output, "static ") || !c_type(output, function.return_tag) || !c_push(output, 32) { return false }
+            if !c_name(output, source, function.name_start, function.name_end, "m_") || !c_text(output, "(void) {\n") { return false }
+        }
+        statement := function.body
+        while !statement_is_null(statement) {
+            if !c_statement(output, source, statement, function.return_tag) { return false }
+            statement = statement.next
+        }
+        if !c_text(output, "}\n\n") { return false }
+        function = function.next
+    }
+    has_main
+}
+
+pub emit_c_to_file :: fn (source : []u8, module : *Module, path : []u8) bool {
+    output := c_buffer_init()
+    valid := emit_c(source, module, &output)
+    if valid { valid = mimi_write_file(path.ptr, path.len, output.data, output.len) != 0 }
+    c_buffer_release(&output)
+    valid
 }

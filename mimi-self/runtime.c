@@ -17,6 +17,11 @@ typedef struct {
     uint8_t released;
 } MimiByteBuffer;
 
+typedef struct {
+    uint8_t *ptr;
+    uint64_t len;
+} MimiRawSlice;
+
 typedef struct MimiArenaBlock {
     struct MimiArenaBlock *next;
     uint64_t capacity;
@@ -59,6 +64,11 @@ void *mimi_buffer_empty(void) {
     return NULL;
 }
 
+void mimi_slice_from_raw(uint8_t *ptr, uint64_t length, MimiRawSlice *output) {
+    output->ptr = ptr;
+    output->len = length;
+}
+
 int mimi_buffer_resize(MimiByteBuffer *buffer, uint64_t size) {
     void *resized = realloc(buffer->data, (size_t)size);
     if (resized == NULL && size != 0) {
@@ -77,6 +87,10 @@ static void mimi_write_bytes(FILE *stream, const uint8_t *data, uint64_t length)
     if (length != 0) {
         fwrite(data, 1, (size_t)length, stream);
     }
+}
+
+void mimi_stderr_write(const uint8_t *data, uint64_t length) {
+    mimi_write_bytes(stderr, data, length);
 }
 
 void mimi_diagnostic_print(
@@ -210,6 +224,16 @@ int mimi_write_file(const uint8_t *path, uint64_t path_length, const uint8_t *da
     if (written != length) {
         fclose(file);
     }
+    return success;
+}
+
+int mimi_remove_file(const uint8_t *path, uint64_t path_length) {
+    char *path_copy = mimi_path_copy(path, path_length);
+    if (path_copy == NULL) {
+        return 0;
+    }
+    int success = remove(path_copy) == 0;
+    free(path_copy);
     return success;
 }
 
