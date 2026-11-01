@@ -94,7 +94,9 @@ two consecutive stages.
 - [x] Parse simple-name struct literal fields and nested values.
 - [x] Parse generic struct literal type applications.
 - [x] Validate tuple destructuring initializer arity when it is a tuple literal.
-- [ ] Validate destructuring tuple element types during semantic analysis.
+- [x] Resolve module, parameter, and local names across nested statement blocks;
+  report undefined and duplicate local names with source spans.
+- [x] Validate destructuring tuple element types during semantic analysis.
 - [ ] Implement name resolution, type checking, generic specialization, and
   diagnostics.
 - [x] Add a Python differential smoke suite for accepted programs and
@@ -159,10 +161,14 @@ spans. Match nodes preserve the scrutinee and variant arm/binding/result spans
 and reject duplicate arms. Enum exhaustiveness and semantic validation are not
 implemented.
 While/loop/do-while and collection/range for loops retain their header and
-recursively composed bodies. Name resolution and type checking remain open.
+recursively composed bodies. The first semantic pass resolves module, parameter,
+and local names in parsed statements and reports source-spanned name errors.
+An initial type pass checks scalar bindings, tuple element uses, arithmetic,
+logical operations, assignments, and conditions in functions and methods;
+full type checking and generic specialization remain open.
 The parser currently lives alongside
 the lexer because stage0 loses imported aliases inside imported module function
 bodies.
 
-Next, parse declarations, types, and statements before name resolution and
-type checking.
+Next, expand semantic typing to structured values, calls, returns, and generics
+before typed IR lowering.

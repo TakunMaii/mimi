@@ -1,0 +1,85 @@
+lexer :: @import("../src/lexer.mi")
+
+check :: fn (source : []u8, expected : u64) bool {
+    storage := lexer.expression_arena_init()
+    module := lexer.parse_module(source, &storage)
+    if lexer.module_node_is_null(module) {
+        lexer.expression_arena_release(&storage)
+        return false
+    }
+    issue := lexer.resolve_module_names(source, module, &storage)
+    result := issue.code == expected
+    lexer.expression_arena_release(&storage)
+    result
+}
+
+check_span :: fn (source : []u8, code : u64, start : u64, end : u64) bool {
+    storage := lexer.expression_arena_init()
+    module := lexer.parse_module(source, &storage)
+    if lexer.module_node_is_null(module) { return false }
+    issue := lexer.resolve_module_names(source, module, &storage)
+    result := issue.code == code && issue.start == start && issue.end == end
+    lexer.expression_arena_release(&storage)
+    result
+}
+
+type_code :: fn (source : []u8) u64 {
+    storage := lexer.expression_arena_init()
+    module := lexer.parse_module(source, &storage)
+    if lexer.module_node_is_null(module) {
+        lexer.expression_arena_release(&storage)
+        return 99
+    }
+    issue := lexer.check_module_tuple_types(source, module, &storage)
+    result := issue.code
+    lexer.expression_arena_release(&storage)
+    result
+}
+
+check_type :: fn (source : []u8, expected : u64) bool {
+    type_code(source) == expected
+}
+
+check_type_span :: fn (source : []u8, code : u64, start : u64, end : u64) bool {
+    storage := lexer.expression_arena_init()
+    module := lexer.parse_module(source, &storage)
+    if lexer.module_node_is_null(module) {
+        lexer.expression_arena_release(&storage)
+        return false
+    }
+    issue := lexer.check_module_tuple_types(source, module, &storage)
+    result := issue.code == code && issue.start == start && issue.end == end
+    lexer.expression_arena_release(&storage)
+    result
+}
+
+main :: fn () i32 {
+    if !check("answer :: 41 main :: fn () i32 { value := answer + 1 value }", 0) { return 1 }
+    if !check("main :: fn () i32 { value := missing + 1 value }", 1) { return 2 }
+    if !check("main :: fn () i32 { x := 1 x := 2 x }", 2) { return 3 }
+    if !check("main :: fn (x : i32) i32 { y := x y }", 0) { return 4 }
+    if !check("main :: fn () i32 { x := 1 if x == 1 { y := x } x }", 0) { return 5 }
+    if !check("main :: fn () i32 { if true { y := 1 } y }", 1) { return 6 }
+    if !check("main :: fn () i32 { left, right := (1, true) left }", 0) { return 7 }
+    if !check("main :: fn () i32 { left, right := (1, missing) left }", 1) { return 8 }
+    if !check("Point :: struct { x : i32, get() :: fn (self : Self) i32 { self.x } } main :: fn () i32 { point := Point { x = 1 } point.get() }", 0) { return 9 }
+    if !check_span("main :: fn () i32 { value := missing + 1 value }", 1, 29, 36) { return 10 }
+    if !check_span("main :: fn () i32 { x := 1 x := 2 x }", 2, 27, 28) { return 11 }
+    if !check_span("main :: fn () i32 { left, right := (1, missing) left }", 1, 39, 46) { return 12 }
+    if lexer.name_issue_message(1).len != 20 { return 13 }
+    if !check_type("main :: fn () i32 { left, right := (1, true) left + 1 }", 0) { return 14 }
+    if !check_type("main :: fn () i32 { left, right := (1, true) right + 1 }", 4) { return 15 }
+    if !check_type("main :: fn () i32 { left, right := (1, true) right && false }", 0) { return 16 }
+    if !check_type("main :: fn () i32 { left, right := (1, true) left && right }", 4) { return 17 }
+    if !check_type("main :: fn () i32 { left, right := (1, true) right = 42 }", 5) { return 18 }
+    if !check_type("main :: fn () i32 { value : bool = 3 value }", 5) { return 19 }
+    if !check_type("main :: fn () i32 { value : bool = true value }", 0) { return 20 }
+    if !check_type("main :: fn () i32 { if 1 { 0 } 0 }", 4) { return 21 }
+    if !check_type("main :: fn () i32 { if true { 0 } else if 3 { 0 } else { 0 } 0 }", 4) { return 22 }
+    if !check_type("main :: fn () i32 { while 3 { 0 } 0 }", 4) { return 23 }
+    if !check_type("Box :: struct { x : bool, bad() :: fn (self : Self) i32 { value := true value + 1 } } main :: fn () i32 { 0 }", 4) { return 24 }
+    if !check_type("main :: fn () i32 { value : i32 = 1.5 value }", 5) { return 25 }
+    if !check_type("main :: fn () i32 { value : f64 = 1 value }", 0) { return 26 }
+    if !check_type_span("main :: fn () i32 { left, right := (1, true) right + 1 }", 4, 45, 54) { return 27 }
+    0
+}
