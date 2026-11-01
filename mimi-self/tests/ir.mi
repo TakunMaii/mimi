@@ -1,11 +1,15 @@
 ir :: @import("../src/lexer.mi")
 
-check_issue :: fn (source : []u8, expected : u64) bool {
+issue_code :: fn (source : []u8) u64 {
     storage := ir.init()
     lowered := ir.lower_text(source, &storage)
-    result := lowered.issue.code == expected
+    result := lowered.issue.code
     ir.release(&storage)
     result
+}
+
+check_issue :: fn (source : []u8, expected : u64) bool {
+    issue_code(source) == expected
 }
 
 main :: fn () i32 {
@@ -35,5 +39,20 @@ main :: fn () i32 {
     if !check_issue("main :: fn () i32 { value : bool = 3 value }", 3) { return 16 }
     if !check_issue("main :: fn () i32 { value := 1 }", 3) { return 17 }
     if !check_issue("main :: fn () i32 { true as i32 }", 3) { return 19 }
+    if !check_issue("add :: fn (left : i32, right : i32) i32 { left + right } main :: fn () i32 { add(20, 22) }", 0) { return 20 }
+    forward := "main :: fn () i32 { add(20, 22) } add :: fn (left : i32, right : i32) i32 { left + right }"
+    syntax := ir.expression_arena_init()
+    parsed := ir.parse_module(forward, &syntax)
+    if ir.module_node_is_null(parsed) { return 60 }
+    call := parsed.declarations.function.body.statements.value
+    if call.kind != 263 || call.left.kind != 1 { return 61 }
+    if forward[call.left.payload_start] != 97 || forward[call.left.payload_end - 1] != 100 { return 62 }
+    second := parsed.declarations.next
+    if forward[second.name_start] != 97 || forward[second.name_end - 1] != 100 { return 63 }
+    if forward[second.function.name_start] != 97 || forward[second.function.name_end - 1] != 100 { return 64 }
+    ir.expression_arena_release(&syntax)
+    if !check_issue(forward, 0) { return 21 }
+    if !check_issue("add :: fn (left : i32, right : i32) i32 { left + right } main :: fn () i32 { add(20) }", 3) { return 22 }
+    if !check_issue("add :: fn (left : i32, right : i32) i32 { left + right } main :: fn () i32 { add(true, 22) }", 3) { return 23 }
     0
 }

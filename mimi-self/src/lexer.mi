@@ -2889,6 +2889,8 @@ parse_module_declaration :: fn (source : []u8, offset : u64, storage : *Expressi
         if function_node_is_null(function) { return mimi_buffer_empty() as *ModuleDeclarationNode }
         function.start = function.start + offset + (if is_public { name.1 } else { 0 })
         function.end = function.end + offset + (if is_public { name.1 } else { 0 })
+        function.name_start = function.name_start + offset + (if is_public { name.1 } else { 0 })
+        function.name_end = function.name_end + offset + (if is_public { name.1 } else { 0 })
         shift_function_contents(function, offset + (if is_public { name.1 } else { 0 }))
         kind = 1
         end = function.end - offset
@@ -4419,6 +4421,7 @@ pub Expr :: struct {
 
 pub Statement :: struct {
     kind : u64,
+    type_tag : u64,
     start : u64,
     end : u64,
     name_start : u64,
@@ -4427,10 +4430,18 @@ pub Statement :: struct {
     next : *Statement,
 }
 
+pub Parameter :: struct {
+    name_start : u64,
+    name_end : u64,
+    type_tag : u64,
+    next : *Parameter,
+}
+
 pub Function :: struct {
     name_start : u64,
     name_end : u64,
     return_tag : u64,
+    parameters : *Parameter,
     body : *Statement,
     next : *Function,
 }
@@ -4545,9 +4556,75 @@ allocate_ir_expr :: fn (storage : *Storage, source_node : *ExprNode, tag : u64, 
 
 numeric :: fn (tag : u64) bool { tag == 1 || tag == 3 }
 
-lower_expr :: fn (source : []u8, node : *ExprNode, locals : *Symbol, storage : *Storage, issue : *LowerIssue) *Expr {
+find_function :: fn (source : []u8, start : u64, end : u64, functions : *Function) *Function {
+    current := functions
+    while current != (mimi_buffer_empty() as *Function) {
+        if same_name(source, start, end, current.name_start, current.name_end) { return current }
+        current = current.next
+    }
+    mimi_buffer_empty() as *Function
+}
+
+parameter_at :: fn (first : *Parameter, index : u64) *Parameter {
+    current := first
+    position : u64 = 0
+    while current != (mimi_buffer_empty() as *Parameter) && position < index {
+        current = current.next
+        position = position + 1
+    }
+    current
+}
+
+parameter_count :: fn (first : *Parameter) u64 {
+    count : u64 = 0
+    current := first
+    while current != (mimi_buffer_empty() as *Parameter) {
+        count = count + 1
+        current = current.next
+    }
+    count
+}
+
+lower_arguments :: fn (source : []u8, node : *ExprNode, locals : *Symbol, functions : *Function, storage : *Storage, parameters : *Parameter, cursor : *u64, issue : *LowerIssue) *Expr {
+    empty : *Expr = mimi_buffer_empty() as *Expr
+    if node.kind == 262 {
+        left := lower_arguments(source, node.left, locals, functions, storage, parameters, cursor, issue)
+        if expr_is_null(left) { return empty }
+        right := lower_arguments(source, node.right, locals, functions, storage, parameters, cursor, issue)
+        if expr_is_null(right) { return empty }
+        result := allocate_ir_expr(storage, node, 0, left, right)
+        if expr_is_null(result) { fail(issue, 4, node.start, node.end) }
+        return result
+    }
+    parameter := parameter_at(parameters, cursor[0])
+    if parameter == (mimi_buffer_empty() as *Parameter) { fail(issue, 3, node.start, node.end) return empty }
+    value := lower_expr(source, node, locals, functions, storage, issue)
+    if expr_is_null(value) { return empty }
+    if !type_assignable(parameter.type_tag, value.type_tag) { fail(issue, 3, node.start, node.end) return empty }
+    cursor[0] = cursor[0] + 1
+    value
+}
+
+lower_expr :: fn (source : []u8, node : *ExprNode, locals : *Symbol, functions : *Function, storage : *Storage, issue : *LowerIssue) *Expr {
     empty : *Expr = mimi_buffer_empty() as *Expr
     if expression_is_null(node) { fail(issue, 1, 0, 0) return empty }
+    if node.kind == 263 {
+        if expression_is_null(node.left) || node.left.kind != 1 { fail(issue, 1, node.start, node.end) return empty }
+        callee := find_function(source, node.left.payload_start, node.left.payload_end, functions)
+        if callee == (mimi_buffer_empty() as *Function) { fail(issue, 2, node.left.start, node.left.end) return empty }
+        cursor : u64 = 0
+        arguments : *Expr = empty
+        if !expression_is_null(node.right) {
+            arguments = lower_arguments(source, node.right, locals, functions, storage, callee.parameters, &cursor, issue)
+            if expr_is_null(arguments) { return empty }
+        }
+        if cursor != parameter_count(callee.parameters) { fail(issue, 3, node.start, node.end) return empty }
+        result := allocate_ir_expr(storage, node, callee.return_tag, empty, arguments)
+        if expr_is_null(result) { fail(issue, 4, node.start, node.end) return empty }
+        result.payload_start = node.left.payload_start
+        result.payload_end = node.left.payload_end
+        return result
+    }
     if node.kind == 1 {
         tag := symbol_type(source, node.payload_start, node.payload_end, locals)
         if tag == 0 { fail(issue, 2, node.start, node.end) return empty }
@@ -4564,14 +4641,14 @@ lower_expr :: fn (source : []u8, node : *ExprNode, locals : *Symbol, storage : *
     }
     if node.kind == 4 || node.kind == 5 { return allocate_ir_expr(storage, node, 2, empty, empty) }
     if node.kind == 293 {
-        value := lower_expr(source, node.left, locals, storage, issue)
+        value := lower_expr(source, node.left, locals, functions, storage, issue)
         tag := type_tag(source, node.right)
         if expr_is_null(value) || tag == 0 { fail(issue, 1, node.start, node.end) return empty }
         if !numeric(value.type_tag) || !numeric(tag) { fail(issue, 3, node.start, node.end) return empty }
         return allocate_ir_expr(storage, node, tag, value, empty)
     }
     if node.kind == 295 || node.kind == 283 {
-        value := lower_expr(source, node.left, locals, storage, issue)
+        value := lower_expr(source, node.left, locals, functions, storage, issue)
         if expr_is_null(value) { return empty }
         if (node.kind == 295 && !numeric(value.type_tag)) || (node.kind == 283 && value.type_tag != 2) {
             fail(issue, 3, node.start, node.end)
@@ -4581,8 +4658,8 @@ lower_expr :: fn (source : []u8, node : *ExprNode, locals : *Symbol, storage : *
         return allocate_ir_expr(storage, node, tag, value, empty)
     }
     if node.kind == 43 || node.kind == 45 || node.kind == 42 || node.kind == 47 || node.kind == 37 || node.kind == 128 || node.kind == 129 || node.kind == 130 || node.kind == 131 || node.kind == 60 || node.kind == 62 || node.kind == 132 || node.kind == 133 {
-        left := lower_expr(source, node.left, locals, storage, issue)
-        right := lower_expr(source, node.right, locals, storage, issue)
+        left := lower_expr(source, node.left, locals, functions, storage, issue)
+        right := lower_expr(source, node.right, locals, functions, storage, issue)
         if expr_is_null(left) || expr_is_null(right) { return empty }
         tag : u64 = 2
         if node.kind == 132 || node.kind == 133 {
@@ -4604,9 +4681,10 @@ lower_expr :: fn (source : []u8, node : *ExprNode, locals : *Symbol, storage : *
 }
 
 allocate_statement :: fn (storage : *Storage, node : *StatementNode, value : *Expr) *Statement {
-    if !allocate(storage, 56) { return mimi_buffer_empty() as *Statement }
+    if !allocate(storage, 64) { return mimi_buffer_empty() as *Statement }
     item := storage.last as *Statement
     item.kind = node.kind
+    item.type_tag = 0
     item.start = node.start
     item.end = node.end
     item.name_start = 0
@@ -4616,11 +4694,17 @@ allocate_statement :: fn (storage : *Storage, node : *StatementNode, value : *Ex
     item
 }
 
-lower_body :: fn (source : []u8, body : *BlockNode, storage : *Storage, expected_return : u64, issue : *LowerIssue) *Statement {
+lower_body :: fn (source : []u8, body : *BlockNode, parameters : *Parameter, functions : *Function, storage : *Storage, expected_return : u64, issue : *LowerIssue) *Statement {
     empty : *Statement = mimi_buffer_empty() as *Statement
     first : *Statement = empty
     last : *Statement = empty
     locals : *Symbol = mimi_buffer_empty() as *Symbol
+    parameter := parameters
+    while parameter != (mimi_buffer_empty() as *Parameter) {
+        locals = symbol_push(storage, locals, parameter.name_start, parameter.name_end, parameter.type_tag)
+        if locals == (mimi_buffer_empty() as *Symbol) { fail(issue, 4, body.start, body.end) return empty }
+        parameter = parameter.next
+    }
     node := body.statements
     while !statement_node_is_null(node) {
         if node.kind != 285 && node.kind != 280 && node.kind != 303 {
@@ -4629,11 +4713,12 @@ lower_body :: fn (source : []u8, body : *BlockNode, storage : *Storage, expected
         }
         value : *Expr = mimi_buffer_empty() as *Expr
         if node.kind == 285 {
-            value = lower_expr(source, node.binding.initializer, locals, storage, issue)
+            value = lower_expr(source, node.binding.initializer, locals, functions, storage, issue)
         } else {
-            if !expression_is_null(node.value) { value = lower_expr(source, node.value, locals, storage, issue) }
+            if !expression_is_null(node.value) { value = lower_expr(source, node.value, locals, functions, storage, issue) }
         }
         if issue.code != 0 { return empty }
+        if node.kind != 280 && expr_is_null(value) { fail(issue, 4, node.start, node.end) return empty }
         if node.kind == 280 {
             actual : u64 = if expr_is_null(value) { 6 } else { value.type_tag }
             if !type_assignable(expected_return, actual) { fail(issue, 3, node.start, node.end) return empty }
@@ -4653,6 +4738,8 @@ lower_body :: fn (source : []u8, body : *BlockNode, storage : *Storage, expected
                 if !type_assignable(annotated, tag) { fail(issue, 3, node.start, node.end) return empty }
                 tag = annotated
             }
+            if tag == 6 { fail(issue, 3, node.start, node.end) return empty }
+            item.type_tag = tag
             locals = symbol_push(storage, locals, item.name_start, item.name_end, tag)
             if locals == (mimi_buffer_empty() as *Symbol) { fail(issue, 4, node.start, node.end) return empty }
         }
@@ -4678,26 +4765,52 @@ lower_module :: fn (source : []u8, parsed : *ModuleNode, storage : *Storage) Low
     last : *Function = mimi_buffer_empty() as *Function
     declaration := parsed.declarations
     while declaration != (mimi_buffer_empty() as *ModuleDeclarationNode) {
-        if declaration.kind != 1 || function_node_is_null(declaration.function) || parameter_list_is_null(declaration.function.parameters) == false {
+        if declaration.kind != 1 || function_node_is_null(declaration.function) {
             fail(&issue, 6, declaration.start, declaration.end)
             return LowerResult { module = empty, issue = issue }
         }
         function := declaration.function
         tag := type_tag(source, function.return_type)
         if tag == 0 { fail(&issue, 6, function.start, function.end) return LowerResult { module = empty, issue = issue } }
-        body := lower_body(source, function.body, storage, tag, &issue)
-        if issue.code != 0 { return LowerResult { module = empty, issue = issue } }
-        if !allocate(storage, 40) { fail(&issue, 4, function.start, function.end) return LowerResult { module = empty, issue = issue } }
+        if !allocate(storage, 48) { fail(&issue, 4, function.start, function.end) return LowerResult { module = empty, issue = issue } }
         item := storage.last as *Function
         item.name_start = function.name_start
         item.name_end = function.name_end
         item.return_tag = tag
-        item.body = body
+        item.parameters = mimi_buffer_empty() as *Parameter
+        item.body = mimi_buffer_empty() as *Statement
         item.next = mimi_buffer_empty() as *Function
+        last_parameter : *Parameter = mimi_buffer_empty() as *Parameter
+        source_parameter := function.parameters
+        while !parameter_list_is_null(source_parameter) {
+            parameter_tag := type_tag(source, source_parameter.data_type)
+            if parameter_tag == 0 || parameter_tag == 6 { fail(&issue, 6, source_parameter.name_start, source_parameter.name_end) return LowerResult { module = empty, issue = issue } }
+            if !allocate(storage, 32) { fail(&issue, 4, source_parameter.name_start, source_parameter.name_end) return LowerResult { module = empty, issue = issue } }
+            parameter := storage.last as *Parameter
+            parameter.name_start = source_parameter.name_start
+            parameter.name_end = source_parameter.name_end
+            parameter.type_tag = parameter_tag
+            parameter.next = mimi_buffer_empty() as *Parameter
+            if item.parameters == (mimi_buffer_empty() as *Parameter) { item.parameters = parameter } else { last_parameter.next = parameter }
+            last_parameter = parameter
+            source_parameter = source_parameter.next
+        }
+        if name_is(source, item.name_start, item.name_end, "main") && item.parameters != (mimi_buffer_empty() as *Parameter) {
+            fail(&issue, 6, item.name_start, item.name_end)
+            return LowerResult { module = empty, issue = issue }
+        }
         if result.function_count == 0 { result.functions = item } else { last.next = item }
         last = item
         result.function_count = result.function_count + 1
         declaration = declaration.next
+    }
+    declaration = parsed.declarations
+    current := result.functions
+    while declaration != (mimi_buffer_empty() as *ModuleDeclarationNode) {
+        current.body = lower_body(source, declaration.function.body, current.parameters, result.functions, storage, current.return_tag, &issue)
+        if issue.code != 0 { return LowerResult { module = empty, issue = issue } }
+        declaration = declaration.next
+        current = current.next
     }
     LowerResult { module = result, issue = issue }
 }
@@ -4797,8 +4910,34 @@ c_operator :: fn (output : *CBuffer, kind : u64) bool {
     false
 }
 
+c_parameters :: fn (output : *CBuffer, source : []u8, first : *Parameter) bool {
+    if first == (mimi_buffer_empty() as *Parameter) { return c_text(output, "void") }
+    current := first
+    while current != (mimi_buffer_empty() as *Parameter) {
+        if !c_type(output, current.type_tag) || !c_push(output, 32) { return false }
+        if !c_name(output, source, current.name_start, current.name_end, "v_") { return false }
+        current = current.next
+        if current != (mimi_buffer_empty() as *Parameter) && !c_text(output, ", ") { return false }
+    }
+    true
+}
+
+c_arguments :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
+    if expr_is_null(value) { return true }
+    if value.kind == 262 {
+        if !c_arguments(output, source, value.left) || !c_text(output, ", ") { return false }
+        return c_arguments(output, source, value.right)
+    }
+    c_expr(output, source, value)
+}
+
 c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
     if expr_is_null(value) { return false }
+    if value.kind == 263 {
+        if !c_name(output, source, value.payload_start, value.payload_end, "m_") || !c_push(output, 40) { return false }
+        if !c_arguments(output, source, value.right) { return false }
+        return c_push(output, 41)
+    }
     if value.kind == 1 { return c_name(output, source, value.payload_start, value.payload_end, "v_") }
     if value.kind == 2 { return c_span(output, source, value.payload_start, value.payload_end) }
     if value.kind == 4 { return c_text(output, "1") }
@@ -4822,7 +4961,7 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
 
 c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_tag : u64) bool {
     if item.kind == 285 {
-        if !c_text(output, "  ") || !c_type(output, item.value.type_tag) || !c_push(output, 32) { return false }
+        if !c_text(output, "  ") || !c_type(output, item.type_tag) || !c_push(output, 32) { return false }
         if !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, " = ") { return false }
         if !c_expr(output, source, item.value) { return false }
         return c_text(output, ";\n")
@@ -4843,6 +4982,20 @@ c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_t
 
 pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
     if module_is_null(module) || !c_text(output, "#include <stdint.h>\n#include <stdbool.h>\n\n") { return false }
+    prototype := module.functions
+    while prototype != (mimi_buffer_empty() as *Function) {
+        is_main := name_is(source, prototype.name_start, prototype.name_end, "main")
+        if is_main {
+            if prototype.return_tag != 1 || prototype.parameters != (mimi_buffer_empty() as *Parameter) { return false }
+            if !c_text(output, "int main(void);\n") { return false }
+        } else {
+            if !c_text(output, "static ") || !c_type(output, prototype.return_tag) || !c_push(output, 32) { return false }
+            if !c_name(output, source, prototype.name_start, prototype.name_end, "m_") || !c_push(output, 40) { return false }
+            if !c_parameters(output, source, prototype.parameters) || !c_text(output, ");\n") { return false }
+        }
+        prototype = prototype.next
+    }
+    if !c_push(output, 10) { return false }
     has_main := false
     function := module.functions
     while function != (mimi_buffer_empty() as *Function) {
@@ -4853,7 +5006,8 @@ pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
             if !c_text(output, "int main(void) {\n") { return false }
         } else {
             if !c_text(output, "static ") || !c_type(output, function.return_tag) || !c_push(output, 32) { return false }
-            if !c_name(output, source, function.name_start, function.name_end, "m_") || !c_text(output, "(void) {\n") { return false }
+            if !c_name(output, source, function.name_start, function.name_end, "m_") || !c_push(output, 40) { return false }
+            if !c_parameters(output, source, function.parameters) || !c_text(output, ") {\n") { return false }
         }
         statement := function.body
         while !statement_is_null(statement) {

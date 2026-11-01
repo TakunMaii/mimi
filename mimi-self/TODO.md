@@ -111,14 +111,16 @@ two consecutive stages.
 
 ## T3: Self-hosted code generation
 
-- [x] Lower no-argument scalar functions, bindings, expressions, and returns
+- [x] Lower scalar functions, bindings, expressions, and returns
   into arena-backed typed IR with source-spanned unsupported errors.
+- [x] Lower scalar parameters and direct function calls, including forward
+  references and argument arity/type checks.
 - [x] Emit C for this scalar subset and compile it with the first self-hosted
   `build` command.
 - [x] Compare stage0 and stage1 runtime results on arithmetic, casts, and
   booleans; check rejected-program diagnostics.
-- [ ] Extend typed IR and C generation to parameters, calls, control flow,
-  aggregates, generics, and modules.
+- [ ] Extend typed IR and C generation to control flow, aggregates, generics,
+  imports, C ABI calls, and the remaining language features.
 - [ ] Implement a typed IR and lowering for the language feature matrix.
 - [ ] Generate native code or a stable C representation and link programs.
 - [ ] Match Rust compiler behavior for ABI, C imports, callbacks, and supported
@@ -183,8 +185,8 @@ The parser currently lives alongside
 the lexer because stage0 loses imported aliases inside imported module function
 bodies.
 
-The first stage1 executable compiles no-argument scalar functions through a
-typed IR and C backend, then invokes `cc`. Its subset excludes parameters,
-calls, control flow, aggregates, imports, and generic specialization; stage2
-cannot yet compile `compiler.mi`. Next, extend typing and IR lowering across
-those features.
+The first stage1 executable compiles scalar functions and direct calls through
+a typed IR and C backend, then invokes `cc`. `main` still takes no parameters.
+The subset excludes control flow, aggregates, imports, C ABI calls, and generic
+specialization; stage2 cannot yet compile `compiler.mi`. Next, extend typing
+and IR lowering across those features.

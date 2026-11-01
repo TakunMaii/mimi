@@ -369,6 +369,8 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             ("arithmetic", "main :: fn () i32 { value := 6 * 7 value }", 42),
             ("cast", "main :: fn () i32 { value := 41 as i32 value + 1 }", 42),
             ("boolean", "main :: fn () i32 { check := 2 < 3 check 1 }", 1),
+            ("call", "main :: fn () i32 { add(20, 22) } add :: fn (left : i32, right : i32) i32 { left + right }", 42),
+            ("typed-float", "helper :: fn (value : f64) f64 { value + 1 } main :: fn () i32 { result : f64 = helper(41) result as i32 }", 42),
         ]
         for name, text, expected_exit in cases:
             program = directory / f"{name} program.mi"
@@ -395,6 +397,7 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             ("name", "main :: fn () i32 { missing }", "error[E_NAME]"),
             ("type", "main :: fn () i32 { true }", "error[E_TYPE]"),
             ("lower", "main :: fn () i32 { if true { return 1 } 0 }", "error[E_LOWER]"),
+            ("arity", "add :: fn (left : i32, right : i32) i32 { left + right } main :: fn () i32 { add(20) }", "error[E_LOWER]"),
         ]
         for name, text, expected in rejected:
             program = directory / f"{name}.mi"

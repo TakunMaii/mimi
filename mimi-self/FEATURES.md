@@ -19,8 +19,8 @@ the Python suite covers it through the self-hosted compiler.
 | If/match, loops, ranges, break/continue, defer | Partial | `if`/`else if`/`else`, enum `if let`, `while`/`loop`/`do-while`, collection/range `for`, and match nodes with duplicate-arm rejection are retained in recursive block statement lists; loop-context/type validation and enum exhaustiveness pending | `tests/parser.mi` |
 | Structs, enums, generics, closures | Supported | Not implemented | Pending |
 | Name resolution and type checking | Supported | Module, parameter, and local name resolution with source-spanned errors; initial scalar and tuple element checks cover bindings, assignments, conditions, operators, and returns, while structured values, calls, and generics remain pending | `tests/semantic.mi` |
-| MIR/LIR lowering and register allocation | Supported | Arena-backed typed IR for no-argument scalar functions, bindings, expressions, and returns; control flow, calls, aggregates, and register allocation pending | `tests/ir.mi` |
-| x86_64 and AArch64 code generation | Supported | C backend compiles the scalar IR subset via host `cc`; direct machine-code backends pending | `test.py` scalar and stage1 checks |
+| MIR/LIR lowering and register allocation | Supported | Arena-backed typed IR for scalar functions, parameters, direct calls, bindings, expressions, and returns; control flow, aggregates, and register allocation pending | `tests/ir.mi` |
+| x86_64 and AArch64 code generation | Supported | C backend compiles scalar functions and calls via host `cc`; direct machine-code backends pending | `test.py` scalar and stage1 checks |
 | C imports, ABI shims, native linking | Supported | Stage1 links scalar C output through `cc`; C imports and callbacks pending | `test.py` stage1 checks |
 | Build and C-import caches | Not in current remote version | Not implemented | Pending |
 | Stage1/stage2 bootstrap | Supported by Rust only | Stage1 builds with Rust and compiles the scalar subset; stage2 remains blocked on full language lowering | `test.py` stage1 checks |

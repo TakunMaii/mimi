@@ -23,10 +23,11 @@ target/debug/mimi build mimi-self/src/compiler.mi -o /tmp/mimi-stage1 --c-source
 /tmp/mimi-stage1 build scalar.mi -o scalar --no-cache
 ```
 
-Stage1 currently accepts no-argument scalar functions with bindings,
-arithmetic, boolean expressions, numeric casts, and returns. It writes
-temporary C, invokes the host `cc`, and removes the C file. Parameters, calls,
-control flow, aggregates, imports, and generics remain unsupported in stage1.
+Stage1 currently accepts scalar helper functions, parameters, direct calls,
+bindings, arithmetic, boolean expressions, numeric casts, and returns. `main`
+still takes no parameters. It writes temporary C, invokes the host `cc`, and
+removes the C file. Control flow, aggregates, imports, C ABI calls, and generics
+remain unsupported in stage1.
 The Python suite checks stage1 against stage0 on supported programs.
 
 Once stage1 can compile its own source, test both bootstrap stages with:
