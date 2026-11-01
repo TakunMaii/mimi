@@ -488,8 +488,8 @@ identifier_kind_raw :: fn (source : *u8, start : u64, end : u64) u8 {
         hash = hash * 131 + source[index]
         index = index + 1
     }
-    if hash == 262750338 || hash == 302589253 { return 4 }
-    if hash == 13418 { return 5 }
+    if hash == 262750338 { return 4 }
+    if hash == 30258925323 { return 5 }
     if hash == 13472 { return 160 }
     if hash == 4471061603997 { return 161 }
     if hash == 228960337 { return 162 }
@@ -973,7 +973,8 @@ pub parse_transfer_statement :: fn (source : []u8, storage : *ExpressionArena) *
     statement := storage.last as *StatementNode
     statement.kind = kind
     statement.start = keyword.1
-    statement.end = source.len
+    statement.end = keyword.2
+    if !expression_is_null(value) { statement.end = value.end }
     statement.value = value
     statement.next = mimi_buffer_empty() as *StatementNode
     statement.body = mimi_buffer_empty() as *BlockNode
@@ -994,7 +995,7 @@ pub parse_defer_statement :: fn (source : []u8, storage : *ExpressionArena) *Sta
     if next.0 == 0 { return mimi_buffer_empty() as *StatementNode }
     if next.0 == 123 {
         body := parse_block_span(source[next.1:source.len], next.1, storage)
-        if block_node_is_null(body) { return mimi_buffer_empty() as *StatementNode }
+        if block_node_is_null(body) || next_token(source, body.end).0 != 0 { return mimi_buffer_empty() as *StatementNode }
         if mimi_arena_allocate(storage, 104, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
         statement := storage.last as *StatementNode
         statement.kind = 290
@@ -1042,7 +1043,8 @@ pub parse_assignment_statement :: fn (source : []u8, storage : *ExpressionArena)
     equal_end : u64 = source.len
     while cursor < source.len {
         token := next_token(source, cursor)
-        if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *StatementNode }
+        if token.0 == 0 { break }
+        if token.0 == 255 { return mimi_buffer_empty() as *StatementNode }
         cursor = token.2
         if token.0 == 40 { paren_depth = paren_depth + 1 } else {
             if token.0 == 41 {
@@ -1252,7 +1254,6 @@ pub parse_block_span :: fn (source : []u8, offset : u64, storage : *ExpressionAr
             }
         }
     }
-    if next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *BlockNode }
     if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *BlockNode }
     block := storage.last as *BlockNode
     block.start = opening.1 + offset
@@ -1266,6 +1267,7 @@ pub parse_block_span :: fn (source : []u8, offset : u64, storage : *ExpressionAr
 pub parse_statement_block :: fn (source : []u8, offset : u64, storage : *ExpressionArena) *BlockNode {
     block := parse_block_span(source, offset, storage)
     if block_node_is_null(block) { return block }
+    if next_token(source, block.end - offset).0 != 0 { return mimi_buffer_empty() as *BlockNode }
     opening := next_token(source, 0)
     closing := block.content_end - offset
     cursor := opening.2
@@ -1278,9 +1280,10 @@ pub parse_statement_block :: fn (source : []u8, offset : u64, storage : *Express
     last : *StatementNode = mimi_buffer_empty() as *StatementNode
     while cursor < closing {
         token := next_token(source, cursor)
+        if token.0 == 125 && token.1 == closing { break }
         if token.0 == 0 || token.0 == 255 || token.2 > closing { return mimi_buffer_empty() as *BlockNode }
         at_top_level := paren_depth == 0 && bracket_depth == 0 && brace_depth == 0
-        if at_top_level && token.1 > segment_start && (statement_starts_here(source, token) || (previous_kind == 125 && expression_starts_statement(token.0)) || (can_end_expression(previous_kind) && starts_expression_atom(token.0))) {
+        if at_top_level && token.1 > segment_start && next_token(source, segment_start).1 < token.1 && ((previous_kind != 44 && statement_starts_here(source, token)) || (previous_kind == 125 && expression_starts_statement(token.0)) || (can_end_expression(previous_kind) && starts_expression_atom(token.0))) {
             previous := parse_statement_piece(source[segment_start:token.1], segment_start + offset, storage)
             if statement_node_is_null(previous) { return mimi_buffer_empty() as *BlockNode }
             if first == (mimi_buffer_empty() as *StatementNode) { first = previous } else { last.next = previous }
@@ -1501,6 +1504,12 @@ shift_control_statement :: fn (statement : *StatementNode, offset : u64) void {
         node := statement.if_let
         node.start = node.start + offset
         node.end = node.end + offset
+        node.variant_start = node.variant_start + offset
+        node.variant_end = node.variant_end + offset
+        if node.binding_start != 0 || node.binding_end != 0 {
+            node.binding_start = node.binding_start + offset
+            node.binding_end = node.binding_end + offset
+        }
         node.value.start = node.value.start + offset
         node.value.end = node.value.end + offset
         shift_expression_children(node.value, offset)
@@ -1595,10 +1604,8 @@ shift_expression_tree :: fn (expression : *ExprNode, offset : u64) void {
 shift_statement_spans :: fn (statement : *StatementNode, offset : u64) void {
     statement.start = statement.start + offset
     statement.end = statement.end + offset
-    if !expression_is_null(statement.value) {
-        statement.value.start = statement.value.start + offset
-        statement.value.end = statement.value.end + offset
-        shift_expression_children(statement.value, offset)
+    if !expression_is_null(statement.value) && (binding_node_is_null(statement.binding) || statement.value != statement.binding.initializer) {
+        shift_expression_tree(statement.value, offset)
     }
     if !block_node_is_null(statement.body) {
         shift_block_span(statement.body, offset)
@@ -1609,12 +1616,10 @@ shift_statement_spans :: fn (statement : *StatementNode, offset : u64) void {
         statement.binding.name_start = statement.binding.name_start + offset
         statement.binding.name_end = statement.binding.name_end + offset
         if !expression_is_null(statement.binding.data_type) {
-            statement.binding.data_type.start = statement.binding.data_type.start + offset
-            statement.binding.data_type.end = statement.binding.data_type.end + offset
+            shift_expression_tree(statement.binding.data_type, offset)
         }
         if !expression_is_null(statement.binding.initializer) {
-            statement.binding.initializer.start = statement.binding.initializer.start + offset
-            statement.binding.initializer.end = statement.binding.initializer.end + offset
+            shift_expression_tree(statement.binding.initializer, offset)
         }
     }
 }
@@ -1692,7 +1697,7 @@ parse_if_statement_at :: fn (source : []u8, offset : u64, storage : *ExpressionA
             end = else_if.end - offset
         }
     }
-    if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *IfNode }
+    if mimi_arena_allocate(storage, 48, 8) == 0 { return mimi_buffer_empty() as *IfNode }
     node := storage.last as *IfNode
     node.start = keyword.1 + offset
     node.end = end + offset
@@ -1781,7 +1786,7 @@ pub parse_if_let_statement :: fn (source : []u8, storage : *ExpressionArena) *If
         if block_node_is_null(else_branch) || next_token(source, else_branch.end).0 != 0 { return mimi_buffer_empty() as *IfLetNode }
         end = else_branch.end
     }
-    if mimi_arena_allocate(storage, 56, 8) == 0 { return mimi_buffer_empty() as *IfLetNode }
+    if mimi_arena_allocate(storage, 72, 8) == 0 { return mimi_buffer_empty() as *IfLetNode }
     node := storage.last as *IfLetNode
     node.start = keyword.1
     node.end = end
@@ -1829,6 +1834,11 @@ pub parse_loop_statement :: fn (source : []u8, storage : *ExpressionArena) *Loop
         if keyword.0 == 169 { kind = 286 } else {
             if keyword.0 == 168 { kind = 287 } else { return mimi_buffer_empty() as *LoopNode }
         }
+        if kind == 287 {
+            opening := next_token(source, keyword.2)
+            if opening.0 != 123 { return mimi_buffer_empty() as *LoopNode }
+            block_start = opening.1
+        } else {
         cursor := keyword.2
         paren_depth : u64 = 0
         found_block := false
@@ -1855,6 +1865,7 @@ pub parse_loop_statement :: fn (source : []u8, storage : *ExpressionArena) *Loop
         if expression_is_null(condition) { return mimi_buffer_empty() as *LoopNode }
         condition.start = condition.start + keyword.2
         condition.end = condition.end + keyword.2
+        }
     }
     body := parse_block_span(source[block_start:source.len], block_start, storage)
     if block_node_is_null(body) { return mimi_buffer_empty() as *LoopNode }
@@ -1931,8 +1942,8 @@ pub parse_for_statement :: fn (source : []u8, storage : *ExpressionArena) *ForNo
         if token.0 == 135 { is_range = true } else { range_cursor = token.2 }
     }
     if is_range {
-        range_start := parse_expression(source[in_token.2:range_cursor], storage)
-        range_end := parse_expression(source[range_cursor + 2:header_end], storage)
+        range_start = parse_expression(source[in_token.2:range_cursor], storage)
+        range_end = parse_expression(source[range_cursor + 2:header_end], storage)
         if expression_is_null(range_start) || expression_is_null(range_end) { return mimi_buffer_empty() as *ForNode }
         range_start.end = range_start.end + in_token.2
         range_start.start = range_start.start + in_token.2
@@ -1966,7 +1977,7 @@ pub match_node_is_null :: fn (node : *MatchNode) bool {
 
 pub parse_match_expression :: fn (source : []u8, storage : *ExpressionArena) *MatchNode {
     keyword := next_token(source, 0)
-    if keyword.0 != 162 { return mimi_buffer_empty() as *MatchNode }
+    if keyword.0 != 163 { return mimi_buffer_empty() as *MatchNode }
     cursor := keyword.2
     paren_depth : u64 = 0
     bracket_depth : u64 = 0
@@ -2006,7 +2017,7 @@ pub parse_match_expression :: fn (source : []u8, storage : *ExpressionArena) *Ma
     arm_count : u64 = 0
     first : *MatchArmNode = mimi_buffer_empty() as *MatchArmNode
     last : *MatchArmNode = mimi_buffer_empty() as *MatchArmNode
-    close_end := source.len
+    close_end : u64 = 0
     while cursor < source.len {
         if next_token(source, cursor).0 == 125 {
             close := next_token(source, cursor)
@@ -2091,7 +2102,7 @@ pub parse_match_expression :: fn (source : []u8, storage : *ExpressionArena) *Ma
         if expression_is_null(arm_value) { return mimi_buffer_empty() as *MatchNode }
         arm_value.start = arm_value.start + value_start
         arm_value.end = arm_value.end + value_start
-        if mimi_arena_allocate(storage, 56, 8) == 0 { return mimi_buffer_empty() as *MatchNode }
+        if mimi_arena_allocate(storage, 64, 8) == 0 { return mimi_buffer_empty() as *MatchNode }
         arm := storage.last as *MatchArmNode
         arm.start = arm_start
         arm.end = segment_end
@@ -2112,7 +2123,7 @@ pub parse_match_expression :: fn (source : []u8, storage : *ExpressionArena) *Ma
         if separator.0 != 44 { return mimi_buffer_empty() as *MatchNode }
         cursor = separator.2
     }
-    if close_end == source.len || next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *MatchNode }
+    if close_end == 0 || next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *MatchNode }
     if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *MatchNode }
     node := storage.last as *MatchNode
     node.start = keyword.1
@@ -2217,7 +2228,7 @@ pub parse_enum_declaration :: fn (source : []u8, storage : *ExpressionArena) *En
     first : *EnumVariantNode = mimi_buffer_empty() as *EnumVariantNode
     last : *EnumVariantNode = mimi_buffer_empty() as *EnumVariantNode
     count : u64 = 0
-    close_end := source.len
+    close_end : u64 = 0
     while cursor < source.len {
         if next_token(source, cursor).0 == 125 {
             close := next_token(source, cursor)
@@ -2314,7 +2325,7 @@ pub parse_enum_declaration :: fn (source : []u8, storage : *ExpressionArena) *En
         if separator.0 != 44 { return mimi_buffer_empty() as *EnumNode }
         cursor = separator.2
     }
-    if close_end == source.len || next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *EnumNode }
+    if close_end == 0 || next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *EnumNode }
     if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *EnumNode }
     node := storage.last as *EnumNode
     node.start = keyword.1
@@ -2331,7 +2342,7 @@ pub struct_node_is_null :: fn (node : *StructNode) bool {
 
 pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *StructNode {
     keyword := next_token(source, 0)
-    if keyword.0 != 163 { return mimi_buffer_empty() as *StructNode }
+    if keyword.0 != 161 { return mimi_buffer_empty() as *StructNode }
     cursor := keyword.2
     parameters : *GenericParameterList = mimi_buffer_empty() as *GenericParameterList
     next := next_token(source, cursor)
@@ -2360,7 +2371,7 @@ pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *
     last_method : *StructMethodNode = mimi_buffer_empty() as *StructMethodNode
     count : u64 = 0
     method_count : u64 = 0
-    close_end := source.len
+    close_end : u64 = 0
     while cursor < source.len {
         if next_token(source, cursor).0 == 125 {
             close := next_token(source, cursor)
@@ -2500,8 +2511,8 @@ pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *
         cursor = separator.2
         }
     }
-    if close_end == source.len || next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *StructNode }
-    if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *StructNode }
+    if close_end == 0 || next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *StructNode }
+    if mimi_arena_allocate(storage, 56, 8) == 0 { return mimi_buffer_empty() as *StructNode }
     node := storage.last as *StructNode
     node.start = keyword.1
     node.end = close_end
@@ -2567,7 +2578,9 @@ parse_struct_method :: fn (source : []u8, start : u64, storage : *ExpressionAren
     if expression_is_null(return_type) { return mimi_buffer_empty() as *StructMethodNode }
     return_type.start = return_type.start + parameters_close
     return_type.end = return_type.end + parameters_close
-    body := parse_statement_block(source[body_open.1:source.len], body_open.1, storage)
+    body_span := parse_block_span(source[body_open.1:source.len], body_open.1, storage)
+    if block_node_is_null(body_span) { return mimi_buffer_empty() as *StructMethodNode }
+    body := parse_statement_block(source[body_open.1:body_span.end], body_open.1, storage)
     if block_node_is_null(body) { return mimi_buffer_empty() as *StructMethodNode }
     header := FunctionHeader { start = start, end = body_open.2, name_start = name.1, name_end = name.2, parameters_start = parameters_open.2, parameters_end = parameters_end, return_type_start = parameters_close, return_type_end = return_end, body_start = body_open.2 }
     parameters := parse_parameters(source, &header, storage)
@@ -2628,7 +2641,7 @@ pub parse_struct_literal :: fn (source : []u8, storage : *ExpressionArena) *Stru
     first : *StructLiteralFieldNode = mimi_buffer_empty() as *StructLiteralFieldNode
     last : *StructLiteralFieldNode = mimi_buffer_empty() as *StructLiteralFieldNode
     count : u64 = 0
-    close_end := source.len
+    close_end : u64 = 0
     while cursor < source.len {
         if next_token(source, cursor).0 == 125 {
             close := next_token(source, cursor)
@@ -2709,7 +2722,7 @@ pub parse_struct_literal :: fn (source : []u8, storage : *ExpressionArena) *Stru
         if separator.0 != 44 { return mimi_buffer_empty() as *StructLiteralNode }
         cursor = separator.2
     }
-    if close_end == source.len || next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *StructLiteralNode }
+    if close_end == 0 || next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *StructLiteralNode }
     if mimi_arena_allocate(storage, 48, 8) == 0 { return mimi_buffer_empty() as *StructLiteralNode }
     literal := storage.last as *StructLiteralNode
     literal.start = type_name.1
@@ -2776,12 +2789,13 @@ pub parse_module :: fn (source : []u8, storage : *ExpressionArena) *ModuleNode {
     brace_depth : u64 = 0
     paren_depth : u64 = 0
     bracket_depth : u64 = 0
+    previous_kind : u8 = 0
     while cursor < source.len {
         token := next_token(source, cursor)
         if token.0 == 255 { return mimi_buffer_empty() as *ModuleNode }
         if token.0 == 0 { break }
         at_top := brace_depth == 0 && paren_depth == 0 && bracket_depth == 0
-        if at_top && token.1 > segment_start && module_declaration_starts(source, token) {
+        if at_top && token.1 > segment_start && previous_kind != 166 && previous_kind != 167 && module_declaration_starts(source, token) {
             declaration := parse_module_declaration(source[segment_start:token.1], segment_start, storage)
             if declaration == (mimi_buffer_empty() as *ModuleDeclarationNode) { return mimi_buffer_empty() as *ModuleNode }
             previous := first
@@ -2795,6 +2809,7 @@ pub parse_module :: fn (source : []u8, storage : *ExpressionArena) *ModuleNode {
             segment_start = token.1
         }
         cursor = token.2
+        previous_kind = token.0
         if token.0 == 123 { brace_depth = brace_depth + 1 } else {
             if token.0 == 125 {
                 if brace_depth == 0 { return mimi_buffer_empty() as *ModuleNode }
@@ -2881,7 +2896,6 @@ parse_module_declaration :: fn (source : []u8, offset : u64, storage : *Expressi
     colon1 := next_token(source, name.2)
     colon2 := next_token(source, colon1.2)
     if name.0 != 1 || colon1.0 != 58 { return mimi_buffer_empty() as *ModuleDeclarationNode }
-    if !is_external && colon2.0 != 58 { return mimi_buffer_empty() as *ModuleDeclarationNode }
     declaration := next_token(source, if is_external { colon1.2 } else { colon2.2 })
     kind : u64 = 0
     binding : *BindingNode = mimi_buffer_empty() as *BindingNode
@@ -2922,8 +2936,8 @@ parse_module_declaration :: fn (source : []u8, offset : u64, storage : *Expressi
                 end = declaration.1 + enum_node.end
                 shift_enum_declaration(enum_node, offset + declaration.1)
             } else {
-                if declaration.0 == 58 {
-                    at := next_token(source, declaration.2)
+                if declaration.0 == 64 {
+                    at := declaration
                     import_name := next_token(source, at.2)
                     open := next_token(source, import_name.2)
                     path := next_token(source, open.2)
@@ -3121,7 +3135,7 @@ pub parse_function_definition :: fn (source : []u8, storage : *ExpressionArena) 
     header := parse_function_header(source, storage)
     if function_header_is_null(header) { return mimi_buffer_empty() as *FunctionNode }
     if header.body_start >= source.len { return mimi_buffer_empty() as *FunctionNode }
-    body := parse_statement_block(source[header.body_start:source.len], header.body_start, storage)
+    body := parse_statement_block(source[header.body_start - 1:source.len], header.body_start - 1, storage)
     if block_node_is_null(body) { return mimi_buffer_empty() as *FunctionNode }
     parameters := parse_parameters(source, header, storage)
     if header.parameters_start != header.parameters_end && parameter_list_is_null(parameters) {

@@ -2963,6 +2963,10 @@ impl Builder {
                 ..
             } => Some(HirType::Named((*name).to_string())),
             Expression::MemberAccess { object, member } => {
+                if let Some(HirType::Tuple(elements)) = self.expression_type(object) {
+                    let index = member.parse::<usize>().ok()?;
+                    return elements.get(index).cloned();
+                }
                 if member == "len"
                     && matches!(
                         self.expression_type(object),

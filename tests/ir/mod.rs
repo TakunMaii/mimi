@@ -104,6 +104,22 @@ fn builds_and_runs_explicit_numeric_casts() {
 }
 
 #[test]
+fn builds_and_runs_cast_of_tuple_member_and_following_statements() {
+    let source = std::env::temp_dir().join(format!("mimi_tuple_cast_source_{}.mi", std::process::id()));
+    let executable = std::env::temp_dir().join(format!("mimi_tuple_cast_executable_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "pair :: fn () (u8, i32) { (42 as u8, 7) } main :: fn () i32 { parts := pair() value := parts.0 as u64 if value != 42 { return 1 } if parts.1 != 7 { return 2 } 0 }",
+    )
+    .unwrap();
+    build_file(source.to_str().unwrap(), executable.to_str().unwrap(), &[], &[], &[]).unwrap();
+    let status = std::process::Command::new(&executable).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(executable).unwrap();
+}
+
+#[test]
 fn builds_and_runs_assert_and_reports_panic_intrinsics() {
     let directory = std::env::temp_dir().join(format!("mimi_intrinsics_{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();

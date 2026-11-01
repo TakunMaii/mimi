@@ -13,10 +13,11 @@ main :: fn () i32 {
     if lexer.next_token(members, 7).0 != 2 || lexer.next_token(members, 7).2 != 8 { return 56 }
     if lexer.next_token(members, 8).0 != 46 { return 57 }
     if lexer.next_token(members, 9).0 != 2 { return 58 }
-    if lexer.next_token("fn true f8 if", 0).0 != 160 { return 15 }
-    if lexer.next_token("fn true f8 if", 2).0 != 4 { return 16 }
-    if lexer.next_token("fn true f8 if", 7).0 != 5 { return 17 }
-    if lexer.next_token("fn true f8 if", 10).0 != 164 { return 18 }
+    if lexer.next_token("fn true false if", 0).0 != 160 { return 15 }
+    if lexer.next_token("fn true false if", 2).0 != 4 { return 16 }
+    if lexer.next_token("fn true false if", 7).0 != 5 { return 17 }
+    if lexer.next_token("fn true false if", 13).0 != 164 { return 18 }
+    if lexer.next_token("f8", 0).0 != 1 { return 71 }
     if lexer.next_token("== != <= >= && || => ..", 0).0 != 128 { return 19 }
     if lexer.next_token("== != <= >= && || => ..", 2).0 != 129 { return 20 }
     if lexer.next_token("== != <= >= && || => ..", 5).0 != 130 { return 21 }

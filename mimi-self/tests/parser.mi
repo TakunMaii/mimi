@@ -88,17 +88,17 @@ main :: fn () i32 {
     function_definition := lexer.parse_function_definition(function_definition_source, &storage)
     if lexer.function_node_is_null(function_definition) || function_definition.name_end != 4 { return 197 }
     if function_definition.parameters.data_type.kind != 270 || function_definition.return_type.kind != 270 { return 198 }
-    if function_definition.body.start != 27 || function_definition.body.end != function_definition_source.len { return 199 }
-    if function_definition.body.content_start != 28 || function_definition.body.content_end + 1 != function_definition.body.end { return 200 }
+    if function_definition.body.start != 29 || function_definition.body.end != function_definition_source.len { return 199 }
+    if function_definition.body.content_start != 30 || function_definition.body.content_end + 1 != function_definition.body.end { return 200 }
     if function_definition.body.statements.kind != 304 || function_definition.body.statements.if_statement.then_branch.statements.kind != 285 { return 306 }
     if function_definition.body.statements.next.kind != 280 { return 307 }
     composed_block_source := "{ first := 1 first = first + 1 return first }"
     composed_block := lexer.parse_statement_block(composed_block_source, 100, &storage)
     if lexer.block_node_is_null(composed_block) || composed_block.statements.kind != 285 { return 288 }
     if composed_block.statements.binding.name_start != 102 || composed_block.statements.binding.initializer.start != 111 { return 289 }
-    if composed_block.statements.next.kind != 284 || composed_block.statements.next.start != 112 { return 290 }
-    if composed_block.statements.next.next.kind != 280 || composed_block.statements.next.next.start != 134 { return 291 }
-    if composed_block.statements.next.next.value.start != 141 || composed_block.statements.next.next.end != 146 { return 292 }
+    if composed_block.statements.next.kind != 284 || composed_block.statements.next.start != 113 { return 290 }
+    if composed_block.statements.next.next.kind != 280 || composed_block.statements.next.next.start != 131 { return 291 }
+    if composed_block.statements.next.next.value.start != 138 || composed_block.statements.next.next.end != 143 { return 292 }
     empty_composed_block := lexer.parse_statement_block("{}", 0, &storage)
     if lexer.block_node_is_null(empty_composed_block) || !lexer.statement_node_is_null(empty_composed_block.statements) { return 293 }
     whitespace_composed_block := lexer.parse_statement_block("{   \n }", 0, &storage)
@@ -115,31 +115,31 @@ main :: fn () i32 {
     control_composed_block := lexer.parse_statement_block(control_composed_source, 50, &storage)
     if lexer.block_node_is_null(control_composed_block) || control_composed_block.statements.kind != 304 { return 295 }
     if control_composed_block.statements.if_statement.condition.start != 55 || control_composed_block.statements.if_statement.then_branch.start != 61 { return 296 }
-    if control_composed_block.statements.if_statement.else_branch.start != 80 || control_composed_block.statements.next.kind != 280 { return 297 }
+    if control_composed_block.statements.if_statement.else_branch.start != 79 || control_composed_block.statements.next.kind != 280 { return 297 }
     if control_composed_block.statements.if_statement.then_branch.statements.kind != 280 || control_composed_block.statements.if_statement.else_branch.statements.kind != 280 { return 302 }
     expression_after_control := lexer.parse_statement_block("{ if ready {} work() }", 0, &storage)
     if lexer.block_node_is_null(expression_after_control) || expression_after_control.statements.kind != 304 || expression_after_control.statements.next.kind != 303 { return 314 }
     loop_composed_block := lexer.parse_statement_block("{ while ready { break } return 0 }", 20, &storage)
     if lexer.block_node_is_null(loop_composed_block) || loop_composed_block.statements.kind != 306 || loop_composed_block.statements.loop_statement.kind != 286 { return 298 }
-    if loop_composed_block.statements.loop_statement.body.start != 36 || loop_composed_block.statements.next.kind != 280 { return 299 }
+    if loop_composed_block.statements.loop_statement.body.start != 34 || loop_composed_block.statements.next.kind != 280 { return 299 }
     if loop_composed_block.statements.loop_statement.body.statements.kind != 281 { return 303 }
     if_let_composed_block := lexer.parse_statement_block("{ if some(value) := option { work(value) } return 0 }", 10, &storage)
-    if lexer.block_node_is_null(if_let_composed_block) || if_let_composed_block.statements.kind != 305 || if_let_composed_block.statements.if_let.variant_start != 14 { return 300 }
+    if lexer.block_node_is_null(if_let_composed_block) || if_let_composed_block.statements.kind != 305 || if_let_composed_block.statements.if_let.variant_start != 15 { return 300 }
     for_composed_block := lexer.parse_statement_block("{ for item in values { work(item) } return 0 }", 30, &storage)
-    if lexer.block_node_is_null(for_composed_block) || for_composed_block.statements.kind != 307 || for_composed_block.statements.for_loop.variable_start != 35 { return 301 }
+    if lexer.block_node_is_null(for_composed_block) || for_composed_block.statements.kind != 307 || for_composed_block.statements.for_loop.variable_start != 36 { return 301 }
     match_composed_block := lexer.parse_statement_block("{ match choice { some(value) => value, none => 0, } return 0 }", 40, &storage)
     if lexer.block_node_is_null(match_composed_block) || match_composed_block.statements.kind != 308 || match_composed_block.statements.match_statement.arm_count != 2 { return 304 }
     if match_composed_block.statements.match_statement.value.start != 48 || match_composed_block.statements.next.kind != 280 { return 305 }
     destructure_composed_block := lexer.parse_statement_block("{ first, second := (1, true) return first }", 60, &storage)
     if lexer.block_node_is_null(destructure_composed_block) || destructure_composed_block.statements.kind != 309 { return 308 }
     if destructure_composed_block.statements.tuple_binding.name_count != 2 || destructure_composed_block.statements.tuple_binding.names.start != 62 { return 309 }
-    if destructure_composed_block.statements.tuple_binding.value.start != 82 || destructure_composed_block.statements.next.kind != 280 { return 310 }
+    if destructure_composed_block.statements.tuple_binding.value.start != 79 || destructure_composed_block.statements.next.kind != 280 { return 310 }
     unclosed_function_definition := lexer.parse_function_definition("work :: fn () i32 { return 1", &storage)
     if !lexer.function_node_is_null(unclosed_function_definition) { return 201 }
     if_statement_source := "if ready { left := 1 } else { right := 2 }"
     if_statement := lexer.parse_if_statement(if_statement_source, &storage)
     if lexer.if_node_is_null(if_statement) || if_statement.condition.kind != 1 { return 202 }
-    if if_statement.then_branch.start != 10 || if_statement.then_branch.content_start != 11 { return 203 }
+    if if_statement.then_branch.start != 9 || if_statement.then_branch.content_start != 10 { return 203 }
     if lexer.block_node_is_null(if_statement.else_branch) { return 204 }
     if if_statement.else_branch.end != if_statement_source.len { return 208 }
     nested_if_block := lexer.parse_if_statement("if ready { if nested { work() } }", &storage)
@@ -152,7 +152,7 @@ main :: fn () i32 {
     if_let_node := lexer.parse_if_let_statement(if_let_source, &storage)
     if lexer.if_let_node_is_null(if_let_node) || if_let_node.variant_start != 3 || if_let_node.variant_end != 7 { return 237 }
     if if_let_node.binding_start != 8 || if_let_node.binding_end != 13 || if_let_node.value.kind != 1 { return 238 }
-    if if_let_node.value.start != 17 || if_let_node.then_branch.start != 24 || if_let_node.else_branch.start != 37 { return 239 }
+    if if_let_node.value.start != 18 || if_let_node.then_branch.start != 25 || if_let_node.else_branch.start != 40 { return 239 }
     if if_let_node.end != if_let_source.len { return 240 }
     invalid_if_let := lexer.parse_if_let_statement("if some(value) option {}", &storage)
     if !lexer.if_let_node_is_null(invalid_if_let) { return 241 }
@@ -160,7 +160,7 @@ main :: fn () i32 {
     else_if_node := lexer.parse_if_statement(else_if_source, &storage)
     if lexer.if_node_is_null(else_if_node) || lexer.if_node_is_null(else_if_node.else_if) { return 222 }
     if else_if_node.else_if.start != 22 || else_if_node.else_if.condition.start != 25 { return 223 }
-    if else_if_node.else_if.else_branch.start != 42 || else_if_node.end != else_if_source.len { return 224 }
+    if else_if_node.else_if.else_branch.start != 45 || else_if_node.end != else_if_source.len { return 224 }
     if_expression := lexer.parse_if_expression("if ready { yes } else { no }", &storage)
     if lexer.expression_is_null(if_expression) { return 215 }
     if if_expression.kind != 288 || if_expression.left.kind != 1 { return 218 }
@@ -172,7 +172,7 @@ main :: fn () i32 {
     match_node := lexer.parse_match_expression(match_source, &storage)
     if lexer.match_node_is_null(match_node) || match_node.value.kind != 1 || match_node.arm_count != 2 { return 231 }
     if match_node.arms.variant_start != 15 || match_node.arms.binding_start != 20 || match_node.arms.value.kind != 1 { return 232 }
-    if lexer.expression_is_null(match_node.arms.next) || match_node.arms.next.variant_start != 36 || match_node.arms.next.value.kind != 2 { return 233 }
+    if lexer.expression_is_null(match_node.arms.next) || match_node.arms.next.variant_start != 37 || match_node.arms.next.value.kind != 2 { return 233 }
     if match_node.end != match_source.len { return 234 }
     empty_match := lexer.parse_match_expression("match value {}", &storage)
     if !lexer.match_node_is_null(empty_match) { return 235 }
@@ -193,7 +193,7 @@ main :: fn () i32 {
     if lexer.enum_node_is_null(enum_node) || enum_node.variant_count != 2 || enum_node.parameters.count != 1 { return 249 }
     if enum_node.start != 0 || enum_node.end != enum_source.len || enum_node.variants.name_start != 11 { return 250 }
     if enum_node.variants.payload_type.kind != 275 || enum_node.variants.payload_type.start != 16 { return 251 }
-    if enum_node.variants.next.name_start != 31 || !lexer.expression_is_null(enum_node.variants.next.payload_type) { return 252 }
+    if enum_node.variants.next.name_start != 30 || !lexer.expression_is_null(enum_node.variants.next.payload_type) { return 252 }
     invalid_enum_payload := lexer.parse_enum_declaration("enum { some(i32 extra) }", &storage)
     if !lexer.enum_node_is_null(invalid_enum_payload) { return 253 }
     duplicate_enum_variant := lexer.parse_enum_declaration("enum { some, some, }", &storage)
@@ -201,14 +201,14 @@ main :: fn () i32 {
     struct_source := "struct <T> { item : T, fixed : f32 : 32, mutable : f32 = 3.0, }"
     struct_node := lexer.parse_struct_declaration(struct_source, &storage)
     if lexer.struct_node_is_null(struct_node) || struct_node.field_count != 3 || struct_node.parameters.count != 1 { return 254 }
-    if struct_node.fields.name_start != 15 || struct_node.fields.data_type.kind != 270 || struct_node.fields.mutable != true { return 255 }
+    if struct_node.fields.name_start != 13 || struct_node.fields.data_type.kind != 270 || struct_node.fields.mutable != true { return 255 }
     if struct_node.fields.next.mutable != false || struct_node.fields.next.default_value.kind != 2 { return 256 }
     if struct_node.fields.next.next.mutable != true || struct_node.fields.next.next.default_value.kind != 2 { return 257 }
-    if struct_node.fields.next.next.default_value.start != 59 || struct_node.end != struct_source.len { return 258 }
+    if struct_node.fields.next.next.default_value.start != 57 || struct_node.end != struct_source.len { return 258 }
     method_source := "struct { x : i32, getX() :: fn (self : Self) i32 { self.x } }"
     method_struct := lexer.parse_struct_declaration(method_source, &storage)
     if lexer.struct_node_is_null(method_struct) || method_struct.method_count != 1 || method_struct.field_count != 1 { return 318 }
-    if method_struct.methods.name_start != 18 || method_struct.methods.function.parameters.name_start != 42 { return 319 }
+    if method_struct.methods.name_start != 18 || method_struct.methods.function.parameters.name_start != 32 { return 319 }
     if method_struct.methods.function.return_type.kind != 270 || method_struct.methods.function.body.statements.kind != 303 { return 320 }
     duplicate_struct_method := lexer.parse_struct_declaration("struct { get() :: fn () i32 { 1 } get() :: fn () i32 { 2 } }", &storage)
     if !lexer.struct_node_is_null(duplicate_struct_method) { return 321 }
@@ -216,15 +216,15 @@ main :: fn () i32 {
     parsed_module := lexer.parse_module(module_source, &storage)
     if lexer.module_node_is_null(parsed_module) || parsed_module.declaration_count != 7 { return 322 }
     if parsed_module.declarations.kind != 4 || parsed_module.declarations.name_start != 0 || parsed_module.declarations.path_start != 16 { return 323 }
-    if parsed_module.declarations.next.kind != 6 || parsed_module.declarations.next.path_end != 51 { return 324 }
+    if parsed_module.declarations.next.kind != 6 || parsed_module.declarations.next.path_end != 50 { return 324 }
     if parsed_module.declarations.next.next.kind != 8 || parsed_module.declarations.next.next.value_end - parsed_module.declarations.next.next.value_start != 2 { return 325 }
     if parsed_module.declarations.next.next.next.kind != 2 || parsed_module.declarations.next.next.next.struct_node.field_count != 1 { return 326 }
-    if parsed_module.declarations.next.next.next.next.kind != 1 || parsed_module.declarations.next.next.next.next.function.parameters.name_start != 137 { return 327 }
+    if parsed_module.declarations.next.next.next.next.kind != 1 || parsed_module.declarations.next.next.next.next.function.parameters.name_start != 127 { return 327 }
     if parsed_module.declarations.next.next.next.next.next.kind != 5 || parsed_module.declarations.next.next.next.next.next.binding.data_type.kind != 271 { return 328 }
     if parsed_module.declarations.next.next.next.next.next.next.kind != 1 || parsed_module.end != module_source.len { return 334 }
     public_module := lexer.parse_module("pub answer :: 42", &storage)
     if lexer.module_node_is_null(public_module) || public_module.declarations.kind != 5 || !public_module.declarations.is_public { return 329 }
-    if public_module.declarations.start != 0 || public_module.declarations.name_start != 4 || public_module.declarations.binding.initializer.start != 13 { return 330 }
+    if public_module.declarations.start != 0 || public_module.declarations.name_start != 4 || public_module.declarations.binding.initializer.start != 14 { return 330 }
     external_module := lexer.parse_module("extern puts : fn (text : []u8) i32", &storage)
     if lexer.module_node_is_null(external_module) || external_module.declaration_count != 1 || external_module.declarations.kind != 7 { return 331 }
     if !external_module.declarations.is_external || external_module.declarations.function.parameters.data_type.kind != 272 || external_module.declarations.function.return_type.kind != 270 { return 332 }
@@ -253,7 +253,7 @@ main :: fn () i32 {
     fresh_tuple := lexer.parse_tuple_literal("(left + 1, f(2, 3),)", &fresh_storage)
     if lexer.expression_is_null(fresh_tuple) || fresh_tuple.kind != 268 { return 263 }
     if fresh_tuple.left.kind != 262 || fresh_tuple.left.left.kind != 43 || fresh_tuple.left.right.kind != 263 { return 264 }
-    if fresh_tuple.start != 0 || fresh_tuple.end != 22 { return 265 }
+    if fresh_tuple.start != 0 || fresh_tuple.end != 20 { return 265 }
     expression_tuple_binding := lexer.parse_tuple_binding("first, second := (left + 1, f(2))", &fresh_storage)
     if lexer.tuple_binding_is_null(expression_tuple_binding) || expression_tuple_binding.name_count != 2 { return 278 }
     if expression_tuple_binding.value.left.kind != 262 || expression_tuple_binding.value.left.left.kind != 43 || expression_tuple_binding.value.left.right.kind != 263 { return 279 }
@@ -292,20 +292,20 @@ main :: fn () i32 {
     if !lexer.expression_is_null(malformed_struct_literal) { return 270 }
     while_statement := lexer.parse_loop_statement("while ready { work() }", &storage)
     if lexer.loop_node_is_null(while_statement) || while_statement.kind != 286 || while_statement.condition.kind != 1 { return 209 }
-    if while_statement.body.start != 12 || while_statement.end != 24 { return 210 }
+    if while_statement.body.start != 12 || while_statement.end != 22 { return 210 }
     loop_statement := lexer.parse_loop_statement("loop { work() }", &storage)
     if lexer.loop_node_is_null(loop_statement) || loop_statement.kind != 285 || !lexer.expression_is_null(loop_statement.condition) { return 211 }
     do_while_statement := lexer.parse_loop_statement("do { work() } while ready", &storage)
     if lexer.loop_node_is_null(do_while_statement) || do_while_statement.kind != 287 || do_while_statement.condition.kind != 1 { return 212 }
-    if do_while_statement.condition.start != 23 || do_while_statement.end != 28 { return 213 }
+    if do_while_statement.condition.start != 20 || do_while_statement.end != 25 { return 213 }
     invalid_do_while := lexer.parse_loop_statement("do { work() }", &storage)
     if !lexer.loop_node_is_null(invalid_do_while) { return 214 }
     collection_for := lexer.parse_for_statement("for item in values { work(item) }", &storage)
     if lexer.for_node_is_null(collection_for) || collection_for.is_range || collection_for.variable_start != 4 { return 226 }
-    if collection_for.iterable.kind != 1 || collection_for.iterable.start != 12 || collection_for.body.start != 20 { return 227 }
+    if collection_for.iterable.kind != 1 || collection_for.iterable.start != 12 || collection_for.body.start != 19 { return 227 }
     range_for := lexer.parse_for_statement("for index in 1..10 { work(index) }", &storage)
     if lexer.for_node_is_null(range_for) || !range_for.is_range || range_for.range_start.kind != 2 || range_for.range_end.kind != 2 { return 228 }
-    if range_for.range_start.start != 14 || range_for.range_end.start != 17 { return 229 }
+    if range_for.range_start.start != 13 || range_for.range_end.start != 16 { return 229 }
     invalid_for := lexer.parse_for_statement("for item values {}", &storage)
     if !lexer.for_node_is_null(invalid_for) { return 230 }
     parameters := lexer.parse_parameters("work :: fn (x : i32, ptr : *u8) bool {", function_header, &storage)
@@ -319,14 +319,20 @@ main :: fn () i32 {
     duplicate_parameter_header := lexer.parse_function_header(duplicate_parameter_source, &storage)
     duplicate_parameters := lexer.parse_parameters(duplicate_parameter_source, duplicate_parameter_header, &storage)
     if !lexer.parameter_list_is_null(duplicate_parameters) { return 311 }
+    lexer.expression_arena_release(&storage)
+    check_tuples()
+}
+
+check_tuples :: fn () i32 {
+    storage := lexer.expression_arena_init()
     tuple_node := lexer.parse_tuple_literal("(left, 2, \"x\",)", &storage)
     if lexer.expression_is_null(tuple_node) { return 117 }
     if tuple_node.kind != 268 { return tuple_node.kind as i32 }
     if tuple_node.left.kind != 262 { return tuple_node.left.kind as i32 }
-    if tuple_node.left.left.kind != 1 { return tuple_node.left.left.kind as i32 }
-    if tuple_node.left.right.kind != 262 { return tuple_node.left.right.kind as i32 }
-    if tuple_node.left.right.left.kind != 2 { return tuple_node.left.right.left.kind as i32 }
-    if tuple_node.left.right.right.kind != 3 { return tuple_node.left.right.right.kind as i32 }
+    if tuple_node.left.left.kind != 262 { return 118 }
+    if tuple_node.left.left.left.kind != 1 { return 122 }
+    if tuple_node.left.left.right.kind != 2 { return 123 }
+    if tuple_node.left.right.kind != 3 { return 128 }
     if tuple_node.start != 0 || tuple_node.end != 15 { return 119 }
     empty_tuple_node := lexer.parse_tuple_literal("()", &storage)
     if !lexer.expression_is_null(empty_tuple_node) { return 120 }
@@ -358,6 +364,12 @@ main :: fn () i32 {
     higher_order_return := lexer.parse_type(higher_order_source[higher_order_header.return_type_start:higher_order_header.return_type_end], &storage)
     if lexer.expression_is_null(higher_order_return) || higher_order_return.kind != 277 { return 174 }
     if higher_order_return.right.kind != 271 || higher_order_return.right.left.kind != 278 { return 175 }
+    lexer.expression_arena_release(&storage)
+    check_expressions()
+}
+
+check_expressions :: fn () i32 {
+    storage := lexer.expression_arena_init()
     atom := lexer.parse_expression("1", &storage)
     if lexer.expression_is_null(atom) { return 1 }
     if atom.kind != 2 { return atom.kind as i32 }
@@ -378,6 +390,12 @@ main :: fn () i32 {
     if expression.kind != 43 || expression.start != 0 || expression.end != 9 { return 2 }
     if expression.left.kind != 2 || expression.right.kind != 42 { return 3 }
     if expression.right.left.kind != 2 || expression.right.right.kind != 2 { return 4 }
+    lexer.expression_arena_release(&storage)
+    check_operators()
+}
+
+check_operators :: fn () i32 {
+    storage := lexer.expression_arena_init()
 
     grouped := lexer.parse_expression("(1 + 2) * 3", &storage)
     if lexer.expression_is_null(grouped) || grouped.kind != 42 { return 5 }
@@ -395,6 +413,12 @@ main :: fn () i32 {
     if lexer.expression_is_null(members) || members.kind != 260 { return 17 }
     if members.left.kind != 260 || members.right.kind != 2 { return 18 }
     if members.start != 0 || members.end != 8 { return 19 }
+    lexer.expression_arena_release(&storage)
+    check_calls()
+}
+
+check_calls :: fn () i32 {
+    storage := lexer.expression_arena_init()
 
     unary := lexer.parse_expression("-(a + 2)", &storage)
     if lexer.expression_is_null(unary) || unary.kind != 295 { return 9 }
@@ -416,7 +440,7 @@ main :: fn () i32 {
     if lexer.expression_is_null(indexed) || indexed.kind != 260 { return 21 }
     if indexed.left.kind != 261 || indexed.left.right.kind != 43 { return 22 }
     if indexed.left.right.right.kind != 42 { return 23 }
-    if indexed.start != 0 || indexed.end != 21 { return 24 }
+    if indexed.start != 0 || indexed.end != 22 { return 24 }
     empty_call := lexer.parse_expression("f()", &storage)
     if lexer.expression_is_null(empty_call) || empty_call.kind != 263 || !lexer.expression_is_null(empty_call.right) { return 27 }
     call := lexer.parse_expression("f(a + 1, g(2), c)", &storage)
@@ -439,6 +463,12 @@ main :: fn () i32 {
     if !lexer.expression_is_null(repeated_argument_comma) { return 38 }
     mismatched_call_delimiter := lexer.parse_expression("f(1]", &storage)
     if !lexer.expression_is_null(mismatched_call_delimiter) { return 39 }
+    lexer.expression_arena_release(&storage)
+    check_slices()
+}
+
+check_slices :: fn () i32 {
+    storage := lexer.expression_arena_init()
     bounded_slice := lexer.parse_expression("items[1 + 2:limit * 2]", &storage)
     if lexer.expression_is_null(bounded_slice) || bounded_slice.kind != 264 { return 40 }
     if bounded_slice.right.kind != 265 || bounded_slice.right.left.kind != 43 || bounded_slice.right.right.kind != 42 { return 41 }
@@ -460,14 +490,20 @@ main :: fn () i32 {
     if !lexer.expression_is_null(missing_index) { return 25 }
     unclosed_index := lexer.parse_expression("items[1", &storage)
     if !lexer.expression_is_null(unclosed_index) { return 26 }
+    lexer.expression_arena_release(&storage)
+    check_statements()
+}
+
+check_statements :: fn () i32 {
+    storage := lexer.expression_arena_init()
     inferred_declaration := lexer.parse_binding_declaration("count := 1 + 2", &storage)
     if lexer.binding_node_is_null(inferred_declaration) || inferred_declaration.binding_kind != 0 { return 139 }
     if inferred_declaration.initializer.kind != 43 || inferred_declaration.start != 0 || inferred_declaration.end != 14 { return 140 }
     if !lexer.expression_is_null(inferred_declaration.data_type) { return 141 }
     typed_declaration := lexer.parse_binding_declaration("items : []*u8 = make()", &storage)
     if lexer.binding_node_is_null(typed_declaration) || typed_declaration.binding_kind != 1 { return 142 }
-    if typed_declaration.data_type.kind != 272 || typed_declaration.data_type.start != 8 || typed_declaration.data_type.end != 14 { return 143 }
-    if typed_declaration.initializer.kind != 263 || typed_declaration.initializer.start != 17 || typed_declaration.end != 23 { return 144 }
+    if typed_declaration.data_type.kind != 272 || typed_declaration.data_type.start != 8 || typed_declaration.data_type.end != 13 { return 143 }
+    if typed_declaration.initializer.kind != 263 || typed_declaration.initializer.start != 16 || typed_declaration.end != 22 { return 144 }
     constant_declaration := lexer.parse_binding_declaration("answer :: 42", &storage)
     if lexer.binding_node_is_null(constant_declaration) || constant_declaration.binding_kind != 2 || constant_declaration.initializer.kind != 2 { return 145 }
     if !lexer.expression_is_null(constant_declaration.data_type) || constant_declaration.initializer.start != 10 { return 146 }
