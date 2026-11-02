@@ -1279,7 +1279,7 @@ pub parse_statement_block :: fn (source : []u8, offset : u64, storage : *Express
         at_top_level := paren_depth == 0 && bracket_depth == 0 && brace_depth == 0
         first_token := next_token(source, segment_start)
         starts_new := false
-        if previous_kind != 44 && previous_kind != 58 && previous_kind != 165 && statement_starts_here(source, token) { starts_new = true }
+        if previous_kind != 44 && previous_kind != 58 && previous_kind != 61 && previous_kind != 165 && previous_kind != 175 && statement_starts_here(source, token) { starts_new = true }
         if previous_kind == 125 && expression_starts_statement(token.0) { starts_new = true }
         if can_end_expression(previous_kind) && starts_expression_atom(token.0) { starts_new = true }
         if previous_kind == 125 && token.0 == 169 && first_token.0 == 168 { starts_new = false }
@@ -1704,7 +1704,7 @@ parse_if_statement_at :: fn (source : []u8, offset : u64, storage : *ExpressionA
 pub parse_if_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     statement := parse_if_statement(source, storage)
     if if_node_is_null(statement) { return mimi_buffer_empty() as *ExprNode }
-    parse_if_expression_node(statement, storage)
+    parse_if_expression_node(source, statement, storage)
 }
 
 pub if_let_node_is_null :: fn (node : *IfLetNode) bool {
@@ -1790,15 +1790,21 @@ pub parse_if_let_statement :: fn (source : []u8, storage : *ExpressionArena) *If
     node
 }
 
-parse_if_expression_node :: fn (statement : *IfNode, storage : *ExpressionArena) *ExprNode {
+parse_if_expression_node :: fn (source : []u8, statement : *IfNode, storage : *ExpressionArena) *ExprNode {
     if if_node_is_null(statement) || (block_node_is_null(statement.else_branch) && if_node_is_null(statement.else_if)) { return mimi_buffer_empty() as *ExprNode }
-    then_node := allocate_expr(storage, 289, statement.then_branch.start, statement.then_branch.end, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+    then_value := parse_expression(source[statement.then_branch.content_start:statement.then_branch.content_end], storage)
+    if expression_is_null(then_value) { return then_value }
+    shift_expression_tree(then_value, statement.then_branch.content_start)
+    then_node := allocate_expr(storage, 289, statement.then_branch.start, statement.then_branch.end, then_value, mimi_buffer_empty() as *ExprNode)
     if expression_is_null(then_node) { return then_node }
     else_node : *ExprNode = mimi_buffer_empty() as *ExprNode
     if if_node_is_null(statement.else_if) {
-        else_node = allocate_expr(storage, 289, statement.else_branch.start, statement.else_branch.end, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
+        else_value := parse_expression(source[statement.else_branch.content_start:statement.else_branch.content_end], storage)
+        if expression_is_null(else_value) { return else_value }
+        shift_expression_tree(else_value, statement.else_branch.content_start)
+        else_node = allocate_expr(storage, 289, statement.else_branch.start, statement.else_branch.end, else_value, mimi_buffer_empty() as *ExprNode)
     } else {
-        else_node = parse_if_expression_node(statement.else_if, storage)
+        else_node = parse_if_expression_node(source, statement.else_if, storage)
     }
     if expression_is_null(else_node) { return else_node }
     branches := allocate_expr(storage, 276, then_node.start, else_node.end, then_node, else_node)
@@ -3568,6 +3574,7 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
     // Bound the stack-size calculations below before multiplying source.len.
     if source.len > 500000000000000000 { return mimi_buffer_empty() as *ExprNode }
     first_cast := next_token(source, 0)
+    if first_cast.0 == 164 { return parse_if_expression(source, storage) }
     if first_cast.0 == 1 || first_cast.0 == 2 || first_cast.0 == 3 || first_cast.0 == 40 || first_cast.0 == 42 || first_cast.0 == 91 || first_cast.0 == 38 || first_cast.0 == 45 || first_cast.0 == 33 {
         cast := parse_cast_expression(source, storage)
         if !expression_is_null(cast) { return cast }
@@ -4423,6 +4430,7 @@ pub Expr :: struct {
     payload_end : u64,
     left : *Expr,
     right : *Expr,
+    otherwise : *Expr,
 }
 
 pub Statement :: struct {
@@ -4560,7 +4568,7 @@ symbol_push :: fn (storage : *Storage, head : *Symbol, start : u64, end : u64, t
 }
 
 allocate_ir_expr :: fn (storage : *Storage, source_node : *ExprNode, tag : u64, left : *Expr, right : *Expr) *Expr {
-    if !allocate(storage, 64) { return mimi_buffer_empty() as *Expr }
+    if !allocate(storage, 72) { return mimi_buffer_empty() as *Expr }
     item := storage.last as *Expr
     item.kind = source_node.kind
     item.type_tag = tag
@@ -4570,6 +4578,7 @@ allocate_ir_expr :: fn (storage : *Storage, source_node : *ExprNode, tag : u64, 
     item.payload_end = source_node.payload_end
     item.left = left
     item.right = right
+    item.otherwise = mimi_buffer_empty() as *Expr
     item
 }
 
@@ -4627,6 +4636,25 @@ lower_arguments :: fn (source : []u8, node : *ExprNode, locals : *Symbol, functi
 lower_expr :: fn (source : []u8, node : *ExprNode, locals : *Symbol, functions : *Function, storage : *Storage, issue : *LowerIssue) *Expr {
     empty : *Expr = mimi_buffer_empty() as *Expr
     if expression_is_null(node) { fail(issue, 1, 0, 0) return empty }
+    if node.kind == 288 {
+        if expression_is_null(node.right) || node.right.kind != 276 { fail(issue, 1, node.start, node.end) return empty }
+        condition := lower_expr(source, node.left, locals, functions, storage, issue)
+        if expr_is_null(condition) { return empty }
+        if condition.type_tag != 2 { fail(issue, 3, node.left.start, node.left.end) return empty }
+        then_value := lower_expr(source, node.right.left, locals, functions, storage, issue)
+        else_value := lower_expr(source, node.right.right, locals, functions, storage, issue)
+        if expr_is_null(then_value) || expr_is_null(else_value) { return empty }
+        tag := then_value.type_tag
+        if tag != else_value.type_tag {
+            if !numeric(tag) || !numeric(else_value.type_tag) { fail(issue, 3, node.start, node.end) return empty }
+            tag = 3
+        }
+        result := allocate_ir_expr(storage, node, tag, condition, then_value)
+        if expr_is_null(result) { fail(issue, 4, node.start, node.end) return empty }
+        result.otherwise = else_value
+        return result
+    }
+    if node.kind == 289 { return lower_expr(source, node.left, locals, functions, storage, issue) }
     if node.kind == 263 {
         if expression_is_null(node.left) || node.left.kind != 1 { fail(issue, 1, node.start, node.end) return empty }
         callee := find_function(source, node.left.payload_start, node.left.payload_end, functions)
@@ -5049,6 +5077,11 @@ c_arguments :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
 
 c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
     if expr_is_null(value) { return false }
+    if value.kind == 288 {
+        if !c_push(output, 40) || !c_expr(output, source, value.left) || !c_text(output, " ? ") || !c_expr(output, source, value.right) || !c_text(output, " : ") { return false }
+        if !c_expr(output, source, value.otherwise) { return false }
+        return c_push(output, 41)
+    }
     if value.kind == 263 {
         if !c_name(output, source, value.payload_start, value.payload_end, "m_") || !c_push(output, 40) { return false }
         if !c_arguments(output, source, value.right) { return false }

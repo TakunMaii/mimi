@@ -63,5 +63,7 @@ main :: fn () i32 {
     if !check_issue("main :: fn () i32 { total := 0 for index in 2..7 { total = total + index } total }", 0) { return 30 }
     if !check_issue("main :: fn () i32 { for index in true..3 { index } 0 }", 3) { return 31 }
     if !check_issue("main :: fn () i32 { for index in 0..3 { index = 2 } 0 }", 7) { return 32 }
+    if !check_issue("main :: fn () i32 { result := if true { 42 } else { 0 } result }", 0) { return 33 }
+    if !check_issue("main :: fn () i32 { result := if 1 { 42 } else { 0 } result }", 3) { return 34 }
     0
 }

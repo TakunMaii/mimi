@@ -29,6 +29,8 @@ bindings, assignments, arithmetic, boolean expressions, numeric casts, returns,
 takes no parameters. It writes temporary C, invokes the host `cc`, and removes
 the C file. Collection `for`, match, defer, aggregates, imports, C ABI calls, and generics
 remain unsupported in stage1.
+Whole-expression scalar `if`/`else` values are also supported; embedded `if`
+expressions remain outside the current stage1 subset.
 The Python suite checks stage1 against stage0 on supported programs.
 
 Once stage1 can compile its own source, test both bootstrap stages with:

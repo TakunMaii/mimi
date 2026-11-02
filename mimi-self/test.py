@@ -377,6 +377,8 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             ("conditional", "main :: fn () i32 { if true { return 42 } else { return 0 } 0 }", 42),
             ("range-for", "main :: fn () i32 { total := 22 for index in 2..7 { total = total + index } total }", 42),
             ("range-continue", "main :: fn () i32 { total := 34 for index in 0..5 { if index == 2 { continue } total = total + index } total }", 42),
+            ("if-expression", "main :: fn () i32 { result := if true { 42 } else { 0 } result }", 42),
+            ("if-expression-else", "main :: fn () i32 { result := if false { 0 } else { 42 } result }", 42),
         ]
         for name, text, expected_exit in cases:
             program = directory / f"{name} program.mi"

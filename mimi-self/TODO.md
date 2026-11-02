@@ -123,6 +123,8 @@ two consecutive stages.
   `break`, and `continue` to C; compare runtime behavior with stage0.
 - [x] Lower scalar integer range `for` loops with loop-local read-only bindings
   and compare `continue` behavior with stage0.
+- [x] Lower whole-expression scalar `if`/`else` values to typed IR and C
+  conditional expressions.
 - [ ] Extend typed IR and C generation to control flow, aggregates, generics,
   imports, C ABI calls, and the remaining language features.
 - [ ] Implement a typed IR and lowering for the language feature matrix.
@@ -194,5 +196,6 @@ and basic control flow through a typed IR and C backend, then invokes `cc`.
 `main` still takes no parameters. The subset excludes collection `for`, match, defer,
 aggregates, imports, C ABI calls, and generic specialization; stage2 cannot yet
 compile `compiler.mi`. Stage1 currently collapses integer widths and signedness,
-so exact range-bound type parity remains open. Next, extend typing and IR lowering
-across those features.
+so exact range-bound type parity remains open. Scalar `if` expressions are
+supported when they form a complete expression; embedded forms remain open.
+Next, extend typing and IR lowering across those features.
