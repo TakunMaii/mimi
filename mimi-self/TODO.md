@@ -128,6 +128,8 @@ two consecutive stages.
   and compare `continue` behavior with stage0.
 - [x] Lower whole-expression scalar `if`/`else` values to typed IR and C
   conditional expressions.
+- [x] Lower direct scalar `extern` declarations and calls through the host C
+  linker, with stage0/stage1 runtime comparison.
 - [ ] Extend typed IR and C generation to control flow, aggregates, generics,
   imports, C ABI calls, and the remaining language features.
 - [ ] Implement a typed IR and lowering for the language feature matrix.
@@ -199,7 +201,7 @@ bodies.
 The first stage1 executable compiles scalar functions, direct calls, assignments,
 and basic control flow through a typed IR and C backend, then invokes `cc`.
 `main` still takes no parameters. The subset excludes collection `for`, match, defer,
-aggregates, imports, C ABI calls, and generic specialization; stage2 cannot yet
+aggregates, imports, pointer-based C ABI calls, and generic specialization; stage2 cannot yet
 compile `compiler.mi`. Stage1 currently collapses integer widths and signedness,
 so exact range-bound type parity remains open. Scalar `if` expressions are
 supported when they form a complete expression; embedded forms remain open.

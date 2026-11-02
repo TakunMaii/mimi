@@ -65,5 +65,6 @@ main :: fn () i32 {
     if !check_issue("main :: fn () i32 { for index in 0..3 { index = 2 } 0 }", 7) { return 32 }
     if !check_issue("main :: fn () i32 { result := if true { 42 } else { 0 } result }", 0) { return 33 }
     if !check_issue("main :: fn () i32 { result := if 1 { 42 } else { 0 } result }", 3) { return 34 }
+    if !check_issue("extern labs : fn(value : i64) i64 main :: fn () i32 { labs(-42) as i32 }", 0) { return 35 }
     0
 }

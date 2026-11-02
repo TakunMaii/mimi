@@ -21,6 +21,6 @@ the Python suite covers it through the self-hosted compiler.
 | Name resolution and type checking | Supported | Module, parameter, and local name resolution with source-spanned errors; initial scalar and tuple element checks cover bindings, assignments, conditions, operators, and returns, while structured values, calls, and generics remain pending | `tests/semantic.mi` |
 | MIR/LIR lowering and register allocation | Partial | Arena-backed typed IR for scalar functions, parameters, direct calls, bindings, assignments, expressions, returns, statement and whole-expression `if`/`else`, basic loops, and integer range `for`; aggregates, remaining control flow, and register allocation pending | `tests/ir.mi` |
 | x86_64 and AArch64 code generation | Supported | C backend compiles scalar functions and calls via host `cc`; direct machine-code backends pending | `test.py` scalar and stage1 checks |
-| C imports, ABI shims, native linking | Supported | Stage1 links scalar C output through `cc`; C imports and callbacks pending | `test.py` stage1 checks |
+| C imports, ABI shims, native linking | Partial | Stage1 links scalar C output and direct scalar `extern` calls through `cc`; C imports, pointer ABI, and callbacks pending | `test.py` stage1 checks |
 | Build and C-import caches | Not in current remote version | Not implemented | Pending |
 | Stage1/stage2 bootstrap | Supported by Rust only | Stage1 builds with Rust and compiles scalar functions with basic control flow; stage2 remains blocked on full language lowering | `test.py` stage1 checks |

@@ -231,10 +231,12 @@ main :: fn () i32 {
     public_module := lexer.parse_module("pub answer :: 42", &storage)
     if lexer.module_node_is_null(public_module) || public_module.declarations.kind != 5 || !public_module.declarations.is_public { return 329 }
     if public_module.declarations.start != 0 || public_module.declarations.name_start != 4 || public_module.declarations.binding.initializer.start != 14 { return 330 }
-    external_module := lexer.parse_module("extern puts : fn (text : []u8) i32", &storage)
+    external_source := "extern puts : fn (text : []u8) i32"
+    external_module := lexer.parse_module(external_source, &storage)
     if lexer.module_node_is_null(external_module) || external_module.declaration_count != 1 || external_module.declarations.kind != 7 { return 331 }
     if !external_module.declarations.is_external || external_module.declarations.function.parameters.data_type.kind != 272 || external_module.declarations.function.return_type.kind != 270 { return 332 }
     if !lexer.block_node_is_null(external_module.declarations.function.body) || external_module.declarations.function.name_start != 7 { return 333 }
+    if external_source[external_module.declarations.function.return_type.start] != 105 { return 334 }
     module_method_source := "Point :: struct { value : i32, get() :: fn (self : Self) i32 { self.value } }"
     module_method_ast := lexer.parse_module(module_method_source, &storage)
     if lexer.module_node_is_null(module_method_ast) || module_method_ast.declarations.struct_node.method_count != 1 { return 335 }

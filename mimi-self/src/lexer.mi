@@ -3073,7 +3073,7 @@ parse_external_function_node :: fn (source : []u8, name : (u8, u64, u64), keywor
         shift_expression_tree(current.data_type, offset)
         current = current.next
     }
-    shift_expression_tree(return_type, offset)
+    shift_expression_tree(return_type, parameters_close + offset)
     function
 }
 
@@ -4489,6 +4489,7 @@ pub Expr :: struct {
     left : *Expr,
     right : *Expr,
     otherwise : *Expr,
+    is_external : bool,
 }
 
 pub Statement :: struct {
@@ -4520,6 +4521,7 @@ pub Function :: struct {
     parameters : *Parameter,
     body : *Statement,
     next : *Function,
+    is_external : bool,
 }
 
 pub Module :: struct {
@@ -4626,7 +4628,7 @@ symbol_push :: fn (storage : *Storage, head : *Symbol, start : u64, end : u64, t
 }
 
 allocate_ir_expr :: fn (storage : *Storage, source_node : *ExprNode, tag : u64, left : *Expr, right : *Expr) *Expr {
-    if !allocate(storage, 72) { return mimi_buffer_empty() as *Expr }
+    if !allocate(storage, 80) { return mimi_buffer_empty() as *Expr }
     item := storage.last as *Expr
     item.kind = source_node.kind
     item.type_tag = tag
@@ -4637,6 +4639,7 @@ allocate_ir_expr :: fn (storage : *Storage, source_node : *ExprNode, tag : u64, 
     item.left = left
     item.right = right
     item.otherwise = mimi_buffer_empty() as *Expr
+    item.is_external = false
     item
 }
 
@@ -4728,6 +4731,7 @@ lower_expr :: fn (source : []u8, node : *ExprNode, locals : *Symbol, functions :
         if expr_is_null(result) { fail(issue, 4, node.start, node.end) return empty }
         result.payload_start = node.left.payload_start
         result.payload_end = node.left.payload_end
+        result.is_external = callee.is_external
         return result
     }
     if node.kind == 1 {
@@ -4960,14 +4964,14 @@ lower_module :: fn (source : []u8, parsed : *ModuleNode, storage : *Storage) Low
     last : *Function = mimi_buffer_empty() as *Function
     declaration := parsed.declarations
     while declaration != (mimi_buffer_empty() as *ModuleDeclarationNode) {
-        if declaration.kind != 1 || function_node_is_null(declaration.function) {
+        if (declaration.kind != 1 && declaration.kind != 7) || function_node_is_null(declaration.function) {
             fail(&issue, 6, declaration.start, declaration.end)
             return LowerResult { module = empty, issue = issue }
         }
         function := declaration.function
         tag := type_tag(source, function.return_type)
         if tag == 0 { fail(&issue, 6, function.start, function.end) return LowerResult { module = empty, issue = issue } }
-        if !allocate(storage, 48) { fail(&issue, 4, function.start, function.end) return LowerResult { module = empty, issue = issue } }
+        if !allocate(storage, 56) { fail(&issue, 4, function.start, function.end) return LowerResult { module = empty, issue = issue } }
         item := storage.last as *Function
         item.name_start = function.name_start
         item.name_end = function.name_end
@@ -4975,6 +4979,7 @@ lower_module :: fn (source : []u8, parsed : *ModuleNode, storage : *Storage) Low
         item.parameters = mimi_buffer_empty() as *Parameter
         item.body = mimi_buffer_empty() as *Statement
         item.next = mimi_buffer_empty() as *Function
+        item.is_external = declaration.kind == 7
         last_parameter : *Parameter = mimi_buffer_empty() as *Parameter
         source_parameter := function.parameters
         while !parameter_list_is_null(source_parameter) {
@@ -4990,7 +4995,7 @@ lower_module :: fn (source : []u8, parsed : *ModuleNode, storage : *Storage) Low
             last_parameter = parameter
             source_parameter = source_parameter.next
         }
-        if name_is(source, item.name_start, item.name_end, "main") && item.parameters != (mimi_buffer_empty() as *Parameter) {
+        if name_is(source, item.name_start, item.name_end, "main") && (item.is_external || item.parameters != (mimi_buffer_empty() as *Parameter)) {
             fail(&issue, 6, item.name_start, item.name_end)
             return LowerResult { module = empty, issue = issue }
         }
@@ -5002,15 +5007,17 @@ lower_module :: fn (source : []u8, parsed : *ModuleNode, storage : *Storage) Low
     declaration = parsed.declarations
     current := result.functions
     while declaration != (mimi_buffer_empty() as *ModuleDeclarationNode) {
-        locals : *Symbol = mimi_buffer_empty() as *Symbol
-        parameter := current.parameters
-        while parameter != (mimi_buffer_empty() as *Parameter) {
-            locals = symbol_push(storage, locals, parameter.name_start, parameter.name_end, parameter.type_tag, true)
-            if locals == (mimi_buffer_empty() as *Symbol) { fail(&issue, 4, parameter.name_start, parameter.name_end) return LowerResult { module = empty, issue = issue } }
-            parameter = parameter.next
+        if !current.is_external {
+            locals : *Symbol = mimi_buffer_empty() as *Symbol
+            parameter := current.parameters
+            while parameter != (mimi_buffer_empty() as *Parameter) {
+                locals = symbol_push(storage, locals, parameter.name_start, parameter.name_end, parameter.type_tag, true)
+                if locals == (mimi_buffer_empty() as *Symbol) { fail(&issue, 4, parameter.name_start, parameter.name_end) return LowerResult { module = empty, issue = issue } }
+                parameter = parameter.next
+            }
+            current.body = lower_body(source, declaration.function.body, locals, result.functions, storage, current.return_tag, true, false, &issue)
+            if issue.code != 0 { return LowerResult { module = empty, issue = issue } }
         }
-        current.body = lower_body(source, declaration.function.body, locals, result.functions, storage, current.return_tag, true, false, &issue)
-        if issue.code != 0 { return LowerResult { module = empty, issue = issue } }
         declaration = declaration.next
         current = current.next
     }
@@ -5141,7 +5148,12 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
         return c_push(output, 41)
     }
     if value.kind == 263 {
-        if !c_name(output, source, value.payload_start, value.payload_end, "m_") || !c_push(output, 40) { return false }
+        if value.is_external {
+            if !c_span(output, source, value.payload_start, value.payload_end) { return false }
+        } else {
+            if !c_name(output, source, value.payload_start, value.payload_end, "m_") { return false }
+        }
+        if !c_push(output, 40) { return false }
         if !c_arguments(output, source, value.right) { return false }
         return c_push(output, 41)
     }
@@ -5255,8 +5267,13 @@ pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
             if prototype.return_tag != 1 || prototype.parameters != (mimi_buffer_empty() as *Parameter) { return false }
             if !c_text(output, "int main(void);\n") { return false }
         } else {
-            if !c_text(output, "static ") || !c_type(output, prototype.return_tag) || !c_push(output, 32) { return false }
-            if !c_name(output, source, prototype.name_start, prototype.name_end, "m_") || !c_push(output, 40) { return false }
+            if !c_text(output, if prototype.is_external { "extern " } else { "static " }) || !c_type(output, prototype.return_tag) || !c_push(output, 32) { return false }
+            if prototype.is_external {
+                if !c_span(output, source, prototype.name_start, prototype.name_end) { return false }
+            } else {
+                if !c_name(output, source, prototype.name_start, prototype.name_end, "m_") { return false }
+            }
+            if !c_push(output, 40) { return false }
             if !c_parameters(output, source, prototype.parameters) || !c_text(output, ");\n") { return false }
         }
         prototype = prototype.next
@@ -5265,6 +5282,10 @@ pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
     has_main := false
     function := module.functions
     while function != (mimi_buffer_empty() as *Function) {
+        if function.is_external {
+            function = function.next
+            continue
+        }
         is_main := name_is(source, function.name_start, function.name_end, "main")
         if is_main {
             if has_main || function.return_tag != 1 { return false }
