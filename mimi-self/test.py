@@ -375,6 +375,8 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             ("do", "main :: fn () i32 { value := 0 do { value = value + 1 } while value < 3 value + 39 }", 42),
             ("loop", "main :: fn () i32 { value := 40 loop { value = value + 1 if value == 42 { break } } value }", 42),
             ("conditional", "main :: fn () i32 { if true { return 42 } else { return 0 } 0 }", 42),
+            ("range-for", "main :: fn () i32 { total := 22 for index in 2..7 { total = total + index } total }", 42),
+            ("range-continue", "main :: fn () i32 { total := 34 for index in 0..5 { if index == 2 { continue } total = total + index } total }", 42),
         ]
         for name, text, expected_exit in cases:
             program = directory / f"{name} program.mi"
@@ -402,6 +404,7 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             ("type", "main :: fn () i32 { true }", "error[E_TYPE]"),
             ("lower", "main :: fn () i32 { left, right := (1, 2) left + right }", "error[E_LOWER]"),
             ("arity", "add :: fn (left : i32, right : i32) i32 { left + right } main :: fn () i32 { add(20) }", "error[E_LOWER]"),
+            ("range-readonly", "main :: fn () i32 { for index in 0..3 { index = 2 } 0 }", "error[E_LOWER]"),
         ]
         for name, text, expected in rejected:
             program = directory / f"{name}.mi"

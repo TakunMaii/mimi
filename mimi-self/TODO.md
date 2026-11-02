@@ -121,6 +121,8 @@ two consecutive stages.
   booleans; check rejected-program diagnostics.
 - [x] Lower scalar assignments, `if`/`else`, `while`, `loop`, `do-while`,
   `break`, and `continue` to C; compare runtime behavior with stage0.
+- [x] Lower scalar integer range `for` loops with loop-local read-only bindings
+  and compare `continue` behavior with stage0.
 - [ ] Extend typed IR and C generation to control flow, aggregates, generics,
   imports, C ABI calls, and the remaining language features.
 - [ ] Implement a typed IR and lowering for the language feature matrix.
@@ -189,6 +191,8 @@ bodies.
 
 The first stage1 executable compiles scalar functions, direct calls, assignments,
 and basic control flow through a typed IR and C backend, then invokes `cc`.
-`main` still takes no parameters. The subset excludes `for`, match, defer,
+`main` still takes no parameters. The subset excludes collection `for`, match, defer,
 aggregates, imports, C ABI calls, and generic specialization; stage2 cannot yet
-compile `compiler.mi`. Next, extend typing and IR lowering across those features.
+compile `compiler.mi`. Stage1 currently collapses integer widths and signedness,
+so exact range-bound type parity remains open. Next, extend typing and IR lowering
+across those features.

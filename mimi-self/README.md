@@ -25,9 +25,9 @@ target/debug/mimi build mimi-self/src/compiler.mi -o /tmp/mimi-stage1 --c-source
 
 Stage1 currently accepts scalar helper functions, parameters, direct calls,
 bindings, assignments, arithmetic, boolean expressions, numeric casts, returns,
-`if`/`else`, `while`, `loop`, `do-while`, `break`, and `continue`. `main` still
+`if`/`else`, `while`, `loop`, `do-while`, integer range `for`, `break`, and `continue`. `main` still
 takes no parameters. It writes temporary C, invokes the host `cc`, and removes
-the C file. `for`, match, defer, aggregates, imports, C ABI calls, and generics
+the C file. Collection `for`, match, defer, aggregates, imports, C ABI calls, and generics
 remain unsupported in stage1.
 The Python suite checks stage1 against stage0 on supported programs.
 

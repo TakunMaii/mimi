@@ -4437,6 +4437,7 @@ pub Statement :: struct {
     then_body : *Statement,
     else_body : *Statement,
     loop_kind : u64,
+    range_end : *Expr,
 }
 
 pub Parameter :: struct {
@@ -4478,6 +4479,7 @@ pub lower_issue_message :: fn (code : u64) []u8 {
     if code == 4 { return "out of memory while lowering" }
     if code == 5 { return "statement is not supported by the C backend" }
     if code == 6 { return "declaration is not supported by the C backend" }
+    if code == 7 { return "cannot assign to an immutable binding" }
     "unknown lowering failure"
 }
 
@@ -4486,6 +4488,7 @@ Symbol :: struct {
     end : u64,
     type_tag : u64,
     next : *Symbol,
+    mutable : bool,
 }
 
 pub expr_is_null :: fn (value : *Expr) bool { value == (mimi_buffer_empty() as *Expr) }
@@ -4530,22 +4533,29 @@ type_tag :: fn (source : []u8, node : *ExprNode) u64 {
     0
 }
 
-symbol_type :: fn (source : []u8, start : u64, end : u64, head : *Symbol) u64 {
+symbol_find :: fn (source : []u8, start : u64, end : u64, head : *Symbol) *Symbol {
     symbol := head
     while symbol != (mimi_buffer_empty() as *Symbol) {
-        if same_name(source, start, end, symbol.start, symbol.end) { return symbol.type_tag }
+        if same_name(source, start, end, symbol.start, symbol.end) { return symbol }
         symbol = symbol.next
     }
-    0
+    mimi_buffer_empty() as *Symbol
 }
 
-symbol_push :: fn (storage : *Storage, head : *Symbol, start : u64, end : u64, tag : u64) *Symbol {
-    if !allocate(storage, 32) { return mimi_buffer_empty() as *Symbol }
+symbol_type :: fn (source : []u8, start : u64, end : u64, head : *Symbol) u64 {
+    symbol := symbol_find(source, start, end, head)
+    if symbol == (mimi_buffer_empty() as *Symbol) { return 0 }
+    symbol.type_tag
+}
+
+symbol_push :: fn (storage : *Storage, head : *Symbol, start : u64, end : u64, tag : u64, mutable : bool) *Symbol {
+    if !allocate(storage, 40) { return mimi_buffer_empty() as *Symbol }
     item := storage.last as *Symbol
     item.start = start
     item.end = end
     item.type_tag = tag
     item.next = head
+    item.mutable = mutable
     item
 }
 
@@ -4690,7 +4700,7 @@ lower_expr :: fn (source : []u8, node : *ExprNode, locals : *Symbol, functions :
 }
 
 allocate_statement :: fn (storage : *Storage, node : *StatementNode, value : *Expr) *Statement {
-    if !allocate(storage, 88) { return mimi_buffer_empty() as *Statement }
+    if !allocate(storage, 96) { return mimi_buffer_empty() as *Statement }
     item := storage.last as *Statement
     item.kind = node.kind
     item.type_tag = 0
@@ -4703,6 +4713,7 @@ allocate_statement :: fn (storage : *Storage, node : *StatementNode, value : *Ex
     item.then_body = mimi_buffer_empty() as *Statement
     item.else_body = mimi_buffer_empty() as *Statement
     item.loop_kind = 0
+    item.range_end = mimi_buffer_empty() as *Expr
     item
 }
 
@@ -4711,7 +4722,7 @@ lower_if_node :: fn (source : []u8, node : *IfNode, locals : *Symbol, functions 
     condition := lower_expr(source, node.condition, locals, functions, storage, issue)
     if expr_is_null(condition) { return empty }
     if condition.type_tag != 2 { fail(issue, 3, node.condition.start, node.condition.end) return empty }
-    if !allocate(storage, 88) { fail(issue, 4, node.start, node.end) return empty }
+    if !allocate(storage, 96) { fail(issue, 4, node.start, node.end) return empty }
     item := storage.last as *Statement
     item.kind = 304
     item.type_tag = 0
@@ -4724,6 +4735,7 @@ lower_if_node :: fn (source : []u8, node : *IfNode, locals : *Symbol, functions 
     item.then_body = lower_body(source, node.then_branch, locals, functions, storage, expected_return, false, in_loop, issue)
     item.else_body = empty
     item.loop_kind = 0
+    item.range_end = mimi_buffer_empty() as *Expr
     if issue.code != 0 { return empty }
     if !block_node_is_null(node.else_branch) {
         item.else_body = lower_body(source, node.else_branch, locals, functions, storage, expected_return, false, in_loop, issue)
@@ -4743,6 +4755,27 @@ lower_body :: fn (source : []u8, body : *BlockNode, incoming : *Symbol, function
     node := body.statements
     while !statement_node_is_null(node) {
         item : *Statement = empty
+        if node.kind == 307 {
+            range := node.for_loop
+            if !range.is_range { fail(issue, 5, range.start, range.end) return empty }
+            start := lower_expr(source, range.range_start, locals, functions, storage, issue)
+            ending := lower_expr(source, range.range_end, locals, functions, storage, issue)
+            if issue.code != 0 { return empty }
+            if expr_is_null(start) || expr_is_null(ending) || start.type_tag != 1 || ending.type_tag != 1 {
+                fail(issue, 3, range.start, range.end)
+                return empty
+            }
+            item = allocate_statement(storage, node, start)
+            if !statement_is_null(item) {
+                item.name_start = range.variable_start
+                item.name_end = range.variable_end
+                item.type_tag = 1
+                item.range_end = ending
+                loop_locals := symbol_push(storage, locals, range.variable_start, range.variable_end, 1, false)
+                if loop_locals == (mimi_buffer_empty() as *Symbol) { fail(issue, 4, range.start, range.end) return empty }
+                item.then_body = lower_body(source, range.body, loop_locals, functions, storage, expected_return, false, true, issue)
+            }
+        } else {
         if node.kind == 304 {
             item = lower_if_node(source, node.if_statement, locals, functions, storage, expected_return, in_loop, issue)
         } else {
@@ -4767,9 +4800,11 @@ lower_body :: fn (source : []u8, body : *BlockNode, incoming : *Symbol, function
                     if node.kind == 284 {
                         target := node.value.left
                         if expression_is_null(target) || target.kind != 1 { fail(issue, 5, node.start, node.end) return empty }
-                        target_tag := symbol_type(source, target.payload_start, target.payload_end, locals)
+                        target_symbol := symbol_find(source, target.payload_start, target.payload_end, locals)
+                        target_tag : u64 = if target_symbol == (mimi_buffer_empty() as *Symbol) { 0 } else { target_symbol.type_tag }
                         value := lower_expr(source, node.value.right, locals, functions, storage, issue)
                         if target_tag == 0 { fail(issue, 2, target.start, target.end) return empty }
+                        if !target_symbol.mutable { fail(issue, 7, target.start, target.end) return empty }
                         if expr_is_null(value) || !type_assignable(target_tag, value.type_tag) { fail(issue, 3, node.start, node.end) return empty }
                         item = allocate_statement(storage, node, value)
                         if !statement_is_null(item) {
@@ -4807,12 +4842,13 @@ lower_body :: fn (source : []u8, body : *BlockNode, incoming : *Symbol, function
                             }
                             if tag == 6 { fail(issue, 3, node.start, node.end) return empty }
                             item.type_tag = tag
-                            locals = symbol_push(storage, locals, item.name_start, item.name_end, tag)
+                            locals = symbol_push(storage, locals, item.name_start, item.name_end, tag, node.binding.binding_kind != 2)
                             if locals == (mimi_buffer_empty() as *Symbol) { fail(issue, 4, node.start, node.end) return empty }
                         }
                     }
                 }
             }
+        }
         }
         if issue.code != 0 { return empty }
         if statement_is_null(item) { fail(issue, 4, node.start, node.end) return empty }
@@ -4883,7 +4919,7 @@ lower_module :: fn (source : []u8, parsed : *ModuleNode, storage : *Storage) Low
         locals : *Symbol = mimi_buffer_empty() as *Symbol
         parameter := current.parameters
         while parameter != (mimi_buffer_empty() as *Parameter) {
-            locals = symbol_push(storage, locals, parameter.name_start, parameter.name_end, parameter.type_tag)
+            locals = symbol_push(storage, locals, parameter.name_start, parameter.name_end, parameter.type_tag, true)
             if locals == (mimi_buffer_empty() as *Symbol) { fail(&issue, 4, parameter.name_start, parameter.name_end) return LowerResult { module = empty, issue = issue } }
             parameter = parameter.next
         }
@@ -5094,6 +5130,14 @@ c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_t
             if !c_text(output, " while (") || !c_expr(output, source, item.value) || !c_push(output, 41) || !c_push(output, 59) { return false }
         }
         return c_push(output, 10)
+    }
+    if item.kind == 307 {
+        if !c_text(output, "for (int64_t ") || !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, " = ") { return false }
+        if !c_expr(output, source, item.value) || !c_text(output, ", ") || !c_name(output, source, item.name_start, item.name_end, "e_") || !c_text(output, " = ") { return false }
+        if !c_expr(output, source, item.range_end) || !c_text(output, "; ") || !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, " < ") { return false }
+        if !c_name(output, source, item.name_start, item.name_end, "e_") || !c_text(output, "; ++") || !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, ") {\n") { return false }
+        if !c_block(output, source, item.then_body, return_tag, depth + 1, false) || !c_indent(output, depth) || !c_text(output, "}\n") { return false }
+        return true
     }
     if item.kind == 281 { return c_text(output, "break;\n") }
     if item.kind == 282 { return c_text(output, "continue;\n") }
