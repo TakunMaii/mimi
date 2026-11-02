@@ -50,8 +50,9 @@ casts, and source-aware statement ASTs. Function bodies recursively retain
 bindings, assignments, expressions, control flow, match, and defer blocks.
 An initial semantic pass resolves local names and checks scalar, tuple element,
 and return types. Inner blocks may shadow outer bindings. `source.analyze_text`
-passes the current `lexer.mi` and `compiler.mi` sources and returns a diagnostic for lexical,
-parse, name, or initial type errors, which `source.render` can display with
+passes the current `lexer.mi`, `source.mi`, and `compiler.mi` sources and returns
+a diagnostic for lexical, parse, name, or initial type errors, which
+`source.render` can display with
 source context. Full type checking and code generation are still open; stage0 is
 the Rust compiler. See
 [TODO.md](TODO.md) for the parity roadmap and [FEATURES.md](FEATURES.md) for
@@ -86,6 +87,7 @@ discovers string-literal `@import` paths, resolves them relative to each module,
 and traverses the graph iteratively while detecting import cycles. Its module
 records retain canonical paths, source bytes, and import alias edges until
 `module_graph_release`; `module_file_lookup` resolves an edge's canonical path.
-`module_function_lookup` parses an imported module on demand and returns its
-public function declaration through an alias edge. This lookup does not yet
-lower cross-module calls into typed IR.
+`module_public_lookup` parses an imported module on demand and returns its
+public declaration through an alias edge. `module_function_lookup` and
+`module_type_lookup` filter those results to functions and struct or enum
+types. These lookups do not yet lower cross-module references into typed IR.

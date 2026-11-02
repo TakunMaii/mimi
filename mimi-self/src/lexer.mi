@@ -2609,6 +2609,13 @@ pub parse_struct_literal :: fn (source : []u8, storage : *ExpressionArena) *Stru
     cursor := type_name.2
     type_end := type_name.2
     suffix := next_token(source, cursor)
+    while suffix.0 == 46 {
+        member := next_token(source, suffix.2)
+        if member.0 != 1 { return mimi_buffer_empty() as *StructLiteralNode }
+        cursor = member.2
+        type_end = member.2
+        suffix = next_token(source, cursor)
+    }
     if suffix.0 == 60 {
         cursor = suffix.2
         angle_depth : u64 = 1
@@ -2628,7 +2635,7 @@ pub parse_struct_literal :: fn (source : []u8, storage : *ExpressionArena) *Stru
             }
         }
         if !found_generic_end { return mimi_buffer_empty() as *StructLiteralNode }
-    } else { type_end = type_name.2 }
+    }
     opening := next_token(source, cursor)
     if opening.0 != 123 { return mimi_buffer_empty() as *StructLiteralNode }
     cursor = opening.2
@@ -3666,7 +3673,7 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
         if !expression_is_null(tuple) { return tuple }
     }
     first := next_token(source, 0)
-    if first.0 == 1 && (next_token(source, first.2).0 == 123 || next_token(source, first.2).0 == 60) {
+    if first.0 == 1 && (next_token(source, first.2).0 == 123 || next_token(source, first.2).0 == 60 || next_token(source, first.2).0 == 46) {
         literal := parse_struct_literal(source, storage)
         if struct_literal_is_null(literal) { } else {
         type_node := parse_type(source[literal.type_start:literal.type_end], storage)

@@ -302,6 +302,12 @@ main :: fn () i32 {{
     self_issue = source.analyze_text(self_text)
     source.release(&self_file)
     if self_issue.code.len != 0 {{ return 21 }}
+    if !source.load({mimi_quote(SELF / "src" / "source.mi")}, &self_file) {{ return 22 }}
+    mimi_slice_from_raw(self_file.contents.data, self_file.contents.len, &self_text)
+    self_issue = source.analyze_text(self_text)
+    if self_issue.code.len != 0 {{ source.render(self_issue, &self_file) }}
+    source.release(&self_file)
+    if self_issue.code.len != 0 {{ return 23 }}
     graph := source.module_graph_init()
     if !source.module_begin(&graph, "root.mi") {{ return 6 }}
     if source.module_begin(&graph, "root.mi") {{ return 7 }}
@@ -488,7 +494,14 @@ main :: fn () i32 {{
         )
         left_module.write_text('shared :: @import("shared.mi")\n', encoding="utf-8")
         right_module.write_text('shared :: @import("sub/../shared.mi")\n', encoding="utf-8")
-        shared_module.write_text("pub answer :: fn () i32 { 42 }\nprivate :: fn () i32 { 0 }\n", encoding="utf-8")
+        shared_module.write_text(
+            "pub answer :: fn () i32 { 42 }\n"
+            "pub Point :: struct { x : i32 }\n"
+            "pub Choice :: enum { some, none }\n"
+            "private :: fn () i32 { 0 }\n"
+            "Hidden :: struct { x : i32 }\n",
+            encoding="utf-8",
+        )
         cycle_a.write_text('next :: @import("cycle-b.mi")\n', encoding="utf-8")
         cycle_b.write_text('next :: @import("./cycle-a.mi")\n', encoding="utf-8")
         orphan_module.write_text('@import("shared.mi")\n', encoding="utf-8")
@@ -511,6 +524,14 @@ main :: fn () i32 {{
     if source.module_function_is_null(transitive_function) || transitive_function.file != public_function.file {{ return 18 }}
     private_function := source.module_function_lookup(&graph, graph.files, "shared", "private")
     if !source.module_function_is_null(private_function) {{ return 15 }}
+    public_type := source.module_type_lookup(&graph, graph.files, "shared", "Point")
+    if source.module_symbol_is_null(public_type) || public_type.declaration.kind != 2 {{ return 22 }}
+    enum_type := source.module_type_lookup(&graph, imported, "shared", "Choice")
+    if source.module_symbol_is_null(enum_type) || enum_type.declaration.kind != 3 {{ return 23 }}
+    private_type := source.module_type_lookup(&graph, graph.files, "shared", "Hidden")
+    if !source.module_symbol_is_null(private_type) {{ return 24 }}
+    wrong_kind := source.module_type_lookup(&graph, graph.files, "shared", "answer")
+    if !source.module_symbol_is_null(wrong_kind) {{ return 25 }}
     record := graph.files
     index : u64 = 0
     seen_shared := false
@@ -538,6 +559,8 @@ main :: fn () i32 {{
     if self_graph.file_count < 8 {{ return 17 }}
     parser_function := source.module_function_lookup(&self_graph, self_graph.files, "lexer", "parse_expression")
     if source.module_function_is_null(parser_function) {{ return 19 }}
+    graph_type := source.module_type_lookup(&self_graph, self_graph.files, "source", "ModuleGraph")
+    if source.module_symbol_is_null(graph_type) || graph_type.declaration.kind != 2 {{ return 26 }}
     source.module_graph_release(&self_graph)
     0
 }}

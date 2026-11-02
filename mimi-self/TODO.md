@@ -93,6 +93,7 @@ two consecutive stages.
 - [x] Match cast precedence inside unparenthesized binary expressions.
 - [x] Reject trailing commas in function type parameter lists, matching stage0.
 - [x] Parse simple-name struct literal fields and nested values.
+- [x] Parse module-qualified struct literal type names and nested values.
 - [x] Parse module-qualified type names such as `*bytes.ByteBuffer`.
 - [x] Parse generic struct literal type applications.
 - [x] Validate tuple destructuring initializer arity when it is a tuple literal.
@@ -137,6 +138,7 @@ two consecutive stages.
   edges in the import graph for module-aware lowering.
 - [x] Parse imported module ASTs on demand and look up public functions through
   canonical import alias edges.
+- [x] Look up public struct and enum declarations through import alias edges.
 - [ ] Resolve imported function/type references into module-owned typed IR.
 - [ ] Extend typed IR and C generation to control flow, aggregates, generics,
   imports, C ABI calls, and the remaining language features.
@@ -216,5 +218,5 @@ supported when they form a complete expression; embedded forms remain open.
 Next, extend typing and IR lowering across those features.
 The stage1 front end now parses `compiler.mi` itself. The import graph retains
 source and alias edges and can parse imported modules on demand for public
-function lookup. The first stage2 blocker is still the
+function and type lookup. The first stage2 blocker is still the
 `bytes :: @import("bytes.mi")` declaration, which the C backend does not lower.

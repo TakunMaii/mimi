@@ -68,6 +68,11 @@ pub ModuleFunction :: struct {
     function : *lexer.FunctionNode,
 }
 
+pub ModuleSymbol :: struct {
+    file : *ModuleFile,
+    declaration : *lexer.ModuleDeclarationNode,
+}
+
 pub module_graph_init :: fn () ModuleGraph {
     empty := mimi_buffer_empty() as *ModuleFile
     ModuleGraph { states = maps.init(), files = empty, last_file = empty, file_count = 0, storage = arena_api.init(), ast_storage = lexer.expression_arena_init() }
@@ -142,8 +147,8 @@ raw_name_equals :: fn (left : *u8, left_length : u64, right : *u8, right_length 
     true
 }
 
-pub module_function_lookup :: fn (graph : *ModuleGraph, importer : *ModuleFile, alias : []u8, name : []u8) ModuleFunction {
-    missing := ModuleFunction { file = mimi_buffer_empty() as *ModuleFile, function = mimi_buffer_empty() as *lexer.FunctionNode }
+pub module_public_lookup :: fn (graph : *ModuleGraph, importer : *ModuleFile, alias : []u8, name : []u8) ModuleSymbol {
+    missing := ModuleSymbol { file = mimi_buffer_empty() as *ModuleFile, declaration = mimi_buffer_empty() as *lexer.ModuleDeclarationNode }
     if module_file_is_null(importer) { return missing }
     edge := importer.imports
     while edge != (mimi_buffer_empty() as *ModuleImport) {
@@ -160,11 +165,11 @@ pub module_function_lookup :: fn (graph : *ModuleGraph, importer : *ModuleFile, 
             }
             declaration := file.module.declarations
             while declaration != (mimi_buffer_empty() as *lexer.ModuleDeclarationNode) {
-                if declaration.is_public && (declaration.kind == 1 || declaration.kind == 7) {
+                if declaration.is_public {
                     start := declaration.name_start
                     ending := declaration.name_end
                     if source_range_equals(file.contents, start, ending, name) {
-                        return ModuleFunction { file = file, function = declaration.function }
+                        return ModuleSymbol { file = file, declaration = declaration }
                     }
                 }
                 declaration = declaration.next
@@ -174,6 +179,24 @@ pub module_function_lookup :: fn (graph : *ModuleGraph, importer : *ModuleFile, 
         edge = edge.next
     }
     missing
+}
+
+pub module_symbol_is_null :: fn (value : ModuleSymbol) bool {
+    module_file_is_null(value.file) || value.declaration == (mimi_buffer_empty() as *lexer.ModuleDeclarationNode)
+}
+
+pub module_function_lookup :: fn (graph : *ModuleGraph, importer : *ModuleFile, alias : []u8, name : []u8) ModuleFunction {
+    symbol := module_public_lookup(graph, importer, alias, name)
+    if !module_symbol_is_null(symbol) && (symbol.declaration.kind == 1 || symbol.declaration.kind == 7) {
+        return ModuleFunction { file = symbol.file, function = symbol.declaration.function }
+    }
+    ModuleFunction { file = mimi_buffer_empty() as *ModuleFile, function = mimi_buffer_empty() as *lexer.FunctionNode }
+}
+
+pub module_type_lookup :: fn (graph : *ModuleGraph, importer : *ModuleFile, alias : []u8, name : []u8) ModuleSymbol {
+    symbol := module_public_lookup(graph, importer, alias, name)
+    if !module_symbol_is_null(symbol) && (symbol.declaration.kind == 2 || symbol.declaration.kind == 3) { return symbol }
+    ModuleSymbol { file = mimi_buffer_empty() as *ModuleFile, declaration = mimi_buffer_empty() as *lexer.ModuleDeclarationNode }
 }
 
 pub module_function_is_null :: fn (value : ModuleFunction) bool {
