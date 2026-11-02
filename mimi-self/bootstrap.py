@@ -54,10 +54,14 @@ def main() -> None:
     stage1 = output_dir / "mimi-stage1"
     stage2 = output_dir / "mimi-stage2"
     build(stage0, source, stage1)
+    print("Stage1 artifact:", artifact_record(stage1), flush=True)
     run(["python3", str(TEST_RUNNER), "--compiler", str(stage0)])
+    try:
+        build(stage1, source, stage2)
+    except subprocess.CalledProcessError as failure:
+        print(f"Stage2 build stopped with exit status {failure.returncode}; see compiler diagnostic above.", flush=True)
+        raise SystemExit(failure.returncode) from None
     run(["python3", str(TEST_RUNNER), "--compiler", str(stage1), "--reference-compiler", str(stage0)])
-
-    build(stage1, source, stage2)
     run(["python3", str(TEST_RUNNER), "--compiler", str(stage2), "--reference-compiler", str(stage0)])
     print("Stage artifacts:")
     print(artifact_record(stage1))
