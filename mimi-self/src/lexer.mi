@@ -1280,7 +1280,7 @@ pub parse_statement_block :: fn (source : []u8, offset : u64, storage : *Express
         at_top_level := paren_depth == 0 && bracket_depth == 0 && brace_depth == 0
         first_token := next_token(source, segment_start)
         starts_new := false
-        if previous_kind != 44 && previous_kind != 58 && previous_kind != 61 && previous_kind != 165 && previous_kind != 175 && statement_starts_here(source, token) { starts_new = true }
+        if (previous_kind == 0 || can_end_expression(previous_kind)) && statement_starts_here(source, token) { starts_new = true }
         if previous_kind == 125 && expression_starts_statement(token.0) { starts_new = true }
         if can_end_expression(previous_kind) && starts_expression_atom(token.0) { starts_new = true }
         if previous_kind == 93 && token.0 == 1 && !seen_equal {
@@ -3628,14 +3628,42 @@ pub parse_function_type :: fn (source : []u8, storage : *ExpressionArena) *ExprN
     allocate_expr(storage, 277, keyword.1, return_type.end, parameters, return_type)
 }
 
+if_expression_end :: fn (source : []u8, start : u64) u64 {
+    cursor := start
+    depth : u64 = 0
+    saw_block := false
+    while cursor < source.len {
+        token := next_token(source, cursor)
+        if token.0 == 0 || token.0 == 255 { return start }
+        cursor = token.2
+        if token.0 == 123 {
+            depth = depth + 1
+            saw_block = true
+        } else {
+            if token.0 == 125 {
+                if depth == 0 { return start }
+                depth = depth - 1
+                if saw_block && depth == 0 {
+                    next := next_token(source, cursor)
+                    if next.0 != 165 { return cursor }
+                }
+            }
+        }
+    }
+    start
+}
+
 pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     // Bound the stack-size calculations below before multiplying source.len.
     if source.len > 500000000000000000 { return mimi_buffer_empty() as *ExprNode }
     first_cast := next_token(source, 0)
-    if first_cast.0 == 164 { return parse_if_expression(source, storage) }
     if first_cast.0 == 1 || first_cast.0 == 2 || first_cast.0 == 3 || first_cast.0 == 40 || first_cast.0 == 42 || first_cast.0 == 91 || first_cast.0 == 38 || first_cast.0 == 45 || first_cast.0 == 33 {
         cast := parse_cast_expression(source, storage)
         if !expression_is_null(cast) { return cast }
+    }
+    if first_cast.0 == 40 {
+        tuple := parse_tuple_literal(source, storage)
+        if !expression_is_null(tuple) { return tuple }
     }
     first := next_token(source, 0)
     if first.0 == 1 && (next_token(source, first.2).0 == 123 || next_token(source, first.2).0 == 60) {
@@ -3678,6 +3706,23 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
         if token.0 == 0 { break }
         if token.0 == 255 { return mimi_buffer_empty() as *ExprNode }
         cursor = token.2
+
+        if token.0 == 164 {
+            if !expecting_operand { return mimi_buffer_empty() as *ExprNode }
+            ending := if_expression_end(source, token.1)
+            if ending == token.1 { return mimi_buffer_empty() as *ExprNode }
+            value := parse_if_expression(source[token.1:ending], storage)
+            if expression_is_null(value) { return value }
+            shift_expression_tree(value, token.1)
+            stacks.nodes[stacks.node_count] = value
+            stacks.node_count = stacks.node_count + 1
+            cursor = ending
+            expecting_operand = false
+            while stacks.operator_count > 0 && is_prefix_operator(stacks.operators[stacks.operator_count - 1].kind) {
+                if !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
+            }
+            continue
+        }
 
         if token.0 == 1 || token.0 == 2 || token.0 == 3 || token.0 == 4 || token.0 == 5 {
             if !expecting_operand { return mimi_buffer_empty() as *ExprNode }
@@ -3817,6 +3862,13 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                             }
                             expecting_operand = false
                         } else {
+                            if token.0 == 41 {
+                                while stacks.operator_count > 0 {
+                                    top := stacks.operators[stacks.operator_count - 1]
+                                    if top.kind == 40 || top.kind == 300 { break }
+                                    if top.kind == 91 || !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
+                                }
+                            }
                             if token.0 == 41 && stacks.operator_count > 0 && stacks.operators[stacks.operator_count - 1].kind == 300 {
                                 marker := stacks.operators[stacks.operator_count - 1]
                                 if marker.argument_count == 0 {

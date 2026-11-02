@@ -85,3 +85,6 @@ discovers string-literal `@import` paths, resolves them relative to each module,
 and traverses the graph iteratively while detecting import cycles. Its module
 records retain canonical paths, source bytes, and import alias edges until
 `module_graph_release`; `module_file_lookup` resolves an edge's canonical path.
+`module_function_lookup` parses an imported module on demand and returns its
+public function declaration through an alias edge. This lookup does not yet
+lower cross-module calls into typed IR.

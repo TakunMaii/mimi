@@ -5,6 +5,7 @@ lexer :: @import("lexer.mi")
 path_api :: @import("path.mi")
 extern mimi_diagnostic_print : fn(code : *u8, code_length : u64, message : *u8, message_length : u64, path : *u8, path_length : u64, source : *u8, source_length : u64, start : u64, end : u64) void
 extern mimi_buffer_empty : fn() *void
+extern mimi_slice_from_raw : fn(data : *u8, length : u64, output : *[]u8) void
 
 ModulePath :: struct {
     data : *u8,
@@ -39,6 +40,7 @@ pub ModuleGraph :: struct {
     last_file : *ModuleFile,
     file_count : u64,
     storage : arena_api.Arena,
+    ast_storage : lexer.ExpressionArena,
 }
 
 pub ModuleFile :: struct {
@@ -50,6 +52,7 @@ pub ModuleFile :: struct {
     imports : *ModuleImport,
     last_import : *ModuleImport,
     import_count : u64,
+    module : *lexer.ModuleNode,
 }
 
 pub ModuleImport :: struct {
@@ -60,9 +63,14 @@ pub ModuleImport :: struct {
     next : *ModuleImport,
 }
 
+pub ModuleFunction :: struct {
+    file : *ModuleFile,
+    function : *lexer.FunctionNode,
+}
+
 pub module_graph_init :: fn () ModuleGraph {
     empty := mimi_buffer_empty() as *ModuleFile
-    ModuleGraph { states = maps.init(), files = empty, last_file = empty, file_count = 0, storage = arena_api.init() }
+    ModuleGraph { states = maps.init(), files = empty, last_file = empty, file_count = 0, storage = arena_api.init(), ast_storage = lexer.expression_arena_init() }
 }
 
 pub module_begin :: fn (graph : *ModuleGraph, path : []u8) bool {
@@ -95,6 +103,9 @@ pub module_graph_release :: fn (graph : *ModuleGraph) void {
     file_storage := graph.storage
     arena_api.release(&file_storage)
     graph.storage = arena_api.init()
+    ast_storage := graph.ast_storage
+    lexer.expression_arena_release(&ast_storage)
+    graph.ast_storage = lexer.expression_arena_init()
     graph.files = mimi_buffer_empty() as *ModuleFile
     graph.last_file = mimi_buffer_empty() as *ModuleFile
     graph.file_count = 0
@@ -121,14 +132,63 @@ pub module_file_lookup :: fn (graph : *ModuleGraph, path : *u8, path_length : u6
     mimi_buffer_empty() as *ModuleFile
 }
 
+raw_name_equals :: fn (left : *u8, left_length : u64, right : *u8, right_length : u64) bool {
+    if left_length != right_length { return false }
+    index : u64 = 0
+    while index < left_length {
+        if left[index] != right[index] { return false }
+        index = index + 1
+    }
+    true
+}
+
+pub module_function_lookup :: fn (graph : *ModuleGraph, importer : *ModuleFile, alias : []u8, name : []u8) ModuleFunction {
+    missing := ModuleFunction { file = mimi_buffer_empty() as *ModuleFile, function = mimi_buffer_empty() as *lexer.FunctionNode }
+    if module_file_is_null(importer) { return missing }
+    edge := importer.imports
+    while edge != (mimi_buffer_empty() as *ModuleImport) {
+        if raw_name_equals(edge.alias, edge.alias_length, alias.ptr, alias.len) {
+            file := module_file_lookup(graph, edge.path, edge.path_length)
+            if module_file_is_null(file) { return missing }
+            if lexer.module_node_is_null(file.module) {
+                text : []u8 = ""
+                mimi_slice_from_raw(file.contents, file.contents_length, &text)
+                ast_storage := graph.ast_storage
+                file.module = lexer.parse_module(text, &ast_storage)
+                graph.ast_storage = ast_storage
+                if lexer.module_node_is_null(file.module) { return missing }
+            }
+            declaration := file.module.declarations
+            while declaration != (mimi_buffer_empty() as *lexer.ModuleDeclarationNode) {
+                if declaration.is_public && (declaration.kind == 1 || declaration.kind == 7) {
+                    start := declaration.name_start
+                    ending := declaration.name_end
+                    if source_range_equals(file.contents, start, ending, name) {
+                        return ModuleFunction { file = file, function = declaration.function }
+                    }
+                }
+                declaration = declaration.next
+            }
+            return missing
+        }
+        edge = edge.next
+    }
+    missing
+}
+
+pub module_function_is_null :: fn (value : ModuleFunction) bool {
+    module_file_is_null(value.file) || lexer.function_node_is_null(value.function)
+}
+
 store_module_file :: fn (storage : *arena_api.Arena, path : *u8, path_length : u64, contents : *u8, contents_length : u64) *ModuleFile {
     empty := mimi_buffer_empty() as *ModuleFile
-    if !arena_api.allocate(storage, 64, 8) { return empty }
+    if !arena_api.allocate(storage, 72, 8) { return empty }
     record := arena_api.last_byte(storage) as *ModuleFile
     record.next = empty
     record.imports = mimi_buffer_empty() as *ModuleImport
     record.last_import = mimi_buffer_empty() as *ModuleImport
     record.import_count = 0
+    record.module = mimi_buffer_empty() as *lexer.ModuleNode
     record.path_length = path_length
     record.contents_length = contents_length
     if !arena_api.allocate(storage, path_length, 1) { return empty }

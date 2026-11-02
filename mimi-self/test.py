@@ -471,7 +471,7 @@ main :: fn () i32 {{
         )
         left_module.write_text('shared :: @import("shared.mi")\n', encoding="utf-8")
         right_module.write_text('shared :: @import("sub/../shared.mi")\n', encoding="utf-8")
-        shared_module.write_text("value :: 1\n", encoding="utf-8")
+        shared_module.write_text("pub answer :: fn () i32 { 42 }\nprivate :: fn () i32 { 0 }\n", encoding="utf-8")
         cycle_a.write_text('next :: @import("cycle-b.mi")\n', encoding="utf-8")
         cycle_b.write_text('next :: @import("./cycle-a.mi")\n', encoding="utf-8")
         orphan_module.write_text('@import("shared.mi")\n', encoding="utf-8")
@@ -488,12 +488,18 @@ main :: fn () i32 {{
     if graph.files.imports.next.next.alias_length != 6 || graph.files.imports.next.next.alias[0] != 115 {{ return 11 }}
     imported := source.module_file_lookup(&graph, graph.files.imports.path, graph.files.imports.path_length)
     if source.module_file_is_null(imported) || imported.import_count != 1 || imported.contents[0] != 115 {{ return 12 }}
+    public_function := source.module_function_lookup(&graph, graph.files, "shared", "answer")
+    if source.module_function_is_null(public_function) || public_function.file.contents[public_function.function.name_start] != 97 {{ return 14 }}
+    transitive_function := source.module_function_lookup(&graph, imported, "shared", "answer")
+    if source.module_function_is_null(transitive_function) || transitive_function.file != public_function.file {{ return 18 }}
+    private_function := source.module_function_lookup(&graph, graph.files, "shared", "private")
+    if !source.module_function_is_null(private_function) {{ return 15 }}
     record := graph.files
     index : u64 = 0
     seen_shared := false
     while index < graph.file_count {{
         if record.path_length == 0 || record.contents_length == 0 {{ return 6 }}
-        if record.contents[0] == 118 {{ seen_shared = true }}
+        if record.contents[0] == 112 {{ seen_shared = true }}
         record = record.next
         index = index + 1
     }}
@@ -510,6 +516,12 @@ main :: fn () i32 {{
     orphan_graph := source.module_graph_init()
     if source.load_graph({mimi_quote(orphan_module)}, &orphan_graph) {{ return 13 }}
     source.module_graph_release(&orphan_graph)
+    self_graph := source.module_graph_init()
+    if !source.load_graph({mimi_quote(SELF / "src" / "compiler.mi")}, &self_graph) {{ return 16 }}
+    if self_graph.file_count < 8 {{ return 17 }}
+    parser_function := source.module_function_lookup(&self_graph, self_graph.files, "lexer", "parse_expression")
+    if source.module_function_is_null(parser_function) {{ return 19 }}
+    source.module_graph_release(&self_graph)
     0
 }}
 ''', encoding="utf-8"

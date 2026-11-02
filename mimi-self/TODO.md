@@ -70,6 +70,7 @@ two consecutive stages.
 - [x] Parse `while`, `loop`, and `do-while` condition/body spans.
 - [x] Parse collection and integer-range `for` headers with body spans.
 - [x] Parse plain `if/else` expressions into expression nodes.
+- [x] Parse embedded `if/else` expression operands and binary call arguments.
 - [x] Parse match values, variant arms, optional bindings, and result spans.
 - [x] Parse enum `if let` variant tests with optional bindings.
 - [x] Parse generic parameter lists and reject duplicate names.
@@ -132,6 +133,8 @@ two consecutive stages.
   linker, with stage0/stage1 runtime comparison.
 - [x] Retain canonical module paths, owned source bytes, and alias-to-module
   edges in the import graph for module-aware lowering.
+- [x] Parse imported module ASTs on demand and look up public functions through
+  canonical import alias edges.
 - [ ] Resolve imported function/type references into module-owned typed IR.
 - [ ] Extend typed IR and C generation to control flow, aggregates, generics,
   imports, C ABI calls, and the remaining language features.
@@ -210,5 +213,6 @@ so exact range-bound type parity remains open. Scalar `if` expressions are
 supported when they form a complete expression; embedded forms remain open.
 Next, extend typing and IR lowering across those features.
 The stage1 front end now parses `compiler.mi` itself. The import graph retains
-source and alias edges, but the first stage2 blocker is still the
+source and alias edges and can parse imported modules on demand for public
+function lookup. The first stage2 blocker is still the
 `bytes :: @import("bytes.mi")` declaration, which the C backend does not lower.

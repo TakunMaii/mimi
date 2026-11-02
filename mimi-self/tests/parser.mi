@@ -105,6 +105,8 @@ main :: fn () i32 {
     if composed_block.statements.next.kind != 284 || composed_block.statements.next.start != 113 { return 290 }
     if composed_block.statements.next.next.kind != 280 || composed_block.statements.next.next.start != 131 { return 291 }
     if composed_block.statements.next.next.value.start != 138 || composed_block.statements.next.next.end != 143 { return 292 }
+    member_assignment_block := lexer.parse_statement_block("{ buffer.len = buffer.len + 1 }", 0, &storage)
+    if lexer.block_node_is_null(member_assignment_block) || member_assignment_block.statements.kind != 284 || member_assignment_block.statements.value.left.kind != 260 { return 351 }
     empty_composed_block := lexer.parse_statement_block("{}", 0, &storage)
     if lexer.block_node_is_null(empty_composed_block) || !lexer.statement_node_is_null(empty_composed_block.statements) { return 293 }
     whitespace_composed_block := lexer.parse_statement_block("{   \n }", 0, &storage)
@@ -452,6 +454,14 @@ check_calls :: fn () i32 {
     empty_call := lexer.parse_expression("f()", &storage)
     if lexer.expression_is_null(empty_call) || empty_call.kind != 263 || !lexer.expression_is_null(empty_call.right) { return 27 }
     call := lexer.parse_expression("f(a + 1, g(2), c)", &storage)
+    binary_last_argument := lexer.parse_expression("f(a, b - c)", &storage)
+    if lexer.expression_is_null(binary_last_argument) || binary_last_argument.kind != 263 { return 352 }
+    nested_binary_last_argument := lexer.parse_expression("next_token(source, block.end - offset)", &storage)
+    if lexer.expression_is_null(nested_binary_last_argument) || nested_binary_last_argument.kind != 263 { return 353 }
+    conditional_argument := lexer.parse_expression("next_token(source, if ready { left } else { right })", &storage)
+    if lexer.expression_is_null(conditional_argument) || conditional_argument.kind != 263 || conditional_argument.right.right.kind != 288 { return 354 }
+    conditional_binary := lexer.parse_expression("1 + if ready { left } else { right }", &storage)
+    if lexer.expression_is_null(conditional_binary) || conditional_binary.kind != 43 || conditional_binary.right.kind != 288 { return 355 }
     if lexer.expression_is_null(call) || call.kind != 263 { return 28 }
     if call.right.kind != 262 || call.right.left.kind != 262 || call.right.right.kind != 1 { return 29 }
     if call.right.left.right.kind != 263 { return 30 }
