@@ -145,6 +145,8 @@ two consecutive stages.
   spans, unique C symbols, and private-name checks.
 - [x] Lower opaque pointer extern calls, byte slices and string literals, and
   `main(argc: i32, argv: **u8)` in the initial C backend.
+- [x] Lower byte-slice and `*u8`/`**u8` indexing, byte dereference, and
+  address-of locals for byte-slice output parameters.
 - [ ] Resolve imported function/type references into module-owned typed IR.
 - [ ] Extend typed IR and C generation to control flow, aggregates, generics,
   imports, C ABI calls, and the remaining language features.

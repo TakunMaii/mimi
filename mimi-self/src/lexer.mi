@@ -4310,7 +4310,7 @@ type_compatible :: fn (left : u64, right : u64) bool {
 }
 
 type_assignable :: fn (expected : u64, actual : u64) bool {
-    expected == 0 || actual == 0 || expected == actual || (expected == 3 && actual == 1)
+    expected == 0 || actual == 0 || expected == actual || (expected == 3 && actual == 1) || ((expected == 7 || expected == 9 || expected == 10 || expected == 11) && actual == 12)
 }
 
 type_fail :: fn (issue : *NameIssue, code : u64, expression : *ExprNode) u64 {
@@ -4684,7 +4684,15 @@ name_is :: fn (source : []u8, start : u64, end : u64, expected : []u8) bool {
 
 type_tag :: fn (source : []u8, node : *ExprNode) u64 {
     if expression_is_null(node) { return 0 }
-    if node.kind == 271 { return 7 }
+    if node.kind == 271 {
+        inner := node.left
+        if !expression_is_null(inner) {
+            if inner.kind == 270 && name_is(source, inner.start, inner.end, "u8") { return 7 }
+            if inner.kind == 271 && !expression_is_null(inner.left) && inner.left.kind == 270 && name_is(source, inner.left.start, inner.left.end, "u8") { return 9 }
+            if inner.kind == 272 && !expression_is_null(inner.left) && inner.left.kind == 270 && name_is(source, inner.left.start, inner.left.end, "u8") { return 11 }
+        }
+        return 10
+    }
     if node.kind == 272 && !expression_is_null(node.left) && node.left.kind == 270 && name_is(source, node.left.start, node.left.end, "u8") { return 8 }
     if node.kind != 270 { return 0 }
     token := next_token(source, node.start)
@@ -4740,6 +4748,8 @@ allocate_ir_expr :: fn (storage : *Storage, source_node : *ExprNode, tag : u64, 
 }
 
 numeric :: fn (tag : u64) bool { tag == 1 || tag == 3 }
+
+pointer_tag :: fn (tag : u64) bool { tag >= 7 && tag <= 12 && tag != 8 }
 
 names_match :: fn (source : []u8, start : u64, end : u64, other : []u8, other_start : u64, other_end : u64) bool {
     if end < start || other_end < other_start || end - start != other_end - other_start { return false }
@@ -4874,7 +4884,7 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
         return result
     }
     if node.kind == 1 {
-        if name_is(source, node.payload_start, node.payload_end, "null") { return allocate_ir_expr(storage, node, 7, empty, empty) }
+        if name_is(source, node.payload_start, node.payload_end, "null") { return allocate_ir_expr(storage, node, 12, empty, empty) }
         tag := symbol_type(source, node.payload_start, node.payload_end, locals)
         if tag == 0 { fail(issue, 2, node.start, node.end) return empty }
         return allocate_ir_expr(storage, node, tag, empty, empty)
@@ -4890,6 +4900,31 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
         if tag == 0 { fail(issue, 1, node.right.start, node.right.end) return empty }
         return allocate_ir_expr(storage, node, tag, receiver, empty)
     }
+    if node.kind == 261 {
+        receiver := lower_expr(source, owner, node.left, locals, functions, storage, issue)
+        index := lower_expr(source, owner, node.right, locals, functions, storage, issue)
+        if expr_is_null(receiver) || expr_is_null(index) { return empty }
+        if index.type_tag != 1 || (receiver.type_tag != 7 && receiver.type_tag != 8 && receiver.type_tag != 9) { fail(issue, 3, node.start, node.end) return empty }
+        tag : u64 = if receiver.type_tag == 9 { 7 } else { 1 }
+        return allocate_ir_expr(storage, node, tag, receiver, index)
+    }
+    if node.kind == 296 {
+        if expression_is_null(node.left) || node.left.kind != 1 { fail(issue, 1, node.start, node.end) return empty }
+        value := lower_expr(source, owner, node.left, locals, functions, storage, issue)
+        if expr_is_null(value) { return empty }
+        tag : u64 = if value.type_tag == 8 { 11 } else { 10 }
+        return allocate_ir_expr(storage, node, tag, value, empty)
+    }
+    if node.kind == 297 {
+        value := lower_expr(source, owner, node.left, locals, functions, storage, issue)
+        if expr_is_null(value) { return empty }
+        tag : u64 = 0
+        if value.type_tag == 7 { tag = 1 }
+        if value.type_tag == 9 { tag = 7 }
+        if value.type_tag == 11 { tag = 8 }
+        if tag == 0 { fail(issue, 3, node.start, node.end) return empty }
+        return allocate_ir_expr(storage, node, tag, value, empty)
+    }
     if node.kind == 2 {
         tag : u64 = 1
         index := node.payload_start
@@ -4904,7 +4939,7 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
         value := lower_expr(source, owner, node.left, locals, functions, storage, issue)
         tag := type_tag(source, node.right)
         if expr_is_null(value) || tag == 0 { fail(issue, 1, node.start, node.end) return empty }
-        if !(numeric(value.type_tag) && numeric(tag)) && !(tag == 7 && value.type_tag == 7) {
+        if !(numeric(value.type_tag) && numeric(tag)) && !(pointer_tag(tag) && pointer_tag(value.type_tag)) {
             fail(issue, 3, node.start, node.end)
             return empty
         }
@@ -4929,7 +4964,7 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
             if left.type_tag != 2 || right.type_tag != 2 { fail(issue, 3, node.start, node.end) return empty }
         } else {
             if node.kind == 128 || node.kind == 129 {
-                if left.type_tag != right.type_tag && !(numeric(left.type_tag) && numeric(right.type_tag)) { fail(issue, 3, node.start, node.end) return empty }
+                if left.type_tag != right.type_tag && !(numeric(left.type_tag) && numeric(right.type_tag)) && !(pointer_tag(left.type_tag) && right.type_tag == 12) && !(left.type_tag == 12 && pointer_tag(right.type_tag)) { fail(issue, 3, node.start, node.end) return empty }
             } else {
                 if !numeric(left.type_tag) || !numeric(right.type_tag) { fail(issue, 3, node.start, node.end) return empty }
             }
@@ -5301,7 +5336,7 @@ c_type :: fn (output : *CBuffer, tag : u64) bool {
     if tag == 2 { return c_text(output, "_Bool") }
     if tag == 3 { return c_text(output, "double") }
     if tag == 6 { return c_text(output, "void") }
-    if tag == 7 { return c_text(output, "void*") }
+    if tag == 7 || tag == 9 || tag == 10 || tag == 11 || tag == 12 { return c_text(output, "void*") }
     if tag == 8 { return c_text(output, "m_slice") }
     false
 }
@@ -5384,6 +5419,26 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
         if value.type_tag == 7 { return c_text(output, "ptr") }
         if value.type_tag == 1 { return c_text(output, "len") }
         return false
+    }
+    if value.kind == 261 {
+        if value.left.type_tag == 8 {
+            if !c_text(output, "((") || !c_expr(output, source, value.left) || !c_text(output, ").ptr[") { return false }
+        } else {
+            if !c_text(output, if value.left.type_tag == 9 { "(((void**)" } else { "(((uint8_t*)" }) || !c_expr(output, source, value.left) || !c_text(output, ")[") { return false }
+        }
+        if !c_expr(output, source, value.right) { return false }
+        return c_text(output, "])")
+    }
+    if value.kind == 296 {
+        if !c_text(output, "((void*)&") || !c_expr(output, source, value.left) { return false }
+        return c_push(output, 41)
+    }
+    if value.kind == 297 {
+        prefix : []u8 = "(*((uint8_t*)"
+        if value.left.type_tag == 9 { prefix = "(*((void**)" }
+        if value.left.type_tag == 11 { prefix = "(*((m_slice*)" }
+        if !c_text(output, prefix) || !c_expr(output, source, value.left) { return false }
+        return c_text(output, "))")
     }
     if value.kind == 2 { return c_span(output, source, value.payload_start, value.payload_end) }
     if value.kind == 4 { return c_text(output, "1") }

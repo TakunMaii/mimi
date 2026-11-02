@@ -30,9 +30,10 @@ either no parameters or `(argc: i32, argv: **u8)`. It writes temporary C, invoke
 the C file. Direct scalar `extern` calls can link against host C symbols.
 Imports of public scalar functions support transitive calls and module-local C names.
 Opaque pointer `extern` calls, pointer-to-pointer casts, byte slices, string
-literals, and `.ptr`/`.len` access are supported. Pointer pointee types and
-integer widths remain collapsed in this initial backend.
-Collection `for`, match, defer, user-defined aggregates, imported types, pointer dereference/indexing, and generics
+literals, `.ptr`/`.len` access, byte indexing, and `argv` indexing are supported.
+Pointer pointee types and integer widths remain collapsed in this initial backend.
+Collection `for`, match, defer, user-defined aggregates, imported types,
+general pointer arithmetic, and generics
 remain unsupported in stage1.
 Whole-expression scalar `if`/`else` values are also supported; embedded `if`
 expressions remain outside the current stage1 subset.

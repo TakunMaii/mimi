@@ -409,6 +409,7 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             ("pointer-cast", "extern malloc : fn(size : u64) *u8 extern free : fn(pointer : *u8) void main :: fn () i32 { memory := malloc(8) converted := memory as *i32 free(converted as *u8) 42 }", 42),
             ("byte-slice", "main :: fn () i32 { text : []u8 = \"hello\\n\" if text.len == 6 { return 42 } 0 }", 42),
             ("slice-extern", "extern mimi_stderr_write : fn(data : *u8, length : u64) void main :: fn () i32 { text : []u8 = \"hello\\n\" mimi_stderr_write(text.ptr, text.len) 42 }", 42),
+            ("slice-index", "extern mimi_slice_from_raw : fn(data : *u8, length : u64, output : *[]u8) void main :: fn () i32 { text := \"xy\" copied : []u8 = \"\" mimi_slice_from_raw(text.ptr, text.len, &copied) if copied[1] == 121 { return 42 } 0 }", 42),
         ]
         for name, text, expected_exit in cases:
             program = directory / f"{name} program.mi"
@@ -456,6 +457,12 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             executable = directory / f"argc-{label}"
             run([str(tool), "build", str(argc_program), "-o", str(executable), "--c-source", str(RUNTIME), "--no-cache"])
             run([str(executable), "alpha", "beta"], expected_status=3)
+        argv_program = directory / "argv-index.mi"
+        argv_program.write_text("main :: fn (argc : i32, argv : **u8) i32 { if argc == 3 && argv[1][0] == 97 { return 42 } 0 }", encoding="utf-8")
+        for label, tool in (("stage0", stage0), ("stage1", stage1)):
+            executable = directory / f"argv-{label}"
+            run([str(tool), "build", str(argv_program), "-o", str(executable), "--c-source", str(RUNTIME), "--no-cache"])
+            run([str(executable), "alpha", "beta"], expected_status=42)
         private_program = directory / "private-call.mi"
         private_program.write_text('left :: @import("left.mi")\nmain :: fn () i32 { left.hidden() }', encoding="utf-8")
         private_result = run([str(stage1), "build", str(private_program), "-o", str(directory / "private-call")], expected_status=1)

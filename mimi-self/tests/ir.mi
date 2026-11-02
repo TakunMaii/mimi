@@ -78,5 +78,7 @@ main :: fn () i32 {
     if !check_issue("main :: fn () i32 { text : []u8 = \"hello\" text.len as i32 }", 0) { return 41 }
     if !check_issue("main :: fn (argc : i32, argv : **u8) i32 { argc }", 0) { return 42 }
     if !check_issue("main :: fn (argc : i64, argv : **u8) i32 { argc as i32 }", 6) { return 43 }
+    if !check_issue("main :: fn (argc : i32, argv : **u8) i32 { argv[1][0] as i32 }", 0) { return 44 }
+    if !check_issue("extern mimi_slice_from_raw : fn(data : *u8, length : u64, output : *[]u8) void main :: fn () i32 { text := \"xy\" copied : []u8 = \"\" mimi_slice_from_raw(text.ptr, text.len, &copied) copied[1] as i32 }", 0) { return 45 }
     0
 }
