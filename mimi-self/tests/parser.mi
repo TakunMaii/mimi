@@ -581,6 +581,11 @@ check_statements :: fn () i32 {
     if !lexer.tuple_binding_is_null(mismatched_tuple_binding) { return 280 }
     mismatched_expression_tuple_binding := lexer.parse_tuple_binding("first, second := (left + 1,)", &storage)
     if !lexer.tuple_binding_is_null(mismatched_expression_tuple_binding) { return 281 }
+    qualified_generic := lexer.parse_type("types.Result<i32, i32>", &storage)
+    if lexer.expression_is_null(qualified_generic) || qualified_generic.kind != 278 || qualified_generic.left.kind != 260 { return 288 }
+    match_value := lexer.parse_expression("match result { ok(value) => value, err(_) => 0 }", &storage)
+    if lexer.expression_is_null(match_value) || match_value.kind != 290 || lexer.match_node_is_null(match_value.match_node) { return 289 }
+    if match_value.match_node.arm_count != 2 || match_value.match_node.arms.variant_start != 15 { return 290 }
     lexer.expression_arena_release(&storage)
     0
 }

@@ -87,5 +87,7 @@ main :: fn () i32 {
     if !check_type("main :: fn () void { return }", 0) { return 31 }
     if !check_type("main :: fn () void { return 3 }", 5) { return 32 }
     if !check_type("main :: fn () i32 { if true { return true } return 1 }", 5) { return 33 }
+    if !check("Choice :: enum { yes(i32), no } main :: fn () i32 { value : Choice = yes(1) match value { yes(item) => item, no => 0 } }", 0) { return 34 }
+    if !check("Choice :: enum { yes(i32), no } main :: fn () i32 { value : Choice = unknown(1) 0 }", 1) { return 35 }
     0
 }
