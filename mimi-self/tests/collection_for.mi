@@ -1,0 +1,15 @@
+main :: fn () i32 {
+    values := [20, 22]
+    total := 0
+    for value in values {
+        total = total + value
+    }
+    if total != 42 { return 1 }
+    skipped := 20
+    for value in values {
+        if value == 20 { continue }
+        skipped = skipped + value
+    }
+    if skipped != 42 { return 2 }
+    0
+}

@@ -16,7 +16,7 @@ two consecutive stages.
   stdout/stderr, and temporary project setup.
 - [x] Make the Python suite selectable by compiler executable so the same
   tests can run against stage0, stage1, and stage2.
-- [ ] Run the stage0/stage1/stage2 bootstrap script against the self-hosted
+- [x] Run the stage0/stage1/stage2 bootstrap script against the self-hosted
   compiler source and review the generated artifact hashes.
 
 ## T1: Language support needed by a compiler
@@ -117,6 +117,8 @@ two consecutive stages.
   against the Rust compiler.
 - [x] Include casts, tuple destructuring, and struct methods in the differential
   accepted-program suite.
+- [x] Resolve locally declared and directly imported public enum variants in
+  expression name analysis.
 
 ## T3: Self-hosted code generation
 
@@ -132,6 +134,8 @@ two consecutive stages.
   `break`, and `continue` to C; compare runtime behavior with stage0.
 - [x] Lower scalar integer range `for` loops with loop-local read-only bindings
   and compare `continue` behavior with stage0.
+- [x] Lower byte-slice collection `for` loops with one-time iterable evaluation,
+  read-only elements, and `continue` behavior.
 - [x] Lower whole-expression scalar `if`/`else` values to typed IR and C
   conditional expressions.
 - [x] Lower direct scalar `extern` declarations and calls through the host C
@@ -147,6 +151,16 @@ two consecutive stages.
   `main(argc: i32, argv: **u8)` in the initial C backend.
 - [x] Lower byte-slice and `*u8`/`**u8` indexing, byte dereference, and
   address-of locals for byte-slice output parameters.
+- [x] Lower tuple destructuring bindings with single evaluation of the tuple
+  initializer and typed element locals.
+- [x] Lower plain struct methods with explicit `Self` receivers and typed calls.
+- [x] Lower local and imported generic enum constructors and exhaustive
+  identifier-scrutinee match expressions with scalar payloads.
+- [x] Lower enum `if` variant tests with payload bindings and optional `else`
+  branches for identifier scrutinees.
+- [x] Lower statement-form `match`, including trailing function results.
+- [x] Preserve specialized enum return types across imported function calls
+  and caller-side matching.
 - [ ] Resolve imported function/type references into module-owned typed IR.
 - [ ] Extend typed IR and C generation to control flow, aggregates, generics,
   imports, C ABI calls, and the remaining language features.
@@ -161,8 +175,8 @@ two consecutive stages.
 
 - [x] Compile the Mimi compiler with the Rust compiler (stage1).
 - [x] Compile the same compiler source with stage1 (stage2).
-- [ ] Run the full Python suite under Rust, stage1, and stage2 compilers.
-- [ ] Check reproducibility and document remaining differences from Rust.
+- [x] Run the full Python suite under Rust, stage1, and stage2 compilers.
+- [x] Check reproducibility and document remaining differences from Rust.
 - [ ] Make the self-hosted compiler the default only after parity gates pass.
 
 ## Current milestone
@@ -226,9 +240,12 @@ The stage1 front end now parses `compiler.mi` itself. The import graph retains
 source and alias edges and can parse imported modules on demand for public
 function and type lookup. Scalar imported calls now lower to module-owned IR.
 The C backend now lowers plain struct signatures, literals, field reads and
-writes, struct pointers, public imported struct types, tuple values and members,
-byte-slice ranges, byte-array literals, and indexed pointer assignments.
-Stage1 builds stage2, and stage2 builds stage3. Stage2 executes the IR and lexer
-tests; the complete behavior suite still has parity failures. Integer widths,
-pointer targets outside the currently modeled subset, struct defaults, and
-generic specialization remain open.
+writes, struct pointers, public imported struct types, struct methods, tuple
+values and members, tuple destructuring, byte-slice ranges, byte-slice collection
+loops, enum `if` variant tests, byte-array literals,
+indexed pointer assignments, and specialized generic enums with scalar payloads.
+Stage1 builds stage2, and both stages run the Python behavior suite. The suite
+checks precise self-hosted diagnostic spans while allowing its error-code
+wording to differ from stage0. Match lowering currently requires an identifier
+scrutinee. Integer widths, pointer targets outside the currently modeled
+subset, struct defaults, and general generic specialization remain open.

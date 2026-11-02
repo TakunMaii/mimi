@@ -25,7 +25,7 @@ def run(
     return result
 
 
-def test_compile_diagnostics(compiler: Path) -> None:
+def test_compile_diagnostics(compiler: Path, *, self_hosted: bool = False) -> None:
     cases = [
         (
             "parse-error",
@@ -46,6 +46,12 @@ def test_compile_diagnostics(compiler: Path) -> None:
             ("1:1", "^~~~"),
         ),
     ]
+    if self_hosted:
+        cases = [
+            ("parse-error", "main :: fn () i32 { 1 + }", "error[E_PARSE]: expected an expression after operator", ("1:25", "^")),
+            ("lex-error", "main :: fn () i32 { 1 | 2 }", "error[E_LEX]", ("1:23", "^")),
+            ("type-error", "main :: fn () i32 { missing_name }", "error[E_NAME]: undefined identifier", ("1:21", "^~~~~~~~~~~~")),
+        ]
     with tempfile.TemporaryDirectory(prefix="mimi-self-errors-") as temporary:
         directory = Path(temporary)
         for name, source, expected_diagnostic, expected_location in cases:
@@ -64,6 +70,8 @@ def test_compile_diagnostics(compiler: Path) -> None:
                     f"{name}: expected {expected_diagnostic!r} in stderr, "
                     f"got:\n{result.stderr}"
                 )
+            if "  = help:" not in result.stderr:
+                raise AssertionError(f"{name}: missing actionable help:\n{result.stderr}")
             actual_location = diagnostic_location(result.stderr)
             if actual_location != expected_location:
                 raise AssertionError(
@@ -88,7 +96,19 @@ def diagnostic_location(stderr: str) -> tuple[str, str] | None:
     return f"{location_suffix[-2]}:{location_suffix[-1]}", underline
 
 
-def test_compiler_parity(reference: Path, candidate: Path) -> None:
+def diagnostic_category(stderr: str) -> str | None:
+    if "E_PARSE" in stderr or "error[parse]" in stderr:
+        return "parse"
+    if "E_LEX" in stderr or "error[lex]" in stderr:
+        return "lex"
+    if "E_NAME" in stderr or "undefined identifier" in stderr:
+        return "name"
+    if "E_TYPE" in stderr or "error[type]" in stderr:
+        return "type"
+    return None
+
+
+def test_compiler_parity(reference: Path, candidate: Path, *, self_hosted: bool = False) -> None:
     cases = [
         ("accepted-zero", "main :: fn () i32 { 0 }", 0, None),
         ("accepted-arithmetic", "main :: fn () i32 { value := 6 * 7 if value != 42 { return 1 } 0 }", 0, None),
@@ -110,7 +130,7 @@ def test_compiler_parity(reference: Path, candidate: Path) -> None:
         for name, source, expected_status, expected_diagnostic in cases:
             source_path = directory / f"{name}.mi"
             source_path.write_text(source, encoding="utf-8")
-            observations: list[tuple[bool, int | None, str | None, tuple[str, str] | None]] = []
+            observations: list[tuple[bool, int | None, str | None]] = []
             for label, compiler in (("stage0", reference), ("candidate", candidate)):
                 output_path = directory / f"{name}-{label}"
                 result = subprocess.run(
@@ -144,12 +164,23 @@ def test_compiler_parity(reference: Path, candidate: Path) -> None:
                         raise AssertionError(
                             f"{label} {name}: missing primary diagnostic location:\n{result.stderr}"
                         )
-                    if expected_diagnostic not in result.stderr:
+                    if label == "stage0" and expected_diagnostic not in result.stderr:
                         raise AssertionError(
                             f"{label} {name}: expected diagnostic {expected_diagnostic!r}, "
                             f"got:\n{result.stderr}"
                         )
-                observations.append((accepted, program_status, diagnostic, location))
+                    if label == "candidate" and self_hosted:
+                        expected_candidate_location = {
+                            "parse-error": ("1:25", "^"),
+                            "lex-error": ("1:23", "^"),
+                            "type-error": ("1:21", "^~~~~~~~~~~~"),
+                        }.get(name)
+                        if expected_candidate_location is not None and location != expected_candidate_location:
+                            raise AssertionError(
+                                f"candidate {name}: expected location {expected_candidate_location!r}, "
+                                f"got {location!r}:\n{result.stderr}"
+                            )
+                observations.append((accepted, program_status, diagnostic_category(result.stderr) if not accepted else None))
             if observations[0] != observations[1]:
                 raise AssertionError(
                     f"compiler behavior differs for {name}: "
@@ -487,7 +518,7 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
         rejected = [
             ("name", "main :: fn () i32 { missing }", "error[E_NAME]"),
             ("type", "main :: fn () i32 { true }", "error[E_TYPE]"),
-            ("lower", "main :: fn () i32 { left, right := (1, 2) left + right }", "error[E_LOWER]"),
+            ("lower", "main :: fn () i32 { defer 1 0 }", "error[E_LOWER]"),
             ("arity", "add :: fn (left : i32, right : i32) i32 { left + right } main :: fn () i32 { add(20) }", "error[E_LOWER]"),
             ("range-readonly", "main :: fn () i32 { for index in 0..3 { index = 2 } 0 }", "error[E_LOWER]"),
             ("integer-pointer-cast", "main :: fn () i32 { pointer := 0 as *u8 0 }", "error[E_LOWER]"),
@@ -518,7 +549,7 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
         run([str(stage2_executable)], expected_status=42)
 
 
-def test_module_loading(compiler: Path) -> None:
+def test_module_loading(compiler: Path, *, self_hosted: bool = False) -> None:
     with tempfile.TemporaryDirectory(prefix="mimi-self-modules-") as temporary:
         directory = Path(temporary)
         program = directory / "module-load.mi"
@@ -643,6 +674,23 @@ main :: fn () i32 {{
         )
         run([str(graph_executable)])
 
+        if self_hosted:
+            factory_module = directory / "result-factory.mi"
+            factory_module.write_text(
+                'pub Result :: enum <T, E> { ok(T), err(E) }\n'
+                'pub make :: fn () Result<i32, i32> { ok(42) }\n',
+                encoding="utf-8",
+            )
+            factory_program = directory / "result-factory-main.mi"
+            factory_program.write_text(
+                'factory :: @import("result-factory.mi")\n'
+                'main :: fn () i32 { result := factory.make() value := match result { ok(item) => item, err(_) => 0 } value }\n',
+                encoding="utf-8",
+            )
+            factory_executable = directory / "result-factory-main"
+            run([str(compiler), "build", str(factory_program), "-o", str(factory_executable), "--c-source", str(RUNTIME), "--no-cache"])
+            run([str(factory_executable)], expected_status=42)
+
         root_path_program = directory / "root-path.mi"
         root_path_executable = directory / "root-path"
         root_path_program.write_text(
@@ -678,6 +726,7 @@ def main() -> None:
         type=Path,
         help="Rust stage0 compiler used for parity checks with --compiler",
     )
+    parser.add_argument("--self-hosted", action="store_true", help="expect self-hosted diagnostic codes and spans")
     arguments = parser.parse_args()
     if arguments.compiler is None:
         run(["cargo", "build", "--quiet"])
@@ -698,14 +747,14 @@ def main() -> None:
                 ]
             )
             run([str(executable)])
-    test_compile_diagnostics(compiler)
+    test_compile_diagnostics(compiler, self_hosted=arguments.self_hosted)
     test_file_io(compiler)
     test_path_api(compiler)
     test_source_model(compiler)
     test_scalar_codegen(compiler)
     if arguments.compiler is None:
         test_partial_compiler_bootstrap(compiler)
-    test_module_loading(compiler)
+    test_module_loading(compiler, self_hosted=arguments.self_hosted)
     if arguments.compiler is not None:
         reference = arguments.reference_compiler
         if reference is None:
@@ -714,7 +763,7 @@ def main() -> None:
             reference = reference.resolve()
         if not reference.is_file():
             parser.error(f"reference compiler does not exist: {reference}")
-        test_compiler_parity(reference, compiler)
+        test_compiler_parity(reference, compiler, self_hosted=arguments.self_hosted)
     print(f"mimi-self: tests passed with {compiler}")
 
 

@@ -645,6 +645,12 @@ pub ModuleNode :: struct {
     end : u64,
     declaration_count : u64,
     declarations : *ModuleDeclarationNode,
+    imported_variants : *ImportedVariant,
+}
+
+pub ImportedVariant :: struct {
+    name : []u8,
+    next : *ImportedVariant,
 }
 
 pub ModuleDeclarationNode :: struct {
@@ -2249,8 +2255,7 @@ pub parse_enum_declaration :: fn (source : []u8, storage : *ExpressionArena) *En
         if !found_close { return mimi_buffer_empty() as *EnumNode }
         parameters = parse_generic_parameters(source[next.1:close_cursor], storage)
         if generic_parameter_list_is_null(parameters) { return mimi_buffer_empty() as *EnumNode }
-        parameters.start = parameters.start + next.1
-        parameters.end = parameters.end + next.1
+        shift_generic_parameters(parameters, next.1)
         cursor = close_cursor
     }
     opening := next_token(source, cursor)
@@ -2388,8 +2393,7 @@ pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *
         if !found_close { return mimi_buffer_empty() as *StructNode }
         parameters = parse_generic_parameters(source[next.1:close_cursor], storage)
         if generic_parameter_list_is_null(parameters) { return mimi_buffer_empty() as *StructNode }
-        parameters.start = parameters.start + next.1
-        parameters.end = parameters.end + next.1
+        shift_generic_parameters(parameters, next.1)
         cursor = close_cursor
     }
     opening := next_token(source, cursor)
@@ -2910,12 +2914,13 @@ pub parse_module_with_issue :: fn (source : []u8, storage : *ExpressionArena, is
         last = declaration
         count = count + 1
     }
-    if mimi_arena_allocate(storage, 32, 8) == 0 { return mimi_buffer_empty() as *ModuleNode }
+    if mimi_arena_allocate(storage, 40, 8) == 0 { return mimi_buffer_empty() as *ModuleNode }
     module := storage.last as *ModuleNode
     module.start = 0
     module.end = source.len
     module.declaration_count = count
     module.declarations = first
+    module.imported_variants = mimi_buffer_empty() as *ImportedVariant
     module
 }
 
@@ -4253,6 +4258,15 @@ name_in_current_block :: fn (source : []u8, start : u64, end : u64, head : *Name
     false
 }
 
+pub register_imported_variant :: fn (module : *ModuleNode, name : []u8, storage : *ExpressionArena) bool {
+    if module_node_is_null(module) || mimi_arena_allocate(storage, 24, 8) == 0 { return false }
+    item := storage.last as *ImportedVariant
+    item.name = name
+    item.next = module.imported_variants
+    module.imported_variants = item
+    true
+}
+
 name_is_global :: fn (source : []u8, start : u64, end : u64, module : *ModuleNode) bool {
     declaration := module.declarations
     while declaration != (mimi_buffer_empty() as *ModuleDeclarationNode) {
@@ -4265,6 +4279,11 @@ name_is_global :: fn (source : []u8, start : u64, end : u64, module : *ModuleNod
             }
         }
         declaration = declaration.next
+    }
+    imported := module.imported_variants
+    while imported != (mimi_buffer_empty() as *ImportedVariant) {
+        if name_is(source, start, end, imported.name) { return true }
+        imported = imported.next
     }
     false
 }
@@ -4790,6 +4809,7 @@ pub Function :: struct {
     owner : *ModuleInput,
     syntax : *FunctionNode,
     is_public : bool,
+    method_of : *StructType,
 }
 
 pub ModuleInput :: struct {
@@ -4833,6 +4853,15 @@ pub StructType :: struct {
     visiting : bool,
 }
 
+pub EnumType :: struct {
+    id : u64,
+    owner : *ModuleInput,
+    declaration : *ModuleDeclarationNode,
+    arguments : *TupleElement,
+    argument_count : u64,
+    next : *EnumType,
+}
+
 pub ImportInput :: struct {
     alias : []u8,
     target : *ModuleInput,
@@ -4847,6 +4876,8 @@ pub Module :: struct {
     tuples : *TupleType,
     tuple_count : u64,
     storage : *Storage,
+    enums : *EnumType,
+    enum_count : u64,
 }
 
 pub LowerIssue :: struct {
@@ -4878,6 +4909,8 @@ Symbol :: struct {
     type_tag : u64,
     next : *Symbol,
     mutable : bool,
+    match_value : *Expr,
+    variant_index : u64,
 }
 
 pub expr_is_null :: fn (value : *Expr) bool { value == (mimi_buffer_empty() as *Expr) }
@@ -5012,8 +5045,117 @@ tuple_syntax_elements :: fn (source : []u8, owner : *ModuleInput, node : *ExprNo
     true
 }
 
+enum_declaration :: fn (source : []u8, start : u64, end : u64, owner : *ModuleInput, public_only : bool) *ModuleDeclarationNode {
+    current := owner.parsed.declarations
+    while current != (mimi_buffer_empty() as *ModuleDeclarationNode) {
+        if current.kind == 3 && (!public_only || current.is_public) && names_match(source, start, end, owner.source, current.name_start, current.name_end) { return current }
+        current = current.next
+    }
+    mimi_buffer_empty() as *ModuleDeclarationNode
+}
+
+enum_for_tag :: fn (owner : *ModuleInput, tag : u64) *EnumType {
+    if tag < 4000000 || tag >= 5000000 { return mimi_buffer_empty() as *EnumType }
+    current := owner.module.enums
+    while current != (mimi_buffer_empty() as *EnumType) {
+        if current.id == tag - 4000000 { return current }
+        current = current.next
+    }
+    mimi_buffer_empty() as *EnumType
+}
+
+enum_intern :: fn (owner : *ModuleInput, declaration : *ModuleDeclarationNode, arguments : *TupleElement, count : u64) u64 {
+    parameters := declaration.enum_node.parameters
+    expected : u64 = if generic_parameter_list_is_null(parameters) { 0 } else { parameters.count }
+    if count != expected { return 0 }
+    current := owner.module.enums
+    while current != (mimi_buffer_empty() as *EnumType) {
+        if current.owner == owner && current.declaration == declaration && current.argument_count == count {
+            left := arguments
+            right := current.arguments
+            equal := true
+            while left != (mimi_buffer_empty() as *TupleElement) && right != (mimi_buffer_empty() as *TupleElement) {
+                if left.tag != right.tag { equal = false break }
+                left = left.next
+                right = right.next
+            }
+            if equal { return 4000000 + current.id }
+        }
+        current = current.next
+    }
+    if !allocate(owner.module.storage, 48) { return 0 }
+    item := owner.module.storage.last as *EnumType
+    item.id = owner.module.enum_count
+    item.owner = owner
+    item.declaration = declaration
+    item.arguments = arguments
+    item.argument_count = count
+    item.next = owner.module.enums
+    owner.module.enums = item
+    owner.module.enum_count = owner.module.enum_count + 1
+    4000000 + item.id
+}
+
+enum_arguments :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, build : *TupleBuild) bool {
+    if expression_is_null(node) { return false }
+    if node.kind == 276 {
+        if !enum_arguments(source, owner, node.left, build) { return false }
+        return enum_arguments(source, owner, node.right, build)
+    }
+    tag := type_tag(source, owner, node)
+    if tag == 0 || !allocate(owner.module.storage, 16) { return false }
+    item := owner.module.storage.last as *TupleElement
+    item.tag = tag
+    item.next = mimi_buffer_empty() as *TupleElement
+    if build.count == 0 { build.first = item } else { build.last.next = item }
+    build.last = item
+    build.count = build.count + 1
+    true
+}
+
+enum_payload_tag :: fn (definition : *EnumType, variant : *EnumVariantNode) u64 {
+    payload := variant.payload_type
+    if expression_is_null(payload) { return 0 }
+    if payload.kind == 270 && !generic_parameter_list_is_null(definition.declaration.enum_node.parameters) {
+        parameter := definition.declaration.enum_node.parameters.first
+        argument := definition.arguments
+        while parameter != (mimi_buffer_empty() as *GenericParameterNode) && argument != (mimi_buffer_empty() as *TupleElement) {
+            if names_match(definition.owner.source, payload.start, payload.end, definition.owner.source, parameter.start, parameter.end) { return argument.tag }
+            parameter = parameter.next
+            argument = argument.next
+        }
+    }
+    type_tag(definition.owner.source, definition.owner, payload)
+}
+
+enum_variant :: fn (source : []u8, start : u64, end : u64, definition : *EnumType, index : *u64) *EnumVariantNode {
+    variant := definition.declaration.enum_node.variants
+    index[0] = 0
+    while variant != (mimi_buffer_empty() as *EnumVariantNode) {
+        if names_match(source, start, end, definition.owner.source, variant.name_start, variant.name_end) { return variant }
+        index[0] = index[0] + 1
+        variant = variant.next
+    }
+    mimi_buffer_empty() as *EnumVariantNode
+}
+
 type_tag :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode) u64 {
     if expression_is_null(node) { return 0 }
+    if node.kind == 278 {
+        base := node.left
+        target := owner
+        name := base
+        if !expression_is_null(base) && base.kind == 260 {
+            target = find_import(source, base.left.start, base.left.end, owner)
+            name = base.right
+        }
+        if target == (mimi_buffer_empty() as *ModuleInput) || expression_is_null(name) || name.kind != 270 { return 0 }
+        declaration := enum_declaration(source, name.start, name.end, target, target != owner)
+        if declaration == (mimi_buffer_empty() as *ModuleDeclarationNode) { return 0 }
+        build := TupleBuild { first = mimi_buffer_empty() as *TupleElement, last = mimi_buffer_empty() as *TupleElement, count = 0 }
+        if !enum_arguments(source, owner, node.right, &build) { return 0 }
+        return enum_intern(target, declaration, build.first, build.count)
+    }
     if node.kind == 275 {
         build := TupleBuild { first = mimi_buffer_empty() as *TupleElement, last = mimi_buffer_empty() as *TupleElement, count = 0 }
         if !tuple_syntax_elements(source, owner, node.left, &build) { return 0 }
@@ -5038,6 +5180,8 @@ type_tag :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode) u64 {
         if target != (mimi_buffer_empty() as *ModuleInput) {
             found := struct_by_name(source, node.right.start, node.right.end, target)
             if found != (mimi_buffer_empty() as *StructType) && found.is_public { return 1000 + found.id }
+            declaration := enum_declaration(source, node.right.start, node.right.end, target, true)
+            if declaration != (mimi_buffer_empty() as *ModuleDeclarationNode) { return enum_intern(target, declaration, mimi_buffer_empty() as *TupleElement, 0) }
         }
     }
     if node.kind != 270 { return 0 }
@@ -5049,6 +5193,8 @@ type_tag :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode) u64 {
     if name_is(source, token.1, token.2, "i8") || name_is(source, token.1, token.2, "i16") || name_is(source, token.1, token.2, "i32") || name_is(source, token.1, token.2, "i64") || name_is(source, token.1, token.2, "u8") || name_is(source, token.1, token.2, "u16") || name_is(source, token.1, token.2, "u32") || name_is(source, token.1, token.2, "u64") { return 1 }
     found := struct_by_name(source, token.1, token.2, owner)
     if found != (mimi_buffer_empty() as *StructType) { return 1000 + found.id }
+    declaration := enum_declaration(source, token.1, token.2, owner, false)
+    if declaration != (mimi_buffer_empty() as *ModuleDeclarationNode) { return enum_intern(owner, declaration, mimi_buffer_empty() as *TupleElement, 0) }
     0
 }
 
@@ -5138,14 +5284,92 @@ symbol_type :: fn (source : []u8, start : u64, end : u64, head : *Symbol) u64 {
 }
 
 symbol_push :: fn (storage : *Storage, head : *Symbol, start : u64, end : u64, tag : u64, mutable : bool) *Symbol {
-    if !allocate(storage, 40) { return mimi_buffer_empty() as *Symbol }
+    if !allocate(storage, 56) { return mimi_buffer_empty() as *Symbol }
     item := storage.last as *Symbol
     item.start = start
     item.end = end
     item.type_tag = tag
     item.next = head
     item.mutable = mutable
+    item.match_value = mimi_buffer_empty() as *Expr
+    item.variant_index = 0
     item
+}
+
+lower_value :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, expected : u64, locals : *Symbol, functions : *Function, storage : *Storage, issue : *LowerIssue) *Expr {
+    definition := enum_for_tag(owner, expected)
+    if definition != (mimi_buffer_empty() as *EnumType) && (node.kind == 1 || node.kind == 263) {
+        name := if node.kind == 263 { node.left } else { node }
+        if !expression_is_null(name) && name.kind == 1 {
+            index : u64 = 0
+            variant := enum_variant(source, name.payload_start, name.payload_end, definition, &index)
+            if variant != (mimi_buffer_empty() as *EnumVariantNode) {
+                payload_tag := enum_payload_tag(definition, variant)
+                payload : *Expr = mimi_buffer_empty() as *Expr
+                if payload_tag == 0 {
+                    if node.kind != 1 { fail(issue, 3, node.start, node.end) return payload }
+                } else {
+                    if node.kind != 263 || expression_is_null(node.right) || node.right.kind == 262 { fail(issue, 3, node.start, node.end) return payload }
+                    payload = lower_expr(source, owner, node.right, locals, functions, storage, issue)
+                    if expr_is_null(payload) || !type_assignable(payload_tag, payload.type_tag) { fail(issue, 3, node.start, node.end) return mimi_buffer_empty() as *Expr }
+                }
+                result := allocate_ir_expr(storage, node, expected, mimi_buffer_empty() as *Expr, payload)
+                if expr_is_null(result) { fail(issue, 4, node.start, node.end) return result }
+                result.kind = 310
+                result.payload_start = index
+                return result
+            }
+        }
+    }
+    lower_expr(source, owner, node, locals, functions, storage, issue)
+}
+
+lower_match :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals : *Symbol, functions : *Function, storage : *Storage, issue : *LowerIssue) *Expr {
+    empty : *Expr = mimi_buffer_empty() as *Expr
+    syntax := node.match_node
+    if match_node_is_null(syntax) || expression_is_null(syntax.value) || syntax.value.kind != 1 { fail(issue, 1, node.start, node.end) return empty }
+    value := lower_expr(source, owner, syntax.value, locals, functions, storage, issue)
+    if expr_is_null(value) { return empty }
+    definition := enum_for_tag(owner, value.type_tag)
+    if definition == (mimi_buffer_empty() as *EnumType) || syntax.arm_count != definition.declaration.enum_node.variant_count { fail(issue, 3, node.start, node.end) return empty }
+    first : *Expr = empty
+    last : *Expr = empty
+    result_tag : u64 = 0
+    arm := syntax.arms
+    while !match_arm_is_null(arm) {
+        index : u64 = 0
+        variant := enum_variant(source, arm.variant_start, arm.variant_end, definition, &index)
+        if variant == (mimi_buffer_empty() as *EnumVariantNode) { fail(issue, 2, arm.variant_start, arm.variant_end) return empty }
+        payload_tag := enum_payload_tag(definition, variant)
+        arm_locals := locals
+        if arm.binding_end > arm.binding_start {
+            if payload_tag == 0 { fail(issue, 3, arm.start, arm.end) return empty }
+            if !name_is(source, arm.binding_start, arm.binding_end, "_") {
+                arm_locals = symbol_push(storage, locals, arm.binding_start, arm.binding_end, payload_tag, false)
+                if arm_locals == (mimi_buffer_empty() as *Symbol) { fail(issue, 4, arm.start, arm.end) return empty }
+                arm_locals.match_value = value
+                arm_locals.variant_index = index
+            }
+        }
+        lowered := lower_expr(source, owner, arm.value, arm_locals, functions, storage, issue)
+        if expr_is_null(lowered) { return empty }
+        if result_tag == 0 { result_tag = lowered.type_tag } else {
+            if result_tag != lowered.type_tag {
+                if !numeric(result_tag) || !numeric(lowered.type_tag) { fail(issue, 3, arm.value.start, arm.value.end) return empty }
+                result_tag = 3
+            }
+        }
+        item := allocate_ir_expr(storage, arm.value, lowered.type_tag, lowered, empty)
+        if expr_is_null(item) { fail(issue, 4, arm.start, arm.end) return empty }
+        item.kind = 311
+        item.payload_start = index
+        if expr_is_null(first) { first = item } else { last.right = item }
+        last = item
+        arm = arm.next
+    }
+    result := allocate_ir_expr(storage, node, result_tag, value, first)
+    if expr_is_null(result) { fail(issue, 4, node.start, node.end) return result }
+    result
 }
 
 allocate_ir_expr :: fn (storage : *Storage, source_node : *ExprNode, tag : u64, left : *Expr, right : *Expr) *Expr {
@@ -5191,10 +5415,25 @@ find_import :: fn (source : []u8, start : u64, end : u64, owner : *ModuleInput) 
 find_function :: fn (source : []u8, start : u64, end : u64, owner : *ModuleInput, functions : *Function) *Function {
     current := functions
     while current != (mimi_buffer_empty() as *Function) {
-        if current.owner == owner && names_match(source, start, end, current.source, current.name_start, current.name_end) { return current }
+        if current.owner == owner && current.method_of == (mimi_buffer_empty() as *StructType) && names_match(source, start, end, current.source, current.name_start, current.name_end) { return current }
         current = current.next
     }
     mimi_buffer_empty() as *Function
+}
+
+find_method :: fn (source : []u8, start : u64, end : u64, definition : *StructType, functions : *Function) *Function {
+    current := functions
+    while current != (mimi_buffer_empty() as *Function) {
+        if current.method_of == definition && names_match(source, start, end, current.source, current.name_start, current.name_end) { return current }
+        current = current.next
+    }
+    mimi_buffer_empty() as *Function
+}
+
+method_type_tag :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, definition : *StructType) u64 {
+    if !expression_is_null(node) && node.kind == 270 && name_is(source, node.start, node.end, "Self") { return 1000 + definition.id }
+    if !expression_is_null(node) && node.kind == 271 && !expression_is_null(node.left) && node.left.kind == 270 && name_is(source, node.left.start, node.left.end, "Self") { return 1000000 + definition.id }
+    type_tag(source, owner, node)
 }
 
 parameter_at :: fn (first : *Parameter, index : u64) *Parameter {
@@ -5252,6 +5491,7 @@ lower_arguments :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, lo
 lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals : *Symbol, functions : *Function, storage : *Storage, issue : *LowerIssue) *Expr {
     empty : *Expr = mimi_buffer_empty() as *Expr
     if expression_is_null(node) { fail(issue, 1, 0, 0) return empty }
+    if node.kind == 290 { return lower_match(source, owner, node, locals, functions, storage, issue) }
     if node.kind == 288 {
         if expression_is_null(node.right) || node.right.kind != 276 { fail(issue, 1, node.start, node.end) return empty }
         condition := lower_expr(source, owner, node.left, locals, functions, storage, issue)
@@ -5301,6 +5541,25 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
     }
     if node.kind == 263 {
         if expression_is_null(node.left) { fail(issue, 1, node.start, node.end) return empty }
+        if node.left.kind == 260 && !expression_is_null(node.left.left) && node.left.left.kind == 1 && symbol_find(source, node.left.left.payload_start, node.left.left.payload_end, locals) != (mimi_buffer_empty() as *Symbol) {
+            receiver := lower_expr(source, owner, node.left.left, locals, functions, storage, issue)
+            if expr_is_null(receiver) { return empty }
+            definition := struct_for_tag(owner, receiver.type_tag)
+            if definition == (mimi_buffer_empty() as *StructType) { fail(issue, 2, node.left.start, node.left.end) return empty }
+            method := find_method(source, node.left.right.payload_start, node.left.right.payload_end, definition, functions)
+            if method == (mimi_buffer_empty() as *Function) || method.parameters == (mimi_buffer_empty() as *Parameter) || !type_assignable(method.parameters.type_tag, receiver.type_tag) { fail(issue, 2, node.left.start, node.left.end) return empty }
+            cursor : u64 = 0
+            arguments : *Expr = empty
+            if !expression_is_null(node.right) {
+                arguments = lower_arguments(source, owner, node.right, locals, functions, storage, method.parameters.next, &cursor, issue)
+                if expr_is_null(arguments) { return empty }
+            }
+            if cursor != parameter_count(method.parameters.next) { fail(issue, 3, node.start, node.end) return empty }
+            result := allocate_ir_expr(storage, node, method.return_tag, receiver, arguments)
+            if expr_is_null(result) { fail(issue, 4, node.start, node.end) return result }
+            result.callee = method
+            return result
+        }
         callee_owner := owner
         callee_name := node.left
         if node.left.kind == 260 {
@@ -5331,8 +5590,16 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
     }
     if node.kind == 1 {
         if name_is(source, node.payload_start, node.payload_end, "null") { return allocate_ir_expr(storage, node, 12, empty, empty) }
-        tag := symbol_type(source, node.payload_start, node.payload_end, locals)
+        symbol := symbol_find(source, node.payload_start, node.payload_end, locals)
+        tag : u64 = if symbol == (mimi_buffer_empty() as *Symbol) { 0 } else { symbol.type_tag }
         if tag == 0 { fail(issue, 2, node.start, node.end) return empty }
+        if !expr_is_null(symbol.match_value) {
+            result := allocate_ir_expr(storage, node, tag, symbol.match_value, empty)
+            if expr_is_null(result) { fail(issue, 4, node.start, node.end) return result }
+            result.kind = 312
+            result.payload_start = symbol.variant_index
+            return result
+        }
         return allocate_ir_expr(storage, node, tag, empty, empty)
     }
     if node.kind == 3 { return allocate_ir_expr(storage, node, 8, empty, empty) }
@@ -5529,30 +5796,98 @@ lower_body :: fn (source : []u8, owner : *ModuleInput, body : *BlockNode, incomi
     node := body.statements
     while !statement_node_is_null(node) {
         item : *Statement = empty
+        if node.kind == 308 {
+            syntax := node.match_statement
+            fake := ExprNode { kind = 290, start = syntax.start, end = syntax.end, left = mimi_buffer_empty() as *ExprNode, right = mimi_buffer_empty() as *ExprNode, payload_start = syntax.start, payload_end = syntax.end, match_node = syntax }
+            value := lower_match(source, owner, &fake, locals, functions, storage, issue)
+            if expr_is_null(value) { return empty }
+            item = allocate_statement(storage, node, value)
+            if statement_is_null(item) { fail(issue, 4, node.start, node.end) return empty }
+            item.kind = 303
+        } else {
+        if node.kind == 309 {
+            binding := node.tuple_binding
+            value := lower_expr(source, owner, binding.value, locals, functions, storage, issue)
+            if expr_is_null(value) { return empty }
+            tuple := tuple_by_tag(owner, value.type_tag)
+            if tuple == (mimi_buffer_empty() as *TupleType) || binding.name_count != tuple.count { fail(issue, 3, node.start, node.end) return empty }
+            item = allocate_statement(storage, node, value)
+            if statement_is_null(item) { fail(issue, 4, node.start, node.end) return empty }
+            name := binding.names
+            element := tuple.elements
+            last_binding : *Statement = empty
+            while name != (mimi_buffer_empty() as *DestructureNameNode) {
+                part := allocate_statement(storage, node, mimi_buffer_empty() as *Expr)
+                if statement_is_null(part) { fail(issue, 4, name.start, name.end) return empty }
+                part.kind = 285
+                part.name_start = name.start
+                part.name_end = name.end
+                part.type_tag = element.tag
+                if statement_is_null(item.then_body) { item.then_body = part } else { last_binding.next = part }
+                last_binding = part
+                locals = symbol_push(storage, locals, name.start, name.end, element.tag, true)
+                if locals == (mimi_buffer_empty() as *Symbol) { fail(issue, 4, name.start, name.end) return empty }
+                name = name.next
+                element = element.next
+            }
+        } else {
         if node.kind == 307 {
             range := node.for_loop
-            if !range.is_range { fail(issue, 5, range.start, range.end) return empty }
-            start := lower_expr(source, owner, range.range_start, locals, functions, storage, issue)
-            ending := lower_expr(source, owner, range.range_end, locals, functions, storage, issue)
-            if issue.code != 0 { return empty }
-            if expr_is_null(start) || expr_is_null(ending) || start.type_tag != 1 || ending.type_tag != 1 {
-                fail(issue, 3, range.start, range.end)
-                return empty
+            if range.is_range {
+                start := lower_expr(source, owner, range.range_start, locals, functions, storage, issue)
+                ending := lower_expr(source, owner, range.range_end, locals, functions, storage, issue)
+                if issue.code != 0 { return empty }
+                if expr_is_null(start) || expr_is_null(ending) || start.type_tag != 1 || ending.type_tag != 1 {
+                    fail(issue, 3, range.start, range.end)
+                    return empty
+                }
+                item = allocate_statement(storage, node, start)
+                if !statement_is_null(item) { item.range_end = ending }
+            } else {
+                iterable := lower_expr(source, owner, range.iterable, locals, functions, storage, issue)
+                if expr_is_null(iterable) { return empty }
+                if iterable.type_tag != 8 { fail(issue, 3, range.iterable.start, range.iterable.end) return empty }
+                item = allocate_statement(storage, node, iterable)
+                if !statement_is_null(item) { item.loop_kind = 1 }
             }
-            item = allocate_statement(storage, node, start)
-            if !statement_is_null(item) {
-                item.name_start = range.variable_start
-                item.name_end = range.variable_end
-                item.type_tag = 1
-                item.range_end = ending
-                loop_locals := symbol_push(storage, locals, range.variable_start, range.variable_end, 1, false)
-                if loop_locals == (mimi_buffer_empty() as *Symbol) { fail(issue, 4, range.start, range.end) return empty }
-                item.then_body = lower_body(source, owner, range.body, loop_locals, functions, storage, expected_return, false, true, issue)
-            }
+            if statement_is_null(item) { fail(issue, 4, range.start, range.end) return empty }
+            item.name_start = range.variable_start
+            item.name_end = range.variable_end
+            item.type_tag = 1
+            loop_locals := symbol_push(storage, locals, range.variable_start, range.variable_end, 1, false)
+            if loop_locals == (mimi_buffer_empty() as *Symbol) { fail(issue, 4, range.start, range.end) return empty }
+            item.then_body = lower_body(source, owner, range.body, loop_locals, functions, storage, expected_return, false, true, issue)
         } else {
         if node.kind == 304 {
             item = lower_if_node(source, owner, node.if_statement, locals, functions, storage, expected_return, in_loop, issue)
         } else {
+            if node.kind == 305 {
+                syntax := node.if_let
+                if expression_is_null(syntax.value) || syntax.value.kind != 1 { fail(issue, 1, node.start, node.end) return empty }
+                value := lower_expr(source, owner, syntax.value, locals, functions, storage, issue)
+                if expr_is_null(value) { return empty }
+                definition := enum_for_tag(owner, value.type_tag)
+                if definition == (mimi_buffer_empty() as *EnumType) { fail(issue, 3, syntax.value.start, syntax.value.end) return empty }
+                index : u64 = 0
+                variant := enum_variant(source, syntax.variant_start, syntax.variant_end, definition, &index)
+                if variant == (mimi_buffer_empty() as *EnumVariantNode) { fail(issue, 2, syntax.variant_start, syntax.variant_end) return empty }
+                payload_tag := enum_payload_tag(definition, variant)
+                then_locals := locals
+                if syntax.binding_end > syntax.binding_start {
+                    if payload_tag == 0 { fail(issue, 3, syntax.binding_start, syntax.binding_end) return empty }
+                    if !name_is(source, syntax.binding_start, syntax.binding_end, "_") {
+                        then_locals = symbol_push(storage, locals, syntax.binding_start, syntax.binding_end, payload_tag, false)
+                        if then_locals == (mimi_buffer_empty() as *Symbol) { fail(issue, 4, syntax.binding_start, syntax.binding_end) return empty }
+                        then_locals.match_value = value
+                        then_locals.variant_index = index
+                    }
+                }
+                item = allocate_statement(storage, node, value)
+                if statement_is_null(item) { fail(issue, 4, node.start, node.end) return empty }
+                item.loop_kind = index
+                item.then_body = lower_body(source, owner, syntax.then_branch, then_locals, functions, storage, expected_return, false, in_loop, issue)
+                if !block_node_is_null(syntax.else_branch) { item.else_body = lower_body(source, owner, syntax.else_branch, locals, functions, storage, expected_return, false, in_loop, issue) }
+            } else {
             if node.kind == 306 {
                 loop_node := node.loop_statement
                 condition : *Expr = mimi_buffer_empty() as *Expr
@@ -5595,9 +5930,12 @@ lower_body :: fn (source : []u8, owner : *ModuleInput, body : *BlockNode, incomi
                         if node.kind != 285 && node.kind != 280 && node.kind != 303 { fail(issue, 5, node.start, node.end) return empty }
                         value : *Expr = mimi_buffer_empty() as *Expr
                         if node.kind == 285 {
-                            value = lower_expr(source, owner, node.binding.initializer, locals, functions, storage, issue)
+                            expected := type_tag(source, owner, node.binding.data_type)
+                            value = lower_value(source, owner, node.binding.initializer, expected, locals, functions, storage, issue)
                         } else {
-                            if !expression_is_null(node.value) { value = lower_expr(source, owner, node.value, locals, functions, storage, issue) }
+                            expected : u64 = 0
+                            if node.kind == 280 || (check_tail && node.kind == 303 && statement_node_is_null(node.next)) { expected = expected_return }
+                            if !expression_is_null(node.value) { value = lower_value(source, owner, node.value, expected, locals, functions, storage, issue) }
                         }
                         if issue.code != 0 { return empty }
                         if node.kind != 280 && expr_is_null(value) { fail(issue, 4, node.start, node.end) return empty }
@@ -5627,6 +5965,9 @@ lower_body :: fn (source : []u8, owner : *ModuleInput, body : *BlockNode, incomi
                     }
                 }
             }
+            }
+        }
+        }
         }
         }
         if issue.code != 0 { return empty }
@@ -5642,11 +5983,48 @@ lower_body :: fn (source : []u8, owner : *ModuleInput, body : *BlockNode, incomi
     first
 }
 
+register_method :: fn (definition : *StructType, method : *StructMethodNode, storage : *Storage, issue : *LowerIssue) *Function {
+    empty : *Function = mimi_buffer_empty() as *Function
+    owner := definition.owner
+    source := owner.source
+    function := method.function
+    tag := method_type_tag(source, owner, function.return_type, definition)
+    if tag == 0 || !allocate(storage, 104) { fail(issue, 6, method.start, method.end) return empty }
+    item := storage.last as *Function
+    item.name_start = method.name_start
+    item.name_end = method.name_end
+    item.return_tag = tag
+    item.parameters = mimi_buffer_empty() as *Parameter
+    item.body = mimi_buffer_empty() as *Statement
+    item.next = empty
+    item.is_external = false
+    item.source = source
+    item.owner = owner
+    item.syntax = function
+    item.is_public = definition.is_public
+    item.method_of = definition
+    previous : *Parameter = mimi_buffer_empty() as *Parameter
+    parameter := function.parameters
+    while !parameter_list_is_null(parameter) {
+        parameter_tag := method_type_tag(source, owner, parameter.data_type, definition)
+        if parameter_tag == 0 || parameter_tag == 6 || !allocate(storage, 32) { fail(issue, 6, parameter.name_start, parameter.name_end) return empty }
+        entry := storage.last as *Parameter
+        entry.name_start = parameter.name_start
+        entry.name_end = parameter.name_end
+        entry.type_tag = parameter_tag
+        entry.next = mimi_buffer_empty() as *Parameter
+        if previous == (mimi_buffer_empty() as *Parameter) { item.parameters = entry } else { previous.next = entry }
+        previous = entry
+        parameter = parameter.next
+    }
+    item
+}
+
 pub lower_inputs :: fn (first : *ModuleInput, storage : *Storage) LowerResult {
     issue := LowerIssue { code = 0, start = 0, end = 0, owner = first }
     empty : *Module = mimi_buffer_empty() as *Module
     if first == (mimi_buffer_empty() as *ModuleInput) { fail(&issue, 6, 0, 0) return LowerResult { module = empty, issue = issue } }
-    if !allocate(storage, 56) { fail(&issue, 4, 0, 0) return LowerResult { module = empty, issue = issue } }
+    if !allocate(storage, 72) { fail(&issue, 4, 0, 0) return LowerResult { module = empty, issue = issue } }
     result := storage.last as *Module
     result.functions = mimi_buffer_empty() as *Function
     result.function_count = 0
@@ -5655,6 +6033,8 @@ pub lower_inputs :: fn (first : *ModuleInput, storage : *Storage) LowerResult {
     result.tuples = mimi_buffer_empty() as *TupleType
     result.tuple_count = 0
     result.storage = storage
+    result.enums = mimi_buffer_empty() as *EnumType
+    result.enum_count = 0
     last_type : *StructType = mimi_buffer_empty() as *StructType
     owner := first
     while owner != (mimi_buffer_empty() as *ModuleInput) {
@@ -5709,7 +6089,7 @@ pub lower_inputs :: fn (first : *ModuleInput, storage : *Storage) LowerResult {
             declaration = declaration.next
             continue
         }
-        if declaration.kind == 2 {
+        if declaration.kind == 2 || declaration.kind == 3 {
             declaration = declaration.next
             continue
         }
@@ -5720,7 +6100,7 @@ pub lower_inputs :: fn (first : *ModuleInput, storage : *Storage) LowerResult {
         function := declaration.function
         tag := type_tag(source, owner, function.return_type)
         if tag == 0 { fail(&issue, 6, function.start, function.end) return LowerResult { module = empty, issue = issue } }
-        if !allocate(storage, 96) { fail(&issue, 4, function.start, function.end) return LowerResult { module = empty, issue = issue } }
+        if !allocate(storage, 104) { fail(&issue, 4, function.start, function.end) return LowerResult { module = empty, issue = issue } }
         item := storage.last as *Function
         item.name_start = function.name_start
         item.name_end = function.name_end
@@ -5733,6 +6113,7 @@ pub lower_inputs :: fn (first : *ModuleInput, storage : *Storage) LowerResult {
         item.owner = owner
         item.syntax = function
         item.is_public = declaration.is_public
+        item.method_of = mimi_buffer_empty() as *StructType
         last_parameter : *Parameter = mimi_buffer_empty() as *Parameter
         source_parameter := function.parameters
         while !parameter_list_is_null(source_parameter) {
@@ -5758,6 +6139,20 @@ pub lower_inputs :: fn (first : *ModuleInput, storage : *Storage) LowerResult {
         declaration = declaration.next
     }
     owner = owner.next
+    }
+    definition := result.types
+    while definition != (mimi_buffer_empty() as *StructType) {
+        issue.owner = definition.owner
+        method := definition.syntax.methods
+        while method != (mimi_buffer_empty() as *StructMethodNode) {
+            item := register_method(definition, method, storage, &issue)
+            if item == (mimi_buffer_empty() as *Function) { return LowerResult { module = empty, issue = issue } }
+            if result.function_count == 0 { result.functions = item } else { last.next = item }
+            last = item
+            result.function_count = result.function_count + 1
+            method = method.next
+        }
+        definition = definition.next
     }
     current := result.functions
     while current != (mimi_buffer_empty() as *Function) {
@@ -5875,10 +6270,14 @@ c_uint :: fn (output : *CBuffer, value : u64) bool {
 
 c_function_name :: fn (output : *CBuffer, function : *Function) bool {
     if !c_text(output, "m_") || !c_uint(output, function.owner.id) || !c_push(output, 95) { return false }
+    if function.method_of != (mimi_buffer_empty() as *StructType) {
+        if !c_push(output, 115) || !c_uint(output, function.method_of.id) || !c_push(output, 95) { return false }
+    }
     c_name(output, function.source, function.name_start, function.name_end, "")
 }
 
 c_type :: fn (output : *CBuffer, tag : u64) bool {
+    if tag >= 4000000 && tag < 5000000 { return c_text(output, "m_e") && c_uint(output, tag - 4000000) }
     if tag >= 3000000 && tag < 4000000 { return c_text(output, "m_s") && c_uint(output, tag - 3000000) && c_text(output, "**") }
     if tag >= 2000000 && tag < 3000000 { return c_text(output, "m_t") && c_uint(output, tag - 2000000) }
     if tag >= 1000000 && tag < 2000000 { return c_text(output, "m_s") && c_uint(output, tag - 1000000) && c_push(output, 42) }
@@ -5963,8 +6362,27 @@ c_item_count :: fn (value : *Expr) u64 {
     1
 }
 
+c_match_arms :: fn (output : *CBuffer, source : []u8, value : *Expr, arm : *Expr) bool {
+    if expr_is_null(arm) { return false }
+    if expr_is_null(arm.right) { return c_expr(output, source, arm.left) }
+    if !c_text(output, "((") || !c_expr(output, source, value) || !c_text(output, ").tag == ") || !c_uint(output, arm.payload_start) || !c_text(output, " ? ") || !c_expr(output, source, arm.left) || !c_text(output, " : ") { return false }
+    c_match_arms(output, source, value, arm.right) && c_push(output, 41)
+}
+
 c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
     if expr_is_null(value) { return false }
+    if value.kind == 290 { return c_match_arms(output, source, value.left, value.right) }
+    if value.kind == 310 {
+        if !c_text(output, "((") || !c_type(output, value.type_tag) || !c_text(output, "){.tag=") || !c_uint(output, value.payload_start) { return false }
+        if !expr_is_null(value.right) {
+            if !c_text(output, ",.payload.v") || !c_uint(output, value.payload_start) || !c_push(output, 61) || !c_expr(output, source, value.right) { return false }
+        }
+        return c_text(output, "})")
+    }
+    if value.kind == 312 {
+        if !c_push(output, 40) || !c_expr(output, source, value.left) || !c_text(output, ").payload.v") { return false }
+        return c_uint(output, value.payload_start)
+    }
     if value.kind == 288 {
         if !c_push(output, 40) || !c_expr(output, source, value.left) || !c_text(output, " ? ") || !c_expr(output, source, value.right) || !c_text(output, " : ") { return false }
         if !c_expr(output, source, value.otherwise) { return false }
@@ -5975,13 +6393,17 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
         if value.is_external {
             if !c_span(output, value.callee.source, value.callee.name_start, value.callee.name_end) { return false }
         } else {
-            if value.callee.owner.id == 0 && name_is(value.callee.source, value.callee.name_start, value.callee.name_end, "main") {
+            if value.callee.method_of == (mimi_buffer_empty() as *StructType) && value.callee.owner.id == 0 && name_is(value.callee.source, value.callee.name_start, value.callee.name_end, "main") {
                 if !c_text(output, "main") { return false }
             } else {
                 if !c_function_name(output, value.callee) { return false }
             }
         }
         if !c_push(output, 40) { return false }
+        if !expr_is_null(value.left) {
+            if !c_expr(output, source, value.left) { return false }
+            if !expr_is_null(value.right) && !c_text(output, ", ") { return false }
+        }
         if !c_arguments(output, source, value.right) { return false }
         return c_push(output, 41)
     }
@@ -6117,6 +6539,17 @@ c_block :: fn (output : *CBuffer, source : []u8, first : *Statement, return_tag 
 
 c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_tag : u64, depth : u64, tail_returns : bool) bool {
     if !c_indent(output, depth) { return false }
+    if item.kind == 309 {
+        if !c_type(output, item.value.type_tag) || !c_text(output, " t_") || !c_uint(output, item.start) || !c_text(output, " = ") || !c_expr(output, source, item.value) || !c_text(output, ";\n") { return false }
+        part := item.then_body
+        index : u64 = 0
+        while !statement_is_null(part) {
+            if !c_indent(output, depth) || !c_type(output, part.type_tag) || !c_push(output, 32) || !c_name(output, source, part.name_start, part.name_end, "v_") || !c_text(output, " = t_") || !c_uint(output, item.start) || !c_text(output, ".f") || !c_uint(output, index) || !c_text(output, ";\n") { return false }
+            part = part.next
+            index = index + 1
+        }
+        return true
+    }
     if item.kind == 285 {
         if !c_type(output, item.type_tag) || !c_push(output, 32) { return false }
         if !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, " = ") { return false }
@@ -6137,6 +6570,14 @@ c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_t
         }
         return c_push(output, 10)
     }
+    if item.kind == 305 {
+        if !c_text(output, "if ((") || !c_expr(output, source, item.value) || !c_text(output, ").tag == ") || !c_uint(output, item.loop_kind) || !c_text(output, ") {\n") { return false }
+        if !c_block(output, source, item.then_body, return_tag, depth + 1, false) || !c_indent(output, depth) || !c_push(output, 125) { return false }
+        if !statement_is_null(item.else_body) {
+            if !c_text(output, " else {\n") || !c_block(output, source, item.else_body, return_tag, depth + 1, false) || !c_indent(output, depth) || !c_push(output, 125) { return false }
+        }
+        return c_push(output, 10)
+    }
     if item.kind == 306 {
         if item.loop_kind == 285 {
             if !c_text(output, "for (;;) {\n") { return false }
@@ -6154,6 +6595,13 @@ c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_t
         return c_push(output, 10)
     }
     if item.kind == 307 {
+        if item.loop_kind == 1 {
+            if !c_text(output, "m_slice t_") || !c_uint(output, item.start) || !c_text(output, " = ") || !c_expr(output, source, item.value) || !c_text(output, ";\n") { return false }
+            if !c_indent(output, depth) || !c_text(output, "for (uint64_t i_") || !c_uint(output, item.start) || !c_text(output, " = 0; i_") || !c_uint(output, item.start) || !c_text(output, " < t_") || !c_uint(output, item.start) || !c_text(output, ".len; ++i_") || !c_uint(output, item.start) || !c_text(output, ") {\n") { return false }
+            if !c_indent(output, depth + 1) || !c_text(output, "int64_t ") || !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, " = t_") || !c_uint(output, item.start) || !c_text(output, ".ptr[i_") || !c_uint(output, item.start) || !c_text(output, "];\n") { return false }
+            if !c_block(output, source, item.then_body, return_tag, depth + 1, false) || !c_indent(output, depth) || !c_text(output, "}\n") { return false }
+            return true
+        }
         if !c_text(output, "for (int64_t ") || !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, " = ") { return false }
         if !c_expr(output, source, item.value) || !c_text(output, ", ") || !c_name(output, source, item.name_start, item.name_end, "e_") || !c_text(output, " = ") { return false }
         if !c_expr(output, source, item.range_end) || !c_text(output, "; ") || !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, " < ") { return false }
@@ -6204,6 +6652,24 @@ emit_struct_definition :: fn (output : *CBuffer, definition : *StructType) bool 
     true
 }
 
+emit_enum_definition :: fn (output : *CBuffer, definition : *EnumType) bool {
+    if !c_text(output, "struct m_e") || !c_uint(output, definition.id) || !c_text(output, " { uint64_t tag; union {\n") { return false }
+    variant := definition.declaration.enum_node.variants
+    index : u64 = 0
+    has_payload := false
+    while variant != (mimi_buffer_empty() as *EnumVariantNode) {
+        tag := enum_payload_tag(definition, variant)
+        if !expression_is_null(variant.payload_type) {
+            if tag == 0 || !c_text(output, "  ") || !c_type(output, tag) || !c_text(output, " v") || !c_uint(output, index) || !c_text(output, ";\n") { return false }
+            has_payload = true
+        }
+        variant = variant.next
+        index = index + 1
+    }
+    if !has_payload && !c_text(output, "  uint8_t unused;\n") { return false }
+    c_text(output, "} payload; };\n")
+}
+
 pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
     if module_is_null(module) || !c_text(output, "#include <stdint.h>\n#include <stdbool.h>\ntypedef struct { uint8_t *ptr; uint64_t len; } m_slice;\nstatic inline m_slice m_slice_sub(m_slice v, uint64_t start, uint64_t end, int has_end) { if (!has_end) end = v.len; return (m_slice){v.ptr + start, end - start}; }\n\n") { return false }
     tuple_index : u64 = 0
@@ -6217,6 +6683,11 @@ pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
         definition.visiting = false
         if !c_text(output, "typedef struct m_s") || !c_uint(output, definition.id) || !c_text(output, " m_s") || !c_uint(output, definition.id) || !c_text(output, ";\n") { return false }
         definition = definition.next
+    }
+    enum_type := module.enums
+    while enum_type != (mimi_buffer_empty() as *EnumType) {
+        if !c_text(output, "typedef struct m_e") || !c_uint(output, enum_type.id) || !c_text(output, " m_e") || !c_uint(output, enum_type.id) || !c_text(output, ";\n") { return false }
+        enum_type = enum_type.next
     }
     tuple_index = 0
     while tuple_index < module.tuple_count {
@@ -6237,10 +6708,15 @@ pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
         if !emit_struct_definition(output, definition) { return false }
         definition = definition.next
     }
+    enum_type = module.enums
+    while enum_type != (mimi_buffer_empty() as *EnumType) {
+        if !emit_enum_definition(output, enum_type) { return false }
+        enum_type = enum_type.next
+    }
     if !c_push(output, 10) { return false }
     prototype := module.functions
     while prototype != (mimi_buffer_empty() as *Function) {
-        is_main := prototype.owner.id == 0 && name_is(prototype.source, prototype.name_start, prototype.name_end, "main")
+        is_main := prototype.method_of == (mimi_buffer_empty() as *StructType) && prototype.owner.id == 0 && name_is(prototype.source, prototype.name_start, prototype.name_end, "main")
         if is_main {
             if prototype.return_tag != 1 || !c_text(output, "int main(") || !c_main_parameters(output, prototype.source, prototype.parameters) || !c_text(output, ");\n") { return false }
         } else {
@@ -6274,7 +6750,7 @@ pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
             function = function.next
             continue
         }
-        is_main := function.owner.id == 0 && name_is(function.source, function.name_start, function.name_end, "main")
+        is_main := function.method_of == (mimi_buffer_empty() as *StructType) && function.owner.id == 0 && name_is(function.source, function.name_start, function.name_end, "main")
         if is_main {
             if has_main || function.return_tag != 1 { return false }
             has_main = true

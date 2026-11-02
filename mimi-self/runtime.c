@@ -149,6 +149,21 @@ void mimi_diagnostic_print(
         fputc(index == 0 ? '^' : '~', stream);
     }
     fputc('\n', stream);
+    const char *help = NULL;
+    if (code_length == 7 && memcmp(code, "E_PARSE", 7) == 0) {
+        help = "check the syntax near the highlighted token";
+    } else if (code_length == 5 && memcmp(code, "E_LEX", 5) == 0) {
+        help = "check the character or escape sequence at this location";
+    } else if (code_length == 6 && memcmp(code, "E_NAME", 6) == 0) {
+        help = "check the spelling, declaration order, and imports for this name";
+    } else if (code_length == 6 && memcmp(code, "E_TYPE", 6) == 0) {
+        help = "make the expression type match the required type";
+    } else if (code_length == 7 && memcmp(code, "E_LOWER", 7) == 0) {
+        help = "simplify this construct or use the Rust compiler until it is supported here";
+    }
+    if (help != NULL) {
+        fprintf(stream, "  = help: %s\n", help);
+    }
     fflush(stream);
 }
 

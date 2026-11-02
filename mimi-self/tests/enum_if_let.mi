@@ -1,0 +1,11 @@
+Choice :: enum { some(i32), none }
+
+main :: fn () i32 {
+    present : Choice = some(42)
+    absent : Choice = none
+    if some(value) := present {
+        if value != 42 { return 1 }
+    } else { return 2 }
+    if some(_) := absent { return 3 }
+    0
+}

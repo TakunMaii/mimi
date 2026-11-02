@@ -1,0 +1,6 @@
+Choice :: enum { some(i32), none }
+
+main :: fn () i32 {
+    value : Choice = some(42)
+    match value { some(item) => item - 42, none => 1 }
+}

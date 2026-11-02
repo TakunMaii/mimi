@@ -53,6 +53,7 @@ def main() -> None:
 
     stage1 = output_dir / "mimi-stage1"
     stage2 = output_dir / "mimi-stage2"
+    stage3 = output_dir / "mimi-stage3"
     build(stage0, source, stage1)
     print("Stage1 artifact:", artifact_record(stage1), flush=True)
     run(["python3", str(TEST_RUNNER), "--compiler", str(stage0)])
@@ -61,15 +62,22 @@ def main() -> None:
     except subprocess.CalledProcessError as failure:
         print(f"Stage2 build stopped with exit status {failure.returncode}; see compiler diagnostic above.", flush=True)
         raise SystemExit(failure.returncode) from None
-    run(["python3", str(TEST_RUNNER), "--compiler", str(stage1), "--reference-compiler", str(stage0)])
-    run(["python3", str(TEST_RUNNER), "--compiler", str(stage2), "--reference-compiler", str(stage0)])
+    build(stage2, source, stage3)
+    run(["python3", str(TEST_RUNNER), "--compiler", str(stage1), "--reference-compiler", str(stage0), "--self-hosted"])
+    run(["python3", str(TEST_RUNNER), "--compiler", str(stage2), "--reference-compiler", str(stage0), "--self-hosted"])
+    run(["python3", str(TEST_RUNNER), "--compiler", str(stage3), "--reference-compiler", str(stage0), "--self-hosted"])
     print("Stage artifacts:")
     print(artifact_record(stage1))
     print(artifact_record(stage2))
-    if artifact_digest(stage1) == artifact_digest(stage2):
-        print("Stage1 and stage2 artifacts are byte-identical.")
+    print(artifact_record(stage3))
+    same_path = output_dir / "mimi-repro"
+    build(stage1, source, same_path)
+    first_digest = artifact_digest(same_path)
+    build(stage2, source, same_path)
+    if first_digest == artifact_digest(same_path):
+        print("Stage1 and stage2 produce byte-identical output at the same path.")
     else:
-        print("Stage1 and stage2 artifacts differ; review the bootstrap output.")
+        print("Stage1 and stage2 output differs at the same path; review reproducibility.")
 
 
 if __name__ == "__main__":

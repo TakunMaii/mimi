@@ -575,7 +575,22 @@ pub render :: fn (diagnostic : Diagnostic, source : *SourceFile) void {
     )
 }
 
-pub analyze_text :: fn (text : []u8) Diagnostic {
+parse_failure_location :: fn (text : []u8, original : Span) Span {
+    previous : u8 = 0
+    cursor : u64 = 0
+    while cursor < text.len {
+        token := lexer.lex_next(text, cursor)
+        if token.kind == 0 || token.kind == 255 { break }
+        if (token.kind == 125 || token.kind == 41) && (previous == 43 || previous == 45 || previous == 42 || previous == 47 || previous == 37 || previous == 128 || previous == 129 || previous == 132 || previous == 133) {
+            return Span { start = token.start, end = token.end }
+        }
+        previous = token.kind
+        cursor = token.end
+    }
+    original
+}
+
+pub analyze_text_with_graph :: fn (text : []u8, graph : *ModuleGraph) Diagnostic {
     cursor : u64 = 0
     while cursor < text.len {
         token := lexer.lex_next(text, cursor)
@@ -594,10 +609,46 @@ pub analyze_text :: fn (text : []u8) Diagnostic {
     module := lexer.parse_module_with_issue(text, &storage, &parse_issue)
     if lexer.module_node_is_null(module) {
         lexer.expression_arena_release(&storage)
+        location := Span { start = parse_issue.start, end = parse_issue.end }
+        location = parse_failure_location(text, location)
+        message : []u8 = "could not parse module"
+        if location.start != parse_issue.start { message = "expected an expression after operator" }
         return Diagnostic {
             code = "E_PARSE",
-            message = "could not parse module",
-            span = Span { start = parse_issue.start, end = parse_issue.end },
+            message = message,
+            span = location,
+        }
+    }
+    if graph != (mimi_buffer_empty() as *ModuleGraph) && !module_file_is_null(graph.files) {
+        edge := graph.files.imports
+        while edge != (mimi_buffer_empty() as *ModuleImport) {
+            imported := module_file_lookup(graph, edge.path, edge.path_length)
+            if !module_file_is_null(imported) {
+                imported_text : []u8 = ""
+                mimi_slice_from_raw(imported.contents, imported.contents_length, &imported_text)
+                if lexer.module_node_is_null(imported.module) {
+                    ast_storage := graph.ast_storage
+                    imported.module = lexer.parse_module(imported_text, &ast_storage)
+                    graph.ast_storage = ast_storage
+                }
+                if !lexer.module_node_is_null(imported.module) {
+                    declaration := imported.module.declarations
+                    while declaration != (mimi_buffer_empty() as *lexer.ModuleDeclarationNode) {
+                        if declaration.is_public && declaration.kind == 3 {
+                            variant := declaration.enum_node.variants
+                            while variant != (mimi_buffer_empty() as *lexer.EnumVariantNode) {
+                                if !lexer.register_imported_variant(module, imported_text[variant.name_start:variant.name_end], &storage) {
+                                    lexer.expression_arena_release(&storage)
+                                    return Diagnostic { code = "E_INTERNAL", message = "out of memory during name resolution", span = Span { start = 0, end = 0 } }
+                                }
+                                variant = variant.next
+                            }
+                        }
+                        declaration = declaration.next
+                    }
+                }
+            }
+            edge = edge.next
         }
     }
     issue := lexer.resolve_module_names(text, module, &storage)
@@ -614,4 +665,8 @@ pub analyze_text :: fn (text : []u8) Diagnostic {
         message = lexer.name_issue_message(issue.code),
         span = Span { start = issue.start, end = issue.end },
     }
+}
+
+pub analyze_text :: fn (text : []u8) Diagnostic {
+    analyze_text_with_graph(text, mimi_buffer_empty() as *ModuleGraph)
 }

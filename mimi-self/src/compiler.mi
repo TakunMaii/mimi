@@ -54,7 +54,8 @@ build :: fn (input : []u8, output : []u8, extra_c : []u8) i32 {
     text : []u8 = ""
     mimi_slice_from_raw(file.contents.data, file.contents.len, &text)
     diagnostic := source.analyze_text(text)
-    if diagnostic.code.len != 0 {
+    needs_import_names := equal(diagnostic.code, "E_NAME")
+    if diagnostic.code.len != 0 && !needs_import_names {
         source.render(diagnostic, &file)
         source.release(&file)
         return 1
@@ -67,6 +68,16 @@ build :: fn (input : []u8, output : []u8, extra_c : []u8) i32 {
         source.lower_storage_release(&storage)
         source.release(&file)
         return 1
+    }
+    if needs_import_names {
+        diagnostic = source.analyze_text_with_graph(text, &graph)
+        if diagnostic.code.len != 0 {
+            source.render(diagnostic, &file)
+            source.module_graph_release(&graph)
+            source.lower_storage_release(&storage)
+            source.release(&file)
+            return 1
+        }
     }
     lowered := source.lower_loaded_graph(&graph, &storage)
     if lowered.issue.code != 0 {
@@ -96,7 +107,7 @@ build :: fn (input : []u8, output : []u8, extra_c : []u8) i32 {
         return 1
     }
     arguments := process.init()
-    valid := process.push(&arguments, "-std=c11") && process.push(&arguments, "-O2") && process.push(&arguments, generated_name)
+    valid := process.push(&arguments, "-std=c11") && process.push(&arguments, "-O2") && process.push(&arguments, "-Wno-parentheses-equality") && process.push(&arguments, generated_name)
     if valid && extra_c.len != 0 { valid = process.push(&arguments, extra_c) }
     if valid { valid = process.push(&arguments, "-o") && process.push(&arguments, output) }
     status : i32 = 1
