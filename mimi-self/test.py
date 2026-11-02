@@ -417,6 +417,12 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             )
             if expected not in result.stderr or diagnostic_location(result.stderr) is None:
                 raise AssertionError(f"stage1 {name}: bad diagnostic:\n{result.stderr}")
+        self_source = run(
+            [str(stage1), "build", str(SELF / "src" / "compiler.mi"), "-o", str(directory / "stage2")],
+            expected_status=1,
+        )
+        if "error[E_LOWER]" not in self_source.stderr or "bytes :: @import" not in self_source.stderr:
+            raise AssertionError(f"stage1 self-source parse regressed:\n{self_source.stderr}")
 
 
 def test_module_loading(compiler: Path) -> None:

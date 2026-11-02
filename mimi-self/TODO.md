@@ -92,6 +92,7 @@ two consecutive stages.
 - [x] Match cast precedence inside unparenthesized binary expressions.
 - [x] Reject trailing commas in function type parameter lists, matching stage0.
 - [x] Parse simple-name struct literal fields and nested values.
+- [x] Parse module-qualified type names such as `*bytes.ByteBuffer`.
 - [x] Parse generic struct literal type applications.
 - [x] Validate tuple destructuring initializer arity when it is a tuple literal.
 - [x] Resolve module, parameter, and local names across nested statement blocks;
@@ -100,6 +101,8 @@ two consecutive stages.
 - [x] Check explicit and trailing expression return types for scalar functions.
 - [x] Expose a front-end entry point that reports lexical, parse, name, and
   initial type diagnostics through the source renderer.
+- [x] Point module parse failures at the failing declaration rather than
+  always reporting byte zero.
 - [ ] Implement name resolution, type checking, generic specialization, and
   diagnostics.
 - [x] Add a Python differential smoke suite for accepted programs and
@@ -185,8 +188,10 @@ and local names in parsed statements and reports source-spanned name errors.
 An initial type pass checks scalar bindings, tuple element uses, arithmetic,
 logical operations, assignments, conditions, and explicit/trailing returns in
 functions and methods. `source.analyze_text` connects lexing, parsing, and
-semantic checking to source-aware diagnostics. Parse errors still need precise
-failure spans; full type checking and generic specialization remain open.
+semantic checking to source-aware diagnostics. Module-level parse errors now
+identify the failing declaration, but exact token-level failures inside that
+declaration still need work. Full type checking and generic specialization
+remain open.
 The parser currently lives alongside
 the lexer because stage0 loses imported aliases inside imported module function
 bodies.
@@ -199,3 +204,6 @@ compile `compiler.mi`. Stage1 currently collapses integer widths and signedness,
 so exact range-bound type parity remains open. Scalar `if` expressions are
 supported when they form a complete expression; embedded forms remain open.
 Next, extend typing and IR lowering across those features.
+The stage1 front end now parses `compiler.mi` itself; its first stage2 blocker is
+the `bytes :: @import("bytes.mi")` declaration, which the C backend does not
+lower yet.

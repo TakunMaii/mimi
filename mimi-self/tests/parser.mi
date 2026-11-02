@@ -6,6 +6,12 @@ main :: fn () i32 {
     if lexer.expression_is_null(scalar_type) || scalar_type.kind != 270 || scalar_type.start != 0 || scalar_type.end != 3 { return 49 }
     pointer_type := lexer.parse_type("**MyType", &storage)
     if lexer.expression_is_null(pointer_type) || pointer_type.kind != 271 || pointer_type.left.kind != 271 || pointer_type.left.left.kind != 270 { return 50 }
+    qualified_type := lexer.parse_type("*bytes.ByteBuffer", &storage)
+    if lexer.expression_is_null(qualified_type) || qualified_type.kind != 271 || qualified_type.left.kind != 260 { return 226 }
+    parse_issue := lexer.ModuleParseIssue { start = 0, end = 0 }
+    bad_module := "ok :: fn () i32 { 1 } bad :: fn () i32 { missing := }"
+    invalid_module := lexer.parse_module_with_issue(bad_module, &storage, &parse_issue)
+    if !lexer.module_node_is_null(invalid_module) || bad_module[parse_issue.start] != 98 || parse_issue.end <= parse_issue.start { return 227 }
     long_pointer_type := lexer.parse_type("**************Item", &storage)
     if lexer.expression_is_null(long_pointer_type) || long_pointer_type.kind != 271 { return 65 }
     slice_type := lexer.parse_type("[][]u8", &storage)

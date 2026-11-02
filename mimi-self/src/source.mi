@@ -263,13 +263,14 @@ pub analyze_text :: fn (text : []u8) Diagnostic {
         cursor = token.end
     }
     storage := lexer.expression_arena_init()
-    module := lexer.parse_module(text, &storage)
+    parse_issue := lexer.ModuleParseIssue { start = 0, end = 0 }
+    module := lexer.parse_module_with_issue(text, &storage, &parse_issue)
     if lexer.module_node_is_null(module) {
         lexer.expression_arena_release(&storage)
         return Diagnostic {
             code = "E_PARSE",
             message = "could not parse module",
-            span = Span { start = 0, end = 0 },
+            span = Span { start = parse_issue.start, end = parse_issue.end },
         }
     }
     issue := lexer.resolve_module_names(text, module, &storage)
