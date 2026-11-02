@@ -413,6 +413,10 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             ("struct-literal", "Point :: struct { x : i32, y : i32 } main :: fn () i32 { point := Point { x = 20, y = 22 } point.x + point.y }", 42),
             ("struct-pointer", "Point :: struct { x : i32 } read :: fn (point : *Point) i32 { point.x } main :: fn () i32 { point := Point { x = 42 } read(&point) }", 42),
             ("struct-assign", "Point :: struct { x : i32 } main :: fn () i32 { point := Point { x = 20 } point.x = 42 point.x }", 42),
+            ("tuple-return", "get :: fn () (i32, i32) { (20, 22) } main :: fn () i32 { pair := get() pair.0 + pair.1 }", 42),
+            ("tuple-argument", "sum :: fn (pair : (i32, i32)) i32 { pair.0 + pair.1 } main :: fn () i32 { sum((20, 22)) }", 42),
+            ("slice-bounds", "main :: fn () i32 { text := \"abcde\" part := text[1:4] if part.len == 3 && part[0] == 98 { return 42 } 0 }", 42),
+            ("slice-open-end", "main :: fn () i32 { text := \"abcde\" part := text[2:] if part.len == 3 && part[2] == 101 { return 42 } 0 }", 42),
         ]
         for name, text, expected_exit in cases:
             program = directory / f"{name} program.mi"
@@ -445,10 +449,13 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
         middle.write_text('left :: @import("left.mi")\npub result :: fn () i32 { left.value() + 22 }\n', encoding="utf-8")
         point_module = directory / "point.mi"
         point_module.write_text("pub Point :: struct { x : i32 } pub make :: fn () Point { Point { x = 42 } }\n", encoding="utf-8")
+        flag_module = directory / "flag.mi"
+        flag_module.write_text("pub check :: fn () bool { true }\n", encoding="utf-8")
         module_cases = [
             ("same-name", 'left :: @import("left.mi")\nright :: @import("right.mi")\nmain :: fn () i32 { left.value() + right.value() }'),
             ("transitive", 'middle :: @import("middle.mi")\nmain :: fn () i32 { middle.result() }'),
             ("imported-struct", 'point :: @import("point.mi")\nmain :: fn () i32 { value : point.Point = point.make() value.x }'),
+            ("prefix-imported-call", 'flag :: @import("flag.mi")\nmain :: fn () i32 { if !flag.check() { return 0 } 42 }'),
         ]
         for name, text in module_cases:
             program = directory / f"{name}.mi"

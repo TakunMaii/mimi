@@ -228,7 +228,8 @@ The stage1 front end now parses `compiler.mi` itself. The import graph retains
 source and alias edges and can parse imported modules on demand for public
 function and type lookup. Scalar imported calls now lower to module-owned IR.
 The C backend now lowers plain struct signatures, literals, field reads and
-writes, struct pointers, and public imported struct types. The first stage2
-blocker is currently the tuple return type of `next_token_raw` in `lexer.mi`.
+writes, struct pointers, public imported struct types, tuple values and members,
+and byte-slice ranges. The first stage2 blocker is currently indexed assignment
+through the struct pointer `prefixes` in `lexer.mi`.
 Most pointer pointee types and integer widths are not yet represented precisely
 in IR, and struct defaults and generic specialization remain open.

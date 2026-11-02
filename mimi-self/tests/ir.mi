@@ -91,5 +91,23 @@ main :: fn () i32 {
     if !ir.emit_c(struct_source, struct_lowered.module, &struct_output) { return 50 }
     ir.c_buffer_release(&struct_output)
     ir.release(&struct_storage)
+    tuple_storage := ir.init()
+    tuple_source := "get :: fn () (i32, i32) { (20, 22) } main :: fn () i32 { pair := get() pair.0 + pair.1 }"
+    tuple_lowered := ir.lower_text(tuple_source, &tuple_storage)
+    if tuple_lowered.issue.code != 0 || tuple_lowered.module.tuple_count != 1 { return 51 }
+    if tuple_lowered.module.functions.return_tag != 2000000 { return 52 }
+    tuple_output := ir.c_buffer_init()
+    if !ir.emit_c(tuple_source, tuple_lowered.module, &tuple_output) { return 53 }
+    ir.c_buffer_release(&tuple_output)
+    ir.release(&tuple_storage)
+    prefix_storage := ir.expression_arena_init()
+    prefix := ir.parse_expression("!bytes.push(result, output[index])", &prefix_storage)
+    if ir.expression_is_null(prefix) || prefix.kind != 283 || prefix.left.kind != 263 || prefix.left.left.kind != 260 { return 54 }
+    ir.expression_arena_release(&prefix_storage)
+    if !check_issue("sum :: fn (pair : (i32, i32)) i32 { pair.0 + pair.1 } main :: fn () i32 { sum((20, 22)) }", 0) { return 55 }
+    assignment_storage := ir.expression_arena_init()
+    assignment_block := ir.parse_statement_block("{ values[0] = Point { x = 42 } }", 0, &assignment_storage)
+    if ir.block_node_is_null(assignment_block) || assignment_block.statements.kind != 284 { return 56 }
+    ir.expression_arena_release(&assignment_storage)
     0
 }
