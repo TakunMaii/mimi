@@ -295,11 +295,13 @@ main :: fn () i32 {{
     self_text : []u8 = ""
     mimi_slice_from_raw(self_file.contents.data, self_file.contents.len, &self_text)
     self_issue := source.analyze_text(self_text)
+    if self_issue.code.len != 0 {{ source.render(self_issue, &self_file) }}
     source.release(&self_file)
     if self_issue.code.len != 0 {{ return 19 }}
     if !source.load({mimi_quote(SELF / "src" / "compiler.mi")}, &self_file) {{ return 20 }}
     mimi_slice_from_raw(self_file.contents.data, self_file.contents.len, &self_text)
     self_issue = source.analyze_text(self_text)
+    if self_issue.code.len != 0 {{ source.render(self_issue, &self_file) }}
     source.release(&self_file)
     if self_issue.code.len != 0 {{ return 21 }}
     if !source.load({mimi_quote(SELF / "src" / "source.mi")}, &self_file) {{ return 22 }}
@@ -403,6 +405,10 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             ("if-expression", "main :: fn () i32 { result := if true { 42 } else { 0 } result }", 42),
             ("if-expression-else", "main :: fn () i32 { result := if false { 0 } else { 42 } result }", 42),
             ("scalar-extern", "extern labs : fn(value : i64) i64 main :: fn () i32 { labs(-42) as i32 }", 42),
+            ("pointer-extern", "extern malloc : fn(size : u64) *u8 extern free : fn(pointer : *u8) void main :: fn () i32 { memory := malloc(8) if memory == null { return 1 } free(memory) 42 }", 42),
+            ("pointer-cast", "extern malloc : fn(size : u64) *u8 extern free : fn(pointer : *u8) void main :: fn () i32 { memory := malloc(8) converted := memory as *i32 free(converted as *u8) 42 }", 42),
+            ("byte-slice", "main :: fn () i32 { text : []u8 = \"hello\\n\" if text.len == 6 { return 42 } 0 }", 42),
+            ("slice-extern", "extern mimi_stderr_write : fn(data : *u8, length : u64) void main :: fn () i32 { text : []u8 = \"hello\\n\" mimi_stderr_write(text.ptr, text.len) 42 }", 42),
         ]
         for name, text, expected_exit in cases:
             program = directory / f"{name} program.mi"
@@ -421,8 +427,10 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
                     "--c-source", str(RUNTIME), "--no-cache",
                 ]
             )
-            run([str(reference)], expected_status=expected_exit)
-            run([str(candidate)], expected_status=expected_exit)
+            reference_run = run([str(reference)], expected_status=expected_exit)
+            candidate_run = run([str(candidate)], expected_status=expected_exit)
+            if (candidate_run.stdout, candidate_run.stderr) != (reference_run.stdout, reference_run.stderr):
+                raise AssertionError(f"stage1 {name}: runtime output differs from stage0")
             if candidate.with_name(candidate.name + ".mimi.c").exists():
                 raise AssertionError("stage1 left temporary C source after --no-cache")
         left = directory / "left.mi"
@@ -442,6 +450,12 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
                 executable = directory / f"{name}-{label}"
                 run([str(tool), "build", str(program), "-o", str(executable), "--c-source", str(RUNTIME), "--no-cache"])
                 run([str(executable)], expected_status=42)
+        argc_program = directory / "argc-main.mi"
+        argc_program.write_text("main :: fn (argc : i32, argv : **u8) i32 { argc }", encoding="utf-8")
+        for label, tool in (("stage0", stage0), ("stage1", stage1)):
+            executable = directory / f"argc-{label}"
+            run([str(tool), "build", str(argc_program), "-o", str(executable), "--c-source", str(RUNTIME), "--no-cache"])
+            run([str(executable), "alpha", "beta"], expected_status=3)
         private_program = directory / "private-call.mi"
         private_program.write_text('left :: @import("left.mi")\nmain :: fn () i32 { left.hidden() }', encoding="utf-8")
         private_result = run([str(stage1), "build", str(private_program), "-o", str(directory / "private-call")], expected_status=1)
@@ -453,6 +467,7 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             ("lower", "main :: fn () i32 { left, right := (1, 2) left + right }", "error[E_LOWER]"),
             ("arity", "add :: fn (left : i32, right : i32) i32 { left + right } main :: fn () i32 { add(20) }", "error[E_LOWER]"),
             ("range-readonly", "main :: fn () i32 { for index in 0..3 { index = 2 } 0 }", "error[E_LOWER]"),
+            ("integer-pointer-cast", "main :: fn () i32 { pointer := 0 as *u8 0 }", "error[E_LOWER]"),
         ]
         for name, text, expected in rejected:
             program = directory / f"{name}.mi"

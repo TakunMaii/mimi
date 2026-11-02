@@ -107,6 +107,8 @@ main :: fn () i32 {
     if composed_block.statements.next.next.value.start != 138 || composed_block.statements.next.next.end != 143 { return 292 }
     member_assignment_block := lexer.parse_statement_block("{ buffer.len = buffer.len + 1 }", 0, &storage)
     if lexer.block_node_is_null(member_assignment_block) || member_assignment_block.statements.kind != 284 || member_assignment_block.statements.value.left.kind != 260 { return 351 }
+    prefixed_statement_block := lexer.parse_statement_block("{ value := object.field !ready &value }", 0, &storage)
+    if lexer.block_node_is_null(prefixed_statement_block) || prefixed_statement_block.statements.next.value.kind != 283 || prefixed_statement_block.statements.next.next.value.kind != 296 { return 360 }
     empty_composed_block := lexer.parse_statement_block("{}", 0, &storage)
     if lexer.block_node_is_null(empty_composed_block) || !lexer.statement_node_is_null(empty_composed_block.statements) { return 293 }
     whitespace_composed_block := lexer.parse_statement_block("{   \n }", 0, &storage)
@@ -287,6 +289,10 @@ main :: fn () i32 {
     if scalar_cast.start != 0 || scalar_cast.end != 12 || scalar_cast.right.start != 9 { return 274 }
     pointer_cast := lexer.parse_expression("address as *u8", &fresh_storage)
     if lexer.expression_is_null(pointer_cast) || pointer_cast.kind != 293 || pointer_cast.right.kind != 271 { return 275 }
+    address_of := lexer.parse_expression("&value", &fresh_storage)
+    if lexer.expression_is_null(address_of) || address_of.kind != 296 || address_of.left.kind != 1 { return 358 }
+    dereference := lexer.parse_expression("*pointer", &fresh_storage)
+    if lexer.expression_is_null(dereference) || dereference.kind != 297 || dereference.left.kind != 1 { return 359 }
     grouped_cast := lexer.parse_expression("(left + right) as i64", &fresh_storage)
     if lexer.expression_is_null(grouped_cast) || grouped_cast.kind != 293 || grouped_cast.left.kind != 43 { return 276 }
     cast_before_binary := lexer.parse_expression("left as i32 + right", &fresh_storage)
@@ -437,9 +443,9 @@ check_calls :: fn () i32 {
     if lexer.expression_is_null(unary) || unary.kind != 295 { return 9 }
     if unary.left.kind != 43 { return 10 }
     pointer_unary := lexer.parse_expression("&*ptr", &storage)
-    if lexer.expression_is_null(pointer_unary) || pointer_unary.kind != 288 || pointer_unary.left.kind != 292 { return 66 }
+    if lexer.expression_is_null(pointer_unary) || pointer_unary.kind != 296 || pointer_unary.left.kind != 297 { return 66 }
     mixed_pointer := lexer.parse_expression("*ptr + left * right", &storage)
-    if lexer.expression_is_null(mixed_pointer) || mixed_pointer.kind != 43 || mixed_pointer.left.kind != 292 || mixed_pointer.right.kind != 42 { return 67 }
+    if lexer.expression_is_null(mixed_pointer) || mixed_pointer.kind != 43 || mixed_pointer.left.kind != 297 || mixed_pointer.right.kind != 42 { return 67 }
 
     invalid := lexer.parse_expression("1 + )", &storage)
     if !lexer.expression_is_null(invalid) { return 11 }

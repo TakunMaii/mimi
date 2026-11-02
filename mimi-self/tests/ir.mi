@@ -73,5 +73,10 @@ main :: fn () i32 {
     if !check_issue("main :: fn () i32 { result := if 1 { 42 } else { 0 } result }", 3) { return 34 }
     if !check_issue("extern labs : fn(value : i64) i64 main :: fn () i32 { labs(-42) as i32 }", 0) { return 35 }
     if !check_issue("math :: @import(\"math.mi\") main :: fn () i32 { 0 }", 6) { return 38 }
+    if !check_issue("extern malloc : fn(size : u64) *u8 extern free : fn(pointer : *u8) void main :: fn () i32 { memory := malloc(8) free(memory) 0 }", 0) { return 39 }
+    if !check_issue("main :: fn () i32 { pointer := 0 as *u8 0 }", 3) { return 40 }
+    if !check_issue("main :: fn () i32 { text : []u8 = \"hello\" text.len as i32 }", 0) { return 41 }
+    if !check_issue("main :: fn (argc : i32, argv : **u8) i32 { argc }", 0) { return 42 }
+    if !check_issue("main :: fn (argc : i64, argv : **u8) i32 { argc as i32 }", 6) { return 43 }
     0
 }

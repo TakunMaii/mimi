@@ -25,11 +25,14 @@ target/debug/mimi build mimi-self/src/compiler.mi -o /tmp/mimi-stage1 --c-source
 
 Stage1 currently accepts scalar helper functions, parameters, direct calls,
 bindings, assignments, arithmetic, boolean expressions, numeric casts, returns,
-`if`/`else`, `while`, `loop`, `do-while`, integer range `for`, `break`, and `continue`. `main` still
-takes no parameters. It writes temporary C, invokes the host `cc`, and removes
+`if`/`else`, `while`, `loop`, `do-while`, integer range `for`, `break`, and `continue`. `main` accepts
+either no parameters or `(argc: i32, argv: **u8)`. It writes temporary C, invokes the host `cc`, and removes
 the C file. Direct scalar `extern` calls can link against host C symbols.
 Imports of public scalar functions support transitive calls and module-local C names.
-Collection `for`, match, defer, aggregates, imported types, pointer-based C ABI calls, and generics
+Opaque pointer `extern` calls, pointer-to-pointer casts, byte slices, string
+literals, and `.ptr`/`.len` access are supported. Pointer pointee types and
+integer widths remain collapsed in this initial backend.
+Collection `for`, match, defer, user-defined aggregates, imported types, pointer dereference/indexing, and generics
 remain unsupported in stage1.
 Whole-expression scalar `if`/`else` values are also supported; embedded `if`
 expressions remain outside the current stage1 subset.

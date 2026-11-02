@@ -71,6 +71,8 @@ two consecutive stages.
 - [x] Parse collection and integer-range `for` headers with body spans.
 - [x] Parse plain `if/else` expressions into expression nodes.
 - [x] Parse embedded `if/else` expression operands and binary call arguments.
+- [x] Give address-of and dereference expressions distinct AST kinds and
+  separate adjacent `!`/`&` expression statements correctly.
 - [x] Parse match values, variant arms, optional bindings, and result spans.
 - [x] Parse enum `if let` variant tests with optional bindings.
 - [x] Parse generic parameter lists and reject duplicate names.
@@ -141,6 +143,8 @@ two consecutive stages.
 - [x] Look up public struct and enum declarations through import alias edges.
 - [x] Lower public scalar functions across imports with module-owned source
   spans, unique C symbols, and private-name checks.
+- [x] Lower opaque pointer extern calls, byte slices and string literals, and
+  `main(argc: i32, argv: **u8)` in the initial C backend.
 - [ ] Resolve imported function/type references into module-owned typed IR.
 - [ ] Extend typed IR and C generation to control flow, aggregates, generics,
   imports, C ABI calls, and the remaining language features.
@@ -221,5 +225,6 @@ Next, extend typing and IR lowering across those features.
 The stage1 front end now parses `compiler.mi` itself. The import graph retains
 source and alias edges and can parse imported modules on demand for public
 function and type lookup. Scalar imported calls now lower to module-owned IR.
-The first stage2 blocker is currently the `mimi_remove_file` external pointer
-parameter in `compiler.mi`, which the scalar C backend cannot lower.
+The first stage2 blocker is currently the `ByteBuffer` struct declaration in
+`bytes.mi`, which the scalar and byte-slice C backend cannot lower. Pointer
+pointee types and integer widths are not yet represented precisely in IR.
