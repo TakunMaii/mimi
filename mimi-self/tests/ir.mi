@@ -109,5 +109,7 @@ main :: fn () i32 {
     assignment_block := ir.parse_statement_block("{ values[0] = Point { x = 42 } }", 0, &assignment_storage)
     if ir.block_node_is_null(assignment_block) || assignment_block.statements.kind != 284 { return 56 }
     ir.expression_arena_release(&assignment_storage)
+    if !check_issue("main :: fn () i32 { values := [20, 22] values[0] + values[1] }", 0) { return 57 }
+    if !check_issue("Point :: struct { x : i32 } main :: fn () i32 { point := Point { x = 42 } pointer := &point pointers := &pointer pointers[0][0].x }", 0) { return 58 }
     0
 }

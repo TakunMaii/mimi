@@ -160,7 +160,7 @@ two consecutive stages.
 ## T4: Bootstrap parity
 
 - [x] Compile the Mimi compiler with the Rust compiler (stage1).
-- [ ] Compile the same compiler source with stage1 (stage2).
+- [x] Compile the same compiler source with stage1 (stage2).
 - [ ] Run the full Python suite under Rust, stage1, and stage2 compilers.
 - [ ] Check reproducibility and document remaining differences from Rust.
 - [ ] Make the self-hosted compiler the default only after parity gates pass.
@@ -216,20 +216,19 @@ The parser currently lives alongside
 the lexer because stage0 loses imported aliases inside imported module function
 bodies.
 
-The first stage1 executable compiles scalar functions, direct calls, assignments,
-imports of scalar functions, and basic control flow through a typed IR and C backend, then invokes `cc`.
-`main` accepts either no parameters or `(argc: i32, argv: **u8)`. The subset excludes collection `for`, match, defer,
-tuples, enums, generic specialization, and several aggregate and C ABI cases; stage2 cannot yet
-compile `compiler.mi`. Stage1 currently collapses integer widths and signedness,
-so exact range-bound type parity remains open. Scalar `if` expressions are
-supported when they form a complete expression; embedded forms remain open.
-Next, extend typing and IR lowering across those features.
+The stage1 compiler lowers supported expressions and control flow through typed
+IR and a C backend, then invokes `cc`. `main` accepts either no parameters or
+`(argc: i32, argv: **u8)`. Collection `for`, match, defer, enums, generic
+specialization, and several aggregate and C ABI cases remain unsupported.
+Stage1 still collapses integer widths and signedness, so exact range-bound type
+parity remains open. Embedded scalar `if` expressions also remain open.
 The stage1 front end now parses `compiler.mi` itself. The import graph retains
 source and alias edges and can parse imported modules on demand for public
 function and type lookup. Scalar imported calls now lower to module-owned IR.
 The C backend now lowers plain struct signatures, literals, field reads and
 writes, struct pointers, public imported struct types, tuple values and members,
-and byte-slice ranges. The first stage2 blocker is currently indexed assignment
-through the struct pointer `prefixes` in `lexer.mi`.
-Most pointer pointee types and integer widths are not yet represented precisely
-in IR, and struct defaults and generic specialization remain open.
+byte-slice ranges, byte-array literals, and indexed pointer assignments.
+Stage1 builds stage2, and stage2 builds stage3. Stage2 executes the IR and lexer
+tests; the complete behavior suite still has parity failures. Integer widths,
+pointer targets outside the currently modeled subset, struct defaults, and
+generic specialization remain open.

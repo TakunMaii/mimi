@@ -1983,6 +1983,10 @@ pub match_node_is_null :: fn (node : *MatchNode) bool {
     node == (mimi_buffer_empty() as *MatchNode)
 }
 
+pub match_arm_is_null :: fn (node : *MatchArmNode) bool {
+    node == (mimi_buffer_empty() as *MatchArmNode)
+}
+
 pub parse_match_expression :: fn (source : []u8, storage : *ExpressionArena) *MatchNode {
     keyword := next_token(source, 0)
     if keyword.0 != 163 { return mimi_buffer_empty() as *MatchNode }
@@ -3325,6 +3329,59 @@ pub parse_tuple_literal :: fn (source : []u8, storage : *ExpressionArena) *ExprN
     mimi_buffer_empty() as *ExprNode
 }
 
+pub parse_array_literal :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
+    opening := next_token(source, 0)
+    if opening.0 != 91 { return mimi_buffer_empty() as *ExprNode }
+    cursor := opening.2
+    items : *ExprNode = mimi_buffer_empty() as *ExprNode
+    count : u64 = 0
+    while true {
+        token := next_token(source, cursor)
+        if token.0 == 93 {
+            if next_token(source, token.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
+            return allocate_expr(storage, 267, opening.1, token.2, items, mimi_buffer_empty() as *ExprNode)
+        }
+        segment_start := cursor
+        depth : u64 = 0
+        paren_depth : u64 = 0
+        brace_depth : u64 = 0
+        segment_end := source.len
+        while cursor < source.len {
+            token = next_token(source, cursor)
+            if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *ExprNode }
+            cursor = token.2
+            if token.0 == 91 { depth = depth + 1 }
+            if token.0 == 93 {
+                if depth > 0 { depth = depth - 1 } else {
+                    if paren_depth == 0 && brace_depth == 0 { segment_end = token.1 break }
+                }
+            }
+            if token.0 == 40 { paren_depth = paren_depth + 1 }
+            if token.0 == 41 { if paren_depth == 0 { return mimi_buffer_empty() as *ExprNode } paren_depth = paren_depth - 1 }
+            if token.0 == 123 { brace_depth = brace_depth + 1 }
+            if token.0 == 125 { if brace_depth == 0 { return mimi_buffer_empty() as *ExprNode } brace_depth = brace_depth - 1 }
+            if token.0 == 44 && depth == 0 && paren_depth == 0 && brace_depth == 0 { segment_end = token.1 break }
+        }
+        if segment_end == source.len { return mimi_buffer_empty() as *ExprNode }
+        item := parse_expression(source[segment_start:segment_end], storage)
+        if expression_is_null(item) { return item }
+        shift_expression_tree(item, segment_start)
+        if count == 0 { items = item } else {
+            items = allocate_expr(storage, 262, items.start, item.end, items, item)
+            if expression_is_null(items) { return items }
+        }
+        count = count + 1
+        separator := next_token(source, segment_end)
+        if separator.0 == 93 {
+            if next_token(source, separator.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
+            return allocate_expr(storage, 267, opening.1, separator.2, items, mimi_buffer_empty() as *ExprNode)
+        }
+        if separator.0 != 44 { return mimi_buffer_empty() as *ExprNode }
+        cursor = separator.2
+    }
+    mimi_buffer_empty() as *ExprNode
+}
+
 parse_parameter :: fn (source : []u8, offset : u64, storage : *ExpressionArena) *ParameterNode {
     name := next_token(source, 0)
     colon := next_token(source, name.2)
@@ -3685,6 +3742,23 @@ parenthesized_end :: fn (source : []u8, start : u64) u64 {
     start
 }
 
+bracketed_end :: fn (source : []u8, start : u64) u64 {
+    depth : u64 = 0
+    cursor := start
+    while cursor < source.len {
+        token := next_token(source, cursor)
+        if token.0 == 0 || token.0 == 255 { return start }
+        cursor = token.2
+        if token.0 == 91 { depth = depth + 1 }
+        if token.0 == 93 {
+            if depth == 0 { return start }
+            depth = depth - 1
+            if depth == 0 { return cursor }
+        }
+    }
+    start
+}
+
 pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     // Bound the stack-size calculations below before multiplying source.len.
     if source.len > 500000000000000000 { return mimi_buffer_empty() as *ExprNode }
@@ -3738,6 +3812,19 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
         if token.0 == 0 { break }
         if token.0 == 255 { return mimi_buffer_empty() as *ExprNode }
         cursor = token.2
+
+        if token.0 == 91 && expecting_operand {
+            close_end := bracketed_end(source, token.1)
+            if close_end == token.1 { return mimi_buffer_empty() as *ExprNode }
+            array := parse_array_literal(source[token.1:close_end], storage)
+            if expression_is_null(array) { return array }
+            shift_expression_tree(array, token.1)
+            stacks.nodes[stacks.node_count] = array
+            stacks.node_count = stacks.node_count + 1
+            cursor = close_end
+            expecting_operand = false
+            continue
+        }
 
         if token.0 == 164 {
             if !expecting_operand { return mimi_buffer_empty() as *ExprNode }
@@ -4165,6 +4252,7 @@ name_resolve_expression :: fn (source : []u8, module : *ModuleNode, expression :
     if expression.kind == 260 || expression.kind == 293 { return name_resolve_expression(source, module, expression.left, locals, issue) }
     if expression.kind == 292 { return name_resolve_expression(source, module, expression.right, locals, issue) }
     if expression.kind == 291 { return name_resolve_expression(source, module, expression.right, locals, issue) }
+    if expression.kind == 267 { return name_resolve_expression(source, module, expression.left, locals, issue) }
     if expression.kind == 289 || (expression.kind >= 270 && expression.kind <= 278) { return true }
     if !name_resolve_expression(source, module, expression.left, locals, issue) { return false }
     name_resolve_expression(source, module, expression.right, locals, issue)
@@ -4341,7 +4429,7 @@ type_compatible :: fn (left : u64, right : u64) bool {
 }
 
 type_assignable :: fn (expected : u64, actual : u64) bool {
-    expected == 0 || actual == 0 || expected == actual || (expected == 3 && actual == 1) || ((expected == 7 || expected == 9 || expected == 10 || expected == 11 || (expected >= 1000000 && expected < 2000000)) && actual == 12)
+    expected == 0 || actual == 0 || expected == actual || (expected == 3 && actual == 1) || ((expected == 7 || expected == 9 || expected == 10 || expected == 11 || expected == 13 || (expected >= 1000000 && expected < 2000000) || (expected >= 3000000 && expected < 4000000)) && actual == 12)
 }
 
 type_fail :: fn (issue : *NameIssue, code : u64, expression : *ExprNode) u64 {
@@ -4381,6 +4469,7 @@ infer_expression_tag :: fn (source : []u8, expression : *ExprNode, locals : *Typ
         return 0
     }
     if expression.kind == 268 { infer_expression_tag(source, expression.left, locals, issue) return 5 }
+    if expression.kind == 267 { infer_expression_tag(source, expression.left, locals, issue) return 4 }
     if expression.kind == 283 {
         operand := infer_expression_tag(source, expression.left, locals, issue)
         if operand != 0 && operand != 2 { return type_fail(issue, 4, expression) }
@@ -4675,6 +4764,8 @@ pub StructType :: struct {
     syntax : *StructNode,
     next : *StructType,
     is_public : bool,
+    emitted : bool,
+    visiting : bool,
 }
 
 pub ImportInput :: struct {
@@ -4867,11 +4958,13 @@ type_tag :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode) u64 {
         inner := node.left
         inner_tag := type_tag(source, owner, inner)
         if inner_tag >= 1000 && inner_tag < 1000000 { return 1000000 + inner_tag - 1000 }
+        if inner_tag >= 1000000 && inner_tag < 2000000 { return 3000000 + inner_tag - 1000000 }
         if !expression_is_null(inner) {
             if inner.kind == 270 && name_is(source, inner.start, inner.end, "u8") { return 7 }
             if inner.kind == 271 && !expression_is_null(inner.left) && inner.left.kind == 270 && name_is(source, inner.left.start, inner.left.end, "u8") { return 9 }
             if inner.kind == 272 && !expression_is_null(inner.left) && inner.left.kind == 270 && name_is(source, inner.left.start, inner.left.end, "u8") { return 11 }
         }
+        if inner_tag == 1 { return 13 }
         return 10
     }
     if node.kind == 272 && !expression_is_null(node.left) && node.left.kind == 270 && name_is(source, node.left.start, node.left.end, "u8") { return 8 }
@@ -4936,6 +5029,21 @@ lower_tuple_items :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, 
     value
 }
 
+lower_array_items :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals : *Symbol, functions : *Function, storage : *Storage, issue : *LowerIssue) *Expr {
+    empty : *Expr = mimi_buffer_empty() as *Expr
+    if expression_is_null(node) { return empty }
+    if node.kind == 262 {
+        left := lower_array_items(source, owner, node.left, locals, functions, storage, issue)
+        right := lower_array_items(source, owner, node.right, locals, functions, storage, issue)
+        if expr_is_null(left) || expr_is_null(right) { return empty }
+        return allocate_ir_expr(storage, node, 0, left, right)
+    }
+    value := lower_expr(source, owner, node, locals, functions, storage, issue)
+    if expr_is_null(value) { return empty }
+    if value.type_tag != 1 { fail(issue, 3, node.start, node.end) return empty }
+    value
+}
+
 tuple_member_index :: fn (source : []u8, start : u64, end : u64) u64 {
     if start == end { return 18446744073709551615 }
     index := start
@@ -4994,7 +5102,7 @@ allocate_ir_expr :: fn (storage : *Storage, source_node : *ExprNode, tag : u64, 
 
 numeric :: fn (tag : u64) bool { tag == 1 || tag == 3 }
 
-pointer_tag :: fn (tag : u64) bool { (tag >= 7 && tag <= 12 && tag != 8) || (tag >= 1000000 && tag < 2000000) }
+pointer_tag :: fn (tag : u64) bool { (tag >= 7 && tag <= 13 && tag != 8) || (tag >= 1000000 && tag < 2000000) || (tag >= 3000000 && tag < 4000000) }
 
 names_match :: fn (source : []u8, start : u64, end : u64, other : []u8, other_start : u64, other_end : u64) bool {
     if end < start || other_end < other_start || end - start != other_end - other_start { return false }
@@ -5098,6 +5206,11 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
         return result
     }
     if node.kind == 289 { return lower_expr(source, owner, node.left, locals, functions, storage, issue) }
+    if node.kind == 267 {
+        items := lower_array_items(source, owner, node.left, locals, functions, storage, issue)
+        if !expression_is_null(node.left) && expr_is_null(items) { return empty }
+        return allocate_ir_expr(storage, node, 8, empty, items)
+    }
     if node.kind == 268 {
         build := TupleBuild { first = mimi_buffer_empty() as *TupleElement, last = mimi_buffer_empty() as *TupleElement, count = 0 }
         values := lower_tuple_items(source, owner, node.left, locals, functions, storage, &build, issue)
@@ -5195,8 +5308,10 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
         receiver := lower_expr(source, owner, node.left, locals, functions, storage, issue)
         index := lower_expr(source, owner, node.right, locals, functions, storage, issue)
         if expr_is_null(receiver) || expr_is_null(index) { return empty }
-        if index.type_tag != 1 || (receiver.type_tag != 7 && receiver.type_tag != 8 && receiver.type_tag != 9) { fail(issue, 3, node.start, node.end) return empty }
+        if index.type_tag != 1 || (receiver.type_tag != 7 && receiver.type_tag != 8 && receiver.type_tag != 9 && receiver.type_tag != 13 && !(receiver.type_tag >= 1000000 && receiver.type_tag < 2000000) && !(receiver.type_tag >= 3000000 && receiver.type_tag < 4000000)) { fail(issue, 3, node.start, node.end) return empty }
         tag : u64 = if receiver.type_tag == 9 { 7 } else { 1 }
+        if receiver.type_tag >= 1000000 && receiver.type_tag < 2000000 { tag = 1000 + receiver.type_tag - 1000000 }
+        if receiver.type_tag >= 3000000 && receiver.type_tag < 4000000 { tag = 1000000 + receiver.type_tag - 3000000 }
         return allocate_ir_expr(storage, node, tag, receiver, index)
     }
     if node.kind == 264 {
@@ -5217,7 +5332,9 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
         value := lower_expr(source, owner, node.left, locals, functions, storage, issue)
         if expr_is_null(value) { return empty }
         tag : u64 = if value.type_tag == 8 { 11 } else { 10 }
+        if value.type_tag == 1 { tag = 13 }
         if value.type_tag >= 1000 && value.type_tag < 1000000 { tag = 1000000 + value.type_tag - 1000 }
+        if value.type_tag >= 1000000 && value.type_tag < 2000000 { tag = 3000000 + value.type_tag - 1000000 }
         return allocate_ir_expr(storage, node, tag, value, empty)
     }
     if node.kind == 297 {
@@ -5227,7 +5344,9 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
         if value.type_tag == 7 { tag = 1 }
         if value.type_tag == 9 { tag = 7 }
         if value.type_tag == 11 { tag = 8 }
-        if value.type_tag >= 1000000 { tag = 1000 + value.type_tag - 1000000 }
+        if value.type_tag == 13 { tag = 1 }
+        if value.type_tag >= 1000000 && value.type_tag < 2000000 { tag = 1000 + value.type_tag - 1000000 }
+        if value.type_tag >= 3000000 && value.type_tag < 4000000 { tag = 1000000 + value.type_tag - 3000000 }
         if tag == 0 { fail(issue, 3, node.start, node.end) return empty }
         return allocate_ir_expr(storage, node, tag, value, empty)
     }
@@ -5481,7 +5600,7 @@ pub lower_inputs :: fn (first : *ModuleInput, storage : *Storage) LowerResult {
         declaration := owner.parsed.declarations
         while declaration != (mimi_buffer_empty() as *ModuleDeclarationNode) {
             if declaration.kind == 2 {
-                if declaration.struct_node == (mimi_buffer_empty() as *StructNode) || !allocate(storage, 56) {
+                if declaration.struct_node == (mimi_buffer_empty() as *StructNode) || !allocate(storage, 72) {
                     fail(&issue, 4, declaration.start, declaration.end)
                     return LowerResult { module = empty, issue = issue }
                 }
@@ -5493,6 +5612,8 @@ pub lower_inputs :: fn (first : *ModuleInput, storage : *Storage) LowerResult {
                 item.syntax = declaration.struct_node
                 item.next = mimi_buffer_empty() as *StructType
                 item.is_public = declaration.is_public
+                item.emitted = false
+                item.visiting = false
                 if result.type_count == 0 { result.types = item } else { last_type.next = item }
                 last_type = item
                 result.type_count = result.type_count + 1
@@ -5693,6 +5814,7 @@ c_function_name :: fn (output : *CBuffer, function : *Function) bool {
 }
 
 c_type :: fn (output : *CBuffer, tag : u64) bool {
+    if tag >= 3000000 && tag < 4000000 { return c_text(output, "m_s") && c_uint(output, tag - 3000000) && c_text(output, "**") }
     if tag >= 2000000 && tag < 3000000 { return c_text(output, "m_t") && c_uint(output, tag - 2000000) }
     if tag >= 1000000 && tag < 2000000 { return c_text(output, "m_s") && c_uint(output, tag - 1000000) && c_push(output, 42) }
     if tag >= 1000 && tag < 1000000 { return c_text(output, "m_s") && c_uint(output, tag - 1000) }
@@ -5701,8 +5823,14 @@ c_type :: fn (output : *CBuffer, tag : u64) bool {
     if tag == 3 { return c_text(output, "double") }
     if tag == 6 { return c_text(output, "void") }
     if tag == 7 || tag == 9 || tag == 10 || tag == 11 || tag == 12 { return c_text(output, "void*") }
+    if tag == 13 { return c_text(output, "uint64_t*") }
     if tag == 8 { return c_text(output, "m_slice") }
     false
+}
+
+c_external_type :: fn (output : *CBuffer, tag : u64) bool {
+    if pointer_tag(tag) { return c_text(output, "void*") }
+    c_type(output, tag)
 }
 
 c_operator :: fn (output : *CBuffer, kind : u64) bool {
@@ -5730,6 +5858,18 @@ c_parameters :: fn (output : *CBuffer, source : []u8, first : *Parameter) bool {
     true
 }
 
+c_external_parameters :: fn (output : *CBuffer, source : []u8, first : *Parameter) bool {
+    if first == (mimi_buffer_empty() as *Parameter) { return c_text(output, "void") }
+    current := first
+    while current != (mimi_buffer_empty() as *Parameter) {
+        if !c_external_type(output, current.type_tag) || !c_push(output, 32) { return false }
+        if !c_name(output, source, current.name_start, current.name_end, "v_") { return false }
+        current = current.next
+        if current != (mimi_buffer_empty() as *Parameter) && !c_text(output, ", ") { return false }
+    }
+    true
+}
+
 c_main_parameters :: fn (output : *CBuffer, source : []u8, first : *Parameter) bool {
     if first == (mimi_buffer_empty() as *Parameter) { return c_text(output, "void") }
     second := first.next
@@ -5750,6 +5890,12 @@ c_arguments :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
 c_tuple_items :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
     if value.kind == 262 { return c_tuple_items(output, source, value.left) && c_text(output, ", ") && c_tuple_items(output, source, value.right) }
     c_expr(output, source, value)
+}
+
+c_item_count :: fn (value : *Expr) u64 {
+    if expr_is_null(value) { return 0 }
+    if value.kind == 262 { return c_item_count(value.left) + c_item_count(value.right) }
+    1
 }
 
 c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
@@ -5783,6 +5929,16 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
         if !c_uint(output, decoded_string_len(source, value.payload_start, value.payload_end)) { return false }
         return c_text(output, "})")
     }
+    if value.kind == 267 {
+        if !c_text(output, "((m_slice){(uint8_t[]){") { return false }
+        if expr_is_null(value.right) {
+            if !c_push(output, 48) { return false }
+        } else {
+            if !c_tuple_items(output, source, value.right) { return false }
+        }
+        if !c_text(output, "},") || !c_uint(output, c_item_count(value.right)) { return false }
+        return c_text(output, "})")
+    }
     if value.kind == 268 {
         if !c_text(output, "((") || !c_type(output, value.type_tag) || !c_text(output, "){") || !c_tuple_items(output, source, value.right) { return false }
         return c_text(output, "})")
@@ -5804,7 +5960,15 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
         if value.left.type_tag == 8 {
             if !c_text(output, "((") || !c_expr(output, source, value.left) || !c_text(output, ").ptr[") { return false }
         } else {
-            if !c_text(output, if value.left.type_tag == 9 { "(((void**)" } else { "(((uint8_t*)" }) || !c_expr(output, source, value.left) || !c_text(output, ")[") { return false }
+            if (value.left.type_tag >= 1000000 && value.left.type_tag < 2000000) || (value.left.type_tag >= 3000000 && value.left.type_tag < 4000000) {
+                if !c_text(output, "(((") || !c_type(output, value.left.type_tag) || !c_push(output, 41) { return false }
+            } else {
+                prefix : []u8 = "(((uint8_t*)"
+                if value.left.type_tag == 9 { prefix = "(((void**)" }
+                if value.left.type_tag == 13 { prefix = "(((uint64_t*)" }
+                if !c_text(output, prefix) { return false }
+            }
+            if !c_expr(output, source, value.left) || !c_text(output, ")[") { return false }
         }
         if !c_expr(output, source, value.right) { return false }
         return c_text(output, "])")
@@ -5829,13 +5993,14 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
         return c_push(output, 41)
     }
     if value.kind == 297 {
-        if value.left.type_tag >= 1000000 {
+        if (value.left.type_tag >= 1000000 && value.left.type_tag < 2000000) || (value.left.type_tag >= 3000000 && value.left.type_tag < 4000000) {
             if !c_text(output, "(*((") || !c_type(output, value.left.type_tag) || !c_push(output, 41) || !c_expr(output, source, value.left) { return false }
-            return c_push(output, 41)
+            return c_text(output, "))")
         }
         prefix : []u8 = "(*((uint8_t*)"
         if value.left.type_tag == 9 { prefix = "(*((void**)" }
         if value.left.type_tag == 11 { prefix = "(*((m_slice*)" }
+        if value.left.type_tag == 13 { prefix = "(*((uint64_t*)" }
         if !c_text(output, prefix) || !c_expr(output, source, value.left) { return false }
         return c_text(output, "))")
     }
@@ -5947,6 +6112,33 @@ c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_t
     false
 }
 
+emit_struct_definition :: fn (output : *CBuffer, definition : *StructType) bool {
+    if definition.emitted { return true }
+    if definition.visiting { return false }
+    definition.visiting = true
+    field := definition.syntax.fields
+    while field != (mimi_buffer_empty() as *StructFieldNode) {
+        tag := type_tag(definition.owner.source, definition.owner, field.data_type)
+        if tag == 0 { return false }
+        if tag >= 1000 && tag < 1000000 {
+            dependency := struct_by_id(definition.owner, tag - 1000)
+            if dependency == (mimi_buffer_empty() as *StructType) || !emit_struct_definition(output, dependency) { return false }
+        }
+        field = field.next
+    }
+    if !c_text(output, "struct m_s") || !c_uint(output, definition.id) || !c_text(output, " {\n") { return false }
+    field = definition.syntax.fields
+    while field != (mimi_buffer_empty() as *StructFieldNode) {
+        tag := type_tag(definition.owner.source, definition.owner, field.data_type)
+        if !c_text(output, "  ") || !c_type(output, tag) || !c_push(output, 32) || !c_name(output, definition.owner.source, field.name_start, field.name_end, "f_") || !c_text(output, ";\n") { return false }
+        field = field.next
+    }
+    if !c_text(output, "};\n") { return false }
+    definition.visiting = false
+    definition.emitted = true
+    true
+}
+
 pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
     if module_is_null(module) || !c_text(output, "#include <stdint.h>\n#include <stdbool.h>\ntypedef struct { uint8_t *ptr; uint64_t len; } m_slice;\nstatic inline m_slice m_slice_sub(m_slice v, uint64_t start, uint64_t end, int has_end) { if (!has_end) end = v.len; return (m_slice){v.ptr + start, end - start}; }\n\n") { return false }
     tuple_index : u64 = 0
@@ -5956,6 +6148,8 @@ pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
     }
     definition := module.types
     while definition != (mimi_buffer_empty() as *StructType) {
+        definition.emitted = false
+        definition.visiting = false
         if !c_text(output, "typedef struct m_s") || !c_uint(output, definition.id) || !c_text(output, " m_s") || !c_uint(output, definition.id) || !c_text(output, ";\n") { return false }
         definition = definition.next
     }
@@ -5975,14 +6169,7 @@ pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
     }
     definition = module.types
     while definition != (mimi_buffer_empty() as *StructType) {
-        if !c_text(output, "struct m_s") || !c_uint(output, definition.id) || !c_text(output, " {\n") { return false }
-        field := definition.syntax.fields
-        while field != (mimi_buffer_empty() as *StructFieldNode) {
-            tag := type_tag(definition.owner.source, definition.owner, field.data_type)
-            if tag == 0 || !c_text(output, "  ") || !c_type(output, tag) || !c_push(output, 32) || !c_name(output, definition.owner.source, field.name_start, field.name_end, "f_") || !c_text(output, ";\n") { return false }
-            field = field.next
-        }
-        if !c_text(output, "};\n") { return false }
+        if !emit_struct_definition(output, definition) { return false }
         definition = definition.next
     }
     if !c_push(output, 10) { return false }
@@ -5992,14 +6179,25 @@ pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
         if is_main {
             if prototype.return_tag != 1 || !c_text(output, "int main(") || !c_main_parameters(output, prototype.source, prototype.parameters) || !c_text(output, ");\n") { return false }
         } else {
-            if !c_text(output, if prototype.is_external { "extern " } else { "static " }) || !c_type(output, prototype.return_tag) || !c_push(output, 32) { return false }
+            if !c_text(output, if prototype.is_external { "extern " } else { "static " }) { return false }
+            if prototype.is_external {
+                if !c_external_type(output, prototype.return_tag) { return false }
+            } else {
+                if !c_type(output, prototype.return_tag) { return false }
+            }
+            if !c_push(output, 32) { return false }
             if prototype.is_external {
                 if !c_span(output, prototype.source, prototype.name_start, prototype.name_end) { return false }
             } else {
                 if !c_function_name(output, prototype) { return false }
             }
             if !c_push(output, 40) { return false }
-            if !c_parameters(output, prototype.source, prototype.parameters) || !c_text(output, ");\n") { return false }
+            if prototype.is_external {
+                if !c_external_parameters(output, prototype.source, prototype.parameters) { return false }
+            } else {
+                if !c_parameters(output, prototype.source, prototype.parameters) { return false }
+            }
+            if !c_text(output, ");\n") { return false }
         }
         prototype = prototype.next
     }

@@ -417,6 +417,9 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             ("tuple-argument", "sum :: fn (pair : (i32, i32)) i32 { pair.0 + pair.1 } main :: fn () i32 { sum((20, 22)) }", 42),
             ("slice-bounds", "main :: fn () i32 { text := \"abcde\" part := text[1:4] if part.len == 3 && part[0] == 98 { return 42 } 0 }", 42),
             ("slice-open-end", "main :: fn () i32 { text := \"abcde\" part := text[2:] if part.len == 3 && part[2] == 101 { return 42 } 0 }", 42),
+            ("struct-pointer-index", "Point :: struct { x : i32 } main :: fn () i32 { point := Point { x = 20 } pointer := &point pointer[0] = Point { x = 42 } pointer[0].x }", 42),
+            ("integer-pointer", "main :: fn () i32 { value : u64 = 20 pointer := &value pointer[0] = 42 value as i32 }", 42),
+            ("byte-array-literal", "main :: fn () i32 { values := [20, 22] values[0] + values[1] }", 42),
         ]
         for name, text, expected_exit in cases:
             program = directory / f"{name} program.mi"
@@ -498,12 +501,21 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             )
             if expected not in result.stderr or diagnostic_location(result.stderr) is None:
                 raise AssertionError(f"stage1 {name}: bad diagnostic:\n{result.stderr}")
-        self_source = run(
-            [str(stage1), "build", str(SELF / "src" / "compiler.mi"), "-o", str(directory / "stage2")],
-            expected_status=1,
+        stage2 = directory / "stage2"
+        run(
+            [str(stage1), "build", str(SELF / "src" / "compiler.mi"), "-o", str(stage2),
+             "--c-source", str(RUNTIME), "--no-cache"],
         )
-        if "error[E_LOWER]" not in self_source.stderr or diagnostic_location(self_source.stderr) is None:
-            raise AssertionError(f"stage1 self-source parse regressed:\n{self_source.stderr}")
+        stage2_program = directory / "stage2-tuple.mi"
+        stage2_program.write_text(
+            "main :: fn () i32 { pair := (20, 22) pair.0 + pair.1 }", encoding="utf-8",
+        )
+        stage2_executable = directory / "stage2-tuple"
+        run(
+            [str(stage2), "build", str(stage2_program), "-o", str(stage2_executable),
+             "--no-cache"],
+        )
+        run([str(stage2_executable)], expected_status=42)
 
 
 def test_module_loading(compiler: Path) -> None:
