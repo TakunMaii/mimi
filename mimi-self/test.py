@@ -463,6 +463,7 @@ main :: fn () i32 {{
         shared_module = directory / "shared.mi"
         cycle_a = directory / "cycle-a.mi"
         cycle_b = directory / "cycle-b.mi"
+        orphan_module = directory / "orphan.mi"
         (directory / "sub").mkdir()
         root_module.write_text(
             'left :: @import("left.mi")\nright :: @import("right.mi")\n'
@@ -473,6 +474,7 @@ main :: fn () i32 {{
         shared_module.write_text("value :: 1\n", encoding="utf-8")
         cycle_a.write_text('next :: @import("cycle-b.mi")\n', encoding="utf-8")
         cycle_b.write_text('next :: @import("./cycle-a.mi")\n', encoding="utf-8")
+        orphan_module.write_text('@import("shared.mi")\n', encoding="utf-8")
         graph_program = directory / "graph traversal.mi"
         graph_executable = directory / "graph-traversal"
         graph_program.write_text(
@@ -480,13 +482,34 @@ main :: fn () i32 {{
 main :: fn () i32 {{
     graph := source.module_graph_init()
     if !source.load_graph({mimi_quote(root_module)}, &graph) {{ return 1 }}
+    if graph.file_count != 4 || graph.files.contents_length == 0 || graph.files.contents[0] != 108 {{ return 5 }}
+    if graph.files.import_count != 3 || graph.files.imports.alias_length != 4 || graph.files.imports.alias[0] != 108 {{ return 9 }}
+    if graph.files.imports.path_length == 0 || graph.files.imports.next.alias_length != 5 || graph.files.imports.next.alias[0] != 114 {{ return 10 }}
+    if graph.files.imports.next.next.alias_length != 6 || graph.files.imports.next.next.alias[0] != 115 {{ return 11 }}
+    imported := source.module_file_lookup(&graph, graph.files.imports.path, graph.files.imports.path_length)
+    if source.module_file_is_null(imported) || imported.import_count != 1 || imported.contents[0] != 115 {{ return 12 }}
+    record := graph.files
+    index : u64 = 0
+    seen_shared := false
+    while index < graph.file_count {{
+        if record.path_length == 0 || record.contents_length == 0 {{ return 6 }}
+        if record.contents[0] == 118 {{ seen_shared = true }}
+        record = record.next
+        index = index + 1
+    }}
+    if !seen_shared {{ return 7 }}
     state : u64 = 0
     if !source.module_state(&graph, {mimi_quote(root_module.resolve())}, &state) || state != 2 {{ return 2 }}
     if !source.module_state(&graph, {mimi_quote(shared_module.resolve())}, &state) || state != 2 {{ return 3 }}
     source.module_graph_release(&graph)
+    if graph.file_count != 0 {{ return 8 }}
+    source.module_graph_release(&graph)
     cycle_graph := source.module_graph_init()
     if source.load_graph({mimi_quote(cycle_a)}, &cycle_graph) {{ return 4 }}
     source.module_graph_release(&cycle_graph)
+    orphan_graph := source.module_graph_init()
+    if source.load_graph({mimi_quote(orphan_module)}, &orphan_graph) {{ return 13 }}
+    source.module_graph_release(&orphan_graph)
     0
 }}
 ''', encoding="utf-8"

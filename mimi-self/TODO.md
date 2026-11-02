@@ -130,6 +130,9 @@ two consecutive stages.
   conditional expressions.
 - [x] Lower direct scalar `extern` declarations and calls through the host C
   linker, with stage0/stage1 runtime comparison.
+- [x] Retain canonical module paths, owned source bytes, and alias-to-module
+  edges in the import graph for module-aware lowering.
+- [ ] Resolve imported function/type references into module-owned typed IR.
 - [ ] Extend typed IR and C generation to control flow, aggregates, generics,
   imports, C ABI calls, and the remaining language features.
 - [ ] Implement a typed IR and lowering for the language feature matrix.
@@ -206,6 +209,6 @@ compile `compiler.mi`. Stage1 currently collapses integer widths and signedness,
 so exact range-bound type parity remains open. Scalar `if` expressions are
 supported when they form a complete expression; embedded forms remain open.
 Next, extend typing and IR lowering across those features.
-The stage1 front end now parses `compiler.mi` itself; its first stage2 blocker is
-the `bytes :: @import("bytes.mi")` declaration, which the C backend does not
-lower yet.
+The stage1 front end now parses `compiler.mi` itself. The import graph retains
+source and alias edges, but the first stage2 blocker is still the
+`bytes :: @import("bytes.mi")` declaration, which the C backend does not lower.

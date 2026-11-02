@@ -82,4 +82,6 @@ function and struct method bodies contain recursively composed statement lists.
 `source.render` writes a diagnostic with its path, one-based line and column,
 source line, and byte-span underline to standard error. `source.load_graph`
 discovers string-literal `@import` paths, resolves them relative to each module,
-and traverses the graph iteratively while detecting import cycles.
+and traverses the graph iteratively while detecting import cycles. Its module
+records retain canonical paths, source bytes, and import alias edges until
+`module_graph_release`; `module_file_lookup` resolves an edge's canonical path.
