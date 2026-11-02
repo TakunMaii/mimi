@@ -199,6 +199,103 @@ pub module_type_lookup :: fn (graph : *ModuleGraph, importer : *ModuleFile, alia
     ModuleSymbol { file = mimi_buffer_empty() as *ModuleFile, declaration = mimi_buffer_empty() as *lexer.ModuleDeclarationNode }
 }
 
+lower_failure :: fn (code : u64) lexer.LowerResult {
+    issue := lexer.LowerIssue { code = code, start = 0, end = 0, owner = mimi_buffer_empty() as *lexer.ModuleInput }
+    lexer.LowerResult { module = mimi_buffer_empty() as *lexer.Module, issue = issue }
+}
+
+input_for_path :: fn (first : *lexer.ModuleInput, path : *u8, path_length : u64) *lexer.ModuleInput {
+    current := first
+    while current != (mimi_buffer_empty() as *lexer.ModuleInput) {
+        if raw_name_equals(current.path.ptr, current.path.len, path, path_length) { return current }
+        current = current.next
+    }
+    mimi_buffer_empty() as *lexer.ModuleInput
+}
+
+pub lower_loaded_graph :: fn (graph : *ModuleGraph, storage : *lexer.Storage) lexer.LowerResult {
+    first : *lexer.ModuleInput = mimi_buffer_empty() as *lexer.ModuleInput
+    last : *lexer.ModuleInput = mimi_buffer_empty() as *lexer.ModuleInput
+    file := graph.files
+    index : u64 = 0
+    while !module_file_is_null(file) {
+        text : []u8 = ""
+        path : []u8 = ""
+        mimi_slice_from_raw(file.contents, file.contents_length, &text)
+        mimi_slice_from_raw(file.path, file.path_length, &path)
+        if lexer.module_node_is_null(file.module) {
+            ast_storage := graph.ast_storage
+            file.module = lexer.parse_module(text, &ast_storage)
+            graph.ast_storage = ast_storage
+        }
+        file_storage := graph.storage
+        if !arena_api.allocate(&file_storage, 64, 8) { graph.storage = file_storage return lower_failure(4) }
+        owner := arena_api.last_byte(&file_storage) as *lexer.ModuleInput
+        graph.storage = file_storage
+        owner.id = index
+        owner.path = path
+        owner.source = text
+        owner.parsed = file.module
+        owner.imports = mimi_buffer_empty() as *lexer.ImportInput
+        owner.next = mimi_buffer_empty() as *lexer.ModuleInput
+        if first == (mimi_buffer_empty() as *lexer.ModuleInput) { first = owner } else { last.next = owner }
+        last = owner
+        index = index + 1
+        file = file.next
+    }
+    file = graph.files
+    owner := first
+    while !module_file_is_null(file) {
+        edge := file.imports
+        last_edge : *lexer.ImportInput = mimi_buffer_empty() as *lexer.ImportInput
+        while edge != (mimi_buffer_empty() as *ModuleImport) {
+            target := input_for_path(first, edge.path, edge.path_length)
+            if target == (mimi_buffer_empty() as *lexer.ModuleInput) { return lower_failure(6) }
+            alias : []u8 = ""
+            mimi_slice_from_raw(edge.alias, edge.alias_length, &alias)
+            file_storage := graph.storage
+            if !arena_api.allocate(&file_storage, 32, 8) { graph.storage = file_storage return lower_failure(4) }
+            item := arena_api.last_byte(&file_storage) as *lexer.ImportInput
+            graph.storage = file_storage
+            item.alias = alias
+            item.target = target
+            item.next = mimi_buffer_empty() as *lexer.ImportInput
+            if owner.imports == (mimi_buffer_empty() as *lexer.ImportInput) { owner.imports = item } else { last_edge.next = item }
+            last_edge = item
+            edge = edge.next
+        }
+        owner = owner.next
+        file = file.next
+    }
+    lexer.lower_inputs(first, storage)
+}
+
+pub lower_storage_init :: fn () lexer.Storage { lexer.init() }
+
+pub lower_storage_release :: fn (storage : *lexer.Storage) void { lexer.release(storage) }
+
+pub emit_lowered_c :: fn (text : []u8, module : *lexer.Module, path : []u8) bool {
+    lexer.emit_c_to_file(text, module, path)
+}
+
+pub render_lower_issue :: fn (issue : lexer.LowerIssue, root : *SourceFile) void {
+    diagnostic := Diagnostic {
+        code = "E_LOWER",
+        message = lexer.lower_issue_message(issue.code),
+        span = Span { start = issue.start, end = issue.end },
+    }
+    owner := issue.owner
+    if owner == (mimi_buffer_empty() as *lexer.ModuleInput) || owner.id == 0 {
+        render(diagnostic, root)
+    } else {
+        borrowed := SourceFile {
+            path = owner.path,
+            contents = bytes.ByteBuffer { data = owner.source.ptr, len = owner.source.len, capacity = 0, released = true },
+        }
+        render(diagnostic, &borrowed)
+    }
+}
+
 pub module_function_is_null :: fn (value : ModuleFunction) bool {
     module_file_is_null(value.file) || lexer.function_node_is_null(value.function)
 }

@@ -139,6 +139,8 @@ two consecutive stages.
 - [x] Parse imported module ASTs on demand and look up public functions through
   canonical import alias edges.
 - [x] Look up public struct and enum declarations through import alias edges.
+- [x] Lower public scalar functions across imports with module-owned source
+  spans, unique C symbols, and private-name checks.
 - [ ] Resolve imported function/type references into module-owned typed IR.
 - [ ] Extend typed IR and C generation to control flow, aggregates, generics,
   imports, C ABI calls, and the remaining language features.
@@ -209,14 +211,15 @@ the lexer because stage0 loses imported aliases inside imported module function
 bodies.
 
 The first stage1 executable compiles scalar functions, direct calls, assignments,
-and basic control flow through a typed IR and C backend, then invokes `cc`.
+imports of scalar functions, and basic control flow through a typed IR and C backend, then invokes `cc`.
 `main` still takes no parameters. The subset excludes collection `for`, match, defer,
-aggregates, imports, pointer-based C ABI calls, and generic specialization; stage2 cannot yet
+aggregates, imported aggregate types, pointer-based C ABI calls, and generic specialization; stage2 cannot yet
 compile `compiler.mi`. Stage1 currently collapses integer widths and signedness,
 so exact range-bound type parity remains open. Scalar `if` expressions are
 supported when they form a complete expression; embedded forms remain open.
 Next, extend typing and IR lowering across those features.
 The stage1 front end now parses `compiler.mi` itself. The import graph retains
 source and alias edges and can parse imported modules on demand for public
-function and type lookup. The first stage2 blocker is still the
-`bytes :: @import("bytes.mi")` declaration, which the C backend does not lower.
+function and type lookup. Scalar imported calls now lower to module-owned IR.
+The first stage2 blocker is currently the `mimi_remove_file` external pointer
+parameter in `compiler.mi`, which the scalar C backend cannot lower.

@@ -1,5 +1,4 @@
 bytes :: @import("bytes.mi")
-lexer :: @import("lexer.mi")
 process :: @import("process.mi")
 source :: @import("source.mi")
 
@@ -60,16 +59,20 @@ build :: fn (input : []u8, output : []u8, extra_c : []u8) i32 {
         source.release(&file)
         return 1
     }
-    storage := lexer.init()
-    lowered := lexer.lower_text(text, &storage)
+    storage := source.lower_storage_init()
+    graph := source.module_graph_init()
+    if !source.load_graph(input, &graph) {
+        print_error("error[import]: could not load module graph")
+        source.module_graph_release(&graph)
+        source.lower_storage_release(&storage)
+        source.release(&file)
+        return 1
+    }
+    lowered := source.lower_loaded_graph(&graph, &storage)
     if lowered.issue.code != 0 {
-        issue := source.Diagnostic {
-            code = "E_LOWER",
-            message = lexer.lower_issue_message(lowered.issue.code),
-            span = source.Span { start = lowered.issue.start, end = lowered.issue.end },
-        }
-        source.render(issue, &file)
-        lexer.release(&storage)
+        source.render_lower_issue(lowered.issue, &file)
+        source.module_graph_release(&graph)
+        source.lower_storage_release(&storage)
         source.release(&file)
         return 1
     }
@@ -77,16 +80,18 @@ build :: fn (input : []u8, output : []u8, extra_c : []u8) i32 {
     if !generated_path(output, &generated) {
         print_error("error[io]: could not create temporary C path")
         bytes.release(&generated)
-        lexer.release(&storage)
+        source.module_graph_release(&graph)
+        source.lower_storage_release(&storage)
         source.release(&file)
         return 1
     }
     generated_name : []u8 = ""
     mimi_slice_from_raw(generated.data, generated.len, &generated_name)
-    if !lexer.emit_c_to_file(text, lowered.module, generated_name) {
+    if !source.emit_lowered_c(text, lowered.module, generated_name) {
         print_error("error[codegen]: could not write C output")
         bytes.release(&generated)
-        lexer.release(&storage)
+        source.module_graph_release(&graph)
+        source.lower_storage_release(&storage)
         source.release(&file)
         return 1
     }
@@ -99,7 +104,8 @@ build :: fn (input : []u8, output : []u8, extra_c : []u8) i32 {
     process.release(&arguments)
     removed := mimi_remove_file(generated_name.ptr, generated_name.len) != 0
     bytes.release(&generated)
-    lexer.release(&storage)
+    source.module_graph_release(&graph)
+    source.lower_storage_release(&storage)
     source.release(&file)
     if !removed { print_error("error[io]: could not remove temporary C output") return 1 }
     if status != 0 { print_error("error[link]: C compiler failed") return 1 }

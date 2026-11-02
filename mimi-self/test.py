@@ -425,6 +425,28 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             run([str(candidate)], expected_status=expected_exit)
             if candidate.with_name(candidate.name + ".mimi.c").exists():
                 raise AssertionError("stage1 left temporary C source after --no-cache")
+        left = directory / "left.mi"
+        right = directory / "right.mi"
+        middle = directory / "middle.mi"
+        left.write_text("pub value :: fn () i32 { 20 }\nhidden :: fn () i32 { 0 }\n", encoding="utf-8")
+        right.write_text("pub value :: fn () i32 { 22 }\n", encoding="utf-8")
+        middle.write_text('left :: @import("left.mi")\npub result :: fn () i32 { left.value() + 22 }\n', encoding="utf-8")
+        module_cases = [
+            ("same-name", 'left :: @import("left.mi")\nright :: @import("right.mi")\nmain :: fn () i32 { left.value() + right.value() }'),
+            ("transitive", 'middle :: @import("middle.mi")\nmain :: fn () i32 { middle.result() }'),
+        ]
+        for name, text in module_cases:
+            program = directory / f"{name}.mi"
+            program.write_text(text, encoding="utf-8")
+            for label, tool in (("stage0", stage0), ("stage1", stage1)):
+                executable = directory / f"{name}-{label}"
+                run([str(tool), "build", str(program), "-o", str(executable), "--c-source", str(RUNTIME), "--no-cache"])
+                run([str(executable)], expected_status=42)
+        private_program = directory / "private-call.mi"
+        private_program.write_text('left :: @import("left.mi")\nmain :: fn () i32 { left.hidden() }', encoding="utf-8")
+        private_result = run([str(stage1), "build", str(private_program), "-o", str(directory / "private-call")], expected_status=1)
+        if "error[E_LOWER]" not in private_result.stderr or diagnostic_location(private_result.stderr) is None:
+            raise AssertionError(f"stage1 private import: bad diagnostic:\n{private_result.stderr}")
         rejected = [
             ("name", "main :: fn () i32 { missing }", "error[E_NAME]"),
             ("type", "main :: fn () i32 { true }", "error[E_TYPE]"),
@@ -445,7 +467,7 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             [str(stage1), "build", str(SELF / "src" / "compiler.mi"), "-o", str(directory / "stage2")],
             expected_status=1,
         )
-        if "error[E_LOWER]" not in self_source.stderr or "bytes :: @import" not in self_source.stderr:
+        if "error[E_LOWER]" not in self_source.stderr or diagnostic_location(self_source.stderr) is None:
             raise AssertionError(f"stage1 self-source parse regressed:\n{self_source.stderr}")
 
 
@@ -557,10 +579,10 @@ main :: fn () i32 {{
     self_graph := source.module_graph_init()
     if !source.load_graph({mimi_quote(SELF / "src" / "compiler.mi")}, &self_graph) {{ return 16 }}
     if self_graph.file_count < 8 {{ return 17 }}
-    parser_function := source.module_function_lookup(&self_graph, self_graph.files, "lexer", "parse_expression")
-    if source.module_function_is_null(parser_function) {{ return 19 }}
     graph_type := source.module_type_lookup(&self_graph, self_graph.files, "source", "ModuleGraph")
     if source.module_symbol_is_null(graph_type) || graph_type.declaration.kind != 2 {{ return 26 }}
+    parser_function := source.module_function_lookup(&self_graph, graph_type.file, "lexer", "parse_expression")
+    if source.module_function_is_null(parser_function) {{ return 19 }}
     source.module_graph_release(&self_graph)
     0
 }}

@@ -4558,6 +4558,7 @@ pub Expr :: struct {
     right : *Expr,
     otherwise : *Expr,
     is_external : bool,
+    callee : *Function,
 }
 
 pub Statement :: struct {
@@ -4590,6 +4591,25 @@ pub Function :: struct {
     body : *Statement,
     next : *Function,
     is_external : bool,
+    source : []u8,
+    owner : *ModuleInput,
+    syntax : *FunctionNode,
+    is_public : bool,
+}
+
+pub ModuleInput :: struct {
+    id : u64,
+    path : []u8,
+    source : []u8,
+    parsed : *ModuleNode,
+    imports : *ImportInput,
+    next : *ModuleInput,
+}
+
+pub ImportInput :: struct {
+    alias : []u8,
+    target : *ModuleInput,
+    next : *ImportInput,
 }
 
 pub Module :: struct {
@@ -4601,6 +4621,7 @@ pub LowerIssue :: struct {
     code : u64,
     start : u64,
     end : u64,
+    owner : *ModuleInput,
 }
 
 pub LowerResult :: struct {
@@ -4696,7 +4717,7 @@ symbol_push :: fn (storage : *Storage, head : *Symbol, start : u64, end : u64, t
 }
 
 allocate_ir_expr :: fn (storage : *Storage, source_node : *ExprNode, tag : u64, left : *Expr, right : *Expr) *Expr {
-    if !allocate(storage, 80) { return mimi_buffer_empty() as *Expr }
+    if !allocate(storage, 88) { return mimi_buffer_empty() as *Expr }
     item := storage.last as *Expr
     item.kind = source_node.kind
     item.type_tag = tag
@@ -4708,15 +4729,35 @@ allocate_ir_expr :: fn (storage : *Storage, source_node : *ExprNode, tag : u64, 
     item.right = right
     item.otherwise = mimi_buffer_empty() as *Expr
     item.is_external = false
+    item.callee = mimi_buffer_empty() as *Function
     item
 }
 
 numeric :: fn (tag : u64) bool { tag == 1 || tag == 3 }
 
-find_function :: fn (source : []u8, start : u64, end : u64, functions : *Function) *Function {
+names_match :: fn (source : []u8, start : u64, end : u64, other : []u8, other_start : u64, other_end : u64) bool {
+    if end < start || other_end < other_start || end - start != other_end - other_start { return false }
+    index : u64 = 0
+    while index < end - start {
+        if source[start + index] != other[other_start + index] { return false }
+        index = index + 1
+    }
+    true
+}
+
+find_import :: fn (source : []u8, start : u64, end : u64, owner : *ModuleInput) *ModuleInput {
+    edge := owner.imports
+    while edge != (mimi_buffer_empty() as *ImportInput) {
+        if names_match(source, start, end, edge.alias, 0, edge.alias.len) { return edge.target }
+        edge = edge.next
+    }
+    mimi_buffer_empty() as *ModuleInput
+}
+
+find_function :: fn (source : []u8, start : u64, end : u64, owner : *ModuleInput, functions : *Function) *Function {
     current := functions
     while current != (mimi_buffer_empty() as *Function) {
-        if same_name(source, start, end, current.name_start, current.name_end) { return current }
+        if current.owner == owner && names_match(source, start, end, current.source, current.name_start, current.name_end) { return current }
         current = current.next
     }
     mimi_buffer_empty() as *Function
@@ -4742,12 +4783,12 @@ parameter_count :: fn (first : *Parameter) u64 {
     count
 }
 
-lower_arguments :: fn (source : []u8, node : *ExprNode, locals : *Symbol, functions : *Function, storage : *Storage, parameters : *Parameter, cursor : *u64, issue : *LowerIssue) *Expr {
+lower_arguments :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals : *Symbol, functions : *Function, storage : *Storage, parameters : *Parameter, cursor : *u64, issue : *LowerIssue) *Expr {
     empty : *Expr = mimi_buffer_empty() as *Expr
     if node.kind == 262 {
-        left := lower_arguments(source, node.left, locals, functions, storage, parameters, cursor, issue)
+        left := lower_arguments(source, owner, node.left, locals, functions, storage, parameters, cursor, issue)
         if expr_is_null(left) { return empty }
-        right := lower_arguments(source, node.right, locals, functions, storage, parameters, cursor, issue)
+        right := lower_arguments(source, owner, node.right, locals, functions, storage, parameters, cursor, issue)
         if expr_is_null(right) { return empty }
         result := allocate_ir_expr(storage, node, 0, left, right)
         if expr_is_null(result) { fail(issue, 4, node.start, node.end) }
@@ -4755,23 +4796,23 @@ lower_arguments :: fn (source : []u8, node : *ExprNode, locals : *Symbol, functi
     }
     parameter := parameter_at(parameters, cursor[0])
     if parameter == (mimi_buffer_empty() as *Parameter) { fail(issue, 3, node.start, node.end) return empty }
-    value := lower_expr(source, node, locals, functions, storage, issue)
+    value := lower_expr(source, owner, node, locals, functions, storage, issue)
     if expr_is_null(value) { return empty }
     if !type_assignable(parameter.type_tag, value.type_tag) { fail(issue, 3, node.start, node.end) return empty }
     cursor[0] = cursor[0] + 1
     value
 }
 
-lower_expr :: fn (source : []u8, node : *ExprNode, locals : *Symbol, functions : *Function, storage : *Storage, issue : *LowerIssue) *Expr {
+lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals : *Symbol, functions : *Function, storage : *Storage, issue : *LowerIssue) *Expr {
     empty : *Expr = mimi_buffer_empty() as *Expr
     if expression_is_null(node) { fail(issue, 1, 0, 0) return empty }
     if node.kind == 288 {
         if expression_is_null(node.right) || node.right.kind != 276 { fail(issue, 1, node.start, node.end) return empty }
-        condition := lower_expr(source, node.left, locals, functions, storage, issue)
+        condition := lower_expr(source, owner, node.left, locals, functions, storage, issue)
         if expr_is_null(condition) { return empty }
         if condition.type_tag != 2 { fail(issue, 3, node.left.start, node.left.end) return empty }
-        then_value := lower_expr(source, node.right.left, locals, functions, storage, issue)
-        else_value := lower_expr(source, node.right.right, locals, functions, storage, issue)
+        then_value := lower_expr(source, owner, node.right.left, locals, functions, storage, issue)
+        else_value := lower_expr(source, owner, node.right.right, locals, functions, storage, issue)
         if expr_is_null(then_value) || expr_is_null(else_value) { return empty }
         tag := then_value.type_tag
         if tag != else_value.type_tag {
@@ -4783,23 +4824,35 @@ lower_expr :: fn (source : []u8, node : *ExprNode, locals : *Symbol, functions :
         result.otherwise = else_value
         return result
     }
-    if node.kind == 289 { return lower_expr(source, node.left, locals, functions, storage, issue) }
+    if node.kind == 289 { return lower_expr(source, owner, node.left, locals, functions, storage, issue) }
     if node.kind == 263 {
-        if expression_is_null(node.left) || node.left.kind != 1 { fail(issue, 1, node.start, node.end) return empty }
-        callee := find_function(source, node.left.payload_start, node.left.payload_end, functions)
+        if expression_is_null(node.left) { fail(issue, 1, node.start, node.end) return empty }
+        callee_owner := owner
+        callee_name := node.left
+        if node.left.kind == 260 {
+            if expression_is_null(node.left.left) || node.left.left.kind != 1 || expression_is_null(node.left.right) || node.left.right.kind != 1 { fail(issue, 1, node.start, node.end) return empty }
+            callee_owner = find_import(source, node.left.left.payload_start, node.left.left.payload_end, owner)
+            callee_name = node.left.right
+        } else {
+            if node.left.kind != 1 { fail(issue, 1, node.start, node.end) return empty }
+        }
+        if callee_owner == (mimi_buffer_empty() as *ModuleInput) { fail(issue, 2, node.left.start, node.left.end) return empty }
+        callee := find_function(source, callee_name.payload_start, callee_name.payload_end, callee_owner, functions)
+        if callee_owner != owner && callee != (mimi_buffer_empty() as *Function) && !callee.is_public { fail(issue, 2, node.left.start, node.left.end) return empty }
         if callee == (mimi_buffer_empty() as *Function) { fail(issue, 2, node.left.start, node.left.end) return empty }
         cursor : u64 = 0
         arguments : *Expr = empty
         if !expression_is_null(node.right) {
-            arguments = lower_arguments(source, node.right, locals, functions, storage, callee.parameters, &cursor, issue)
+            arguments = lower_arguments(source, owner, node.right, locals, functions, storage, callee.parameters, &cursor, issue)
             if expr_is_null(arguments) { return empty }
         }
         if cursor != parameter_count(callee.parameters) { fail(issue, 3, node.start, node.end) return empty }
         result := allocate_ir_expr(storage, node, callee.return_tag, empty, arguments)
         if expr_is_null(result) { fail(issue, 4, node.start, node.end) return empty }
-        result.payload_start = node.left.payload_start
-        result.payload_end = node.left.payload_end
+        result.payload_start = callee_name.payload_start
+        result.payload_end = callee_name.payload_end
         result.is_external = callee.is_external
+        result.callee = callee
         return result
     }
     if node.kind == 1 {
@@ -4818,14 +4871,14 @@ lower_expr :: fn (source : []u8, node : *ExprNode, locals : *Symbol, functions :
     }
     if node.kind == 4 || node.kind == 5 { return allocate_ir_expr(storage, node, 2, empty, empty) }
     if node.kind == 293 {
-        value := lower_expr(source, node.left, locals, functions, storage, issue)
+        value := lower_expr(source, owner, node.left, locals, functions, storage, issue)
         tag := type_tag(source, node.right)
         if expr_is_null(value) || tag == 0 { fail(issue, 1, node.start, node.end) return empty }
         if !numeric(value.type_tag) || !numeric(tag) { fail(issue, 3, node.start, node.end) return empty }
         return allocate_ir_expr(storage, node, tag, value, empty)
     }
     if node.kind == 295 || node.kind == 283 {
-        value := lower_expr(source, node.left, locals, functions, storage, issue)
+        value := lower_expr(source, owner, node.left, locals, functions, storage, issue)
         if expr_is_null(value) { return empty }
         if (node.kind == 295 && !numeric(value.type_tag)) || (node.kind == 283 && value.type_tag != 2) {
             fail(issue, 3, node.start, node.end)
@@ -4835,8 +4888,8 @@ lower_expr :: fn (source : []u8, node : *ExprNode, locals : *Symbol, functions :
         return allocate_ir_expr(storage, node, tag, value, empty)
     }
     if node.kind == 43 || node.kind == 45 || node.kind == 42 || node.kind == 47 || node.kind == 37 || node.kind == 128 || node.kind == 129 || node.kind == 130 || node.kind == 131 || node.kind == 60 || node.kind == 62 || node.kind == 132 || node.kind == 133 {
-        left := lower_expr(source, node.left, locals, functions, storage, issue)
-        right := lower_expr(source, node.right, locals, functions, storage, issue)
+        left := lower_expr(source, owner, node.left, locals, functions, storage, issue)
+        right := lower_expr(source, owner, node.right, locals, functions, storage, issue)
         if expr_is_null(left) || expr_is_null(right) { return empty }
         tag : u64 = 2
         if node.kind == 132 || node.kind == 133 {
@@ -4875,9 +4928,9 @@ allocate_statement :: fn (storage : *Storage, node : *StatementNode, value : *Ex
     item
 }
 
-lower_if_node :: fn (source : []u8, node : *IfNode, locals : *Symbol, functions : *Function, storage : *Storage, expected_return : u64, in_loop : bool, issue : *LowerIssue) *Statement {
+lower_if_node :: fn (source : []u8, owner : *ModuleInput, node : *IfNode, locals : *Symbol, functions : *Function, storage : *Storage, expected_return : u64, in_loop : bool, issue : *LowerIssue) *Statement {
     empty : *Statement = mimi_buffer_empty() as *Statement
-    condition := lower_expr(source, node.condition, locals, functions, storage, issue)
+    condition := lower_expr(source, owner, node.condition, locals, functions, storage, issue)
     if expr_is_null(condition) { return empty }
     if condition.type_tag != 2 { fail(issue, 3, node.condition.start, node.condition.end) return empty }
     if !allocate(storage, 96) { fail(issue, 4, node.start, node.end) return empty }
@@ -4890,22 +4943,22 @@ lower_if_node :: fn (source : []u8, node : *IfNode, locals : *Symbol, functions 
     item.name_end = 0
     item.value = condition
     item.next = empty
-    item.then_body = lower_body(source, node.then_branch, locals, functions, storage, expected_return, false, in_loop, issue)
+    item.then_body = lower_body(source, owner, node.then_branch, locals, functions, storage, expected_return, false, in_loop, issue)
     item.else_body = empty
     item.loop_kind = 0
     item.range_end = mimi_buffer_empty() as *Expr
     if issue.code != 0 { return empty }
     if !block_node_is_null(node.else_branch) {
-        item.else_body = lower_body(source, node.else_branch, locals, functions, storage, expected_return, false, in_loop, issue)
+        item.else_body = lower_body(source, owner, node.else_branch, locals, functions, storage, expected_return, false, in_loop, issue)
     }
     if !if_node_is_null(node.else_if) {
-        item.else_body = lower_if_node(source, node.else_if, locals, functions, storage, expected_return, in_loop, issue)
+        item.else_body = lower_if_node(source, owner, node.else_if, locals, functions, storage, expected_return, in_loop, issue)
     }
     if issue.code != 0 { return empty }
     item
 }
 
-lower_body :: fn (source : []u8, body : *BlockNode, incoming : *Symbol, functions : *Function, storage : *Storage, expected_return : u64, check_tail : bool, in_loop : bool, issue : *LowerIssue) *Statement {
+lower_body :: fn (source : []u8, owner : *ModuleInput, body : *BlockNode, incoming : *Symbol, functions : *Function, storage : *Storage, expected_return : u64, check_tail : bool, in_loop : bool, issue : *LowerIssue) *Statement {
     empty : *Statement = mimi_buffer_empty() as *Statement
     first : *Statement = empty
     last : *Statement = empty
@@ -4916,8 +4969,8 @@ lower_body :: fn (source : []u8, body : *BlockNode, incoming : *Symbol, function
         if node.kind == 307 {
             range := node.for_loop
             if !range.is_range { fail(issue, 5, range.start, range.end) return empty }
-            start := lower_expr(source, range.range_start, locals, functions, storage, issue)
-            ending := lower_expr(source, range.range_end, locals, functions, storage, issue)
+            start := lower_expr(source, owner, range.range_start, locals, functions, storage, issue)
+            ending := lower_expr(source, owner, range.range_end, locals, functions, storage, issue)
             if issue.code != 0 { return empty }
             if expr_is_null(start) || expr_is_null(ending) || start.type_tag != 1 || ending.type_tag != 1 {
                 fail(issue, 3, range.start, range.end)
@@ -4931,24 +4984,24 @@ lower_body :: fn (source : []u8, body : *BlockNode, incoming : *Symbol, function
                 item.range_end = ending
                 loop_locals := symbol_push(storage, locals, range.variable_start, range.variable_end, 1, false)
                 if loop_locals == (mimi_buffer_empty() as *Symbol) { fail(issue, 4, range.start, range.end) return empty }
-                item.then_body = lower_body(source, range.body, loop_locals, functions, storage, expected_return, false, true, issue)
+                item.then_body = lower_body(source, owner, range.body, loop_locals, functions, storage, expected_return, false, true, issue)
             }
         } else {
         if node.kind == 304 {
-            item = lower_if_node(source, node.if_statement, locals, functions, storage, expected_return, in_loop, issue)
+            item = lower_if_node(source, owner, node.if_statement, locals, functions, storage, expected_return, in_loop, issue)
         } else {
             if node.kind == 306 {
                 loop_node := node.loop_statement
                 condition : *Expr = mimi_buffer_empty() as *Expr
                 if !expression_is_null(loop_node.condition) {
-                    condition = lower_expr(source, loop_node.condition, locals, functions, storage, issue)
+                    condition = lower_expr(source, owner, loop_node.condition, locals, functions, storage, issue)
                     if !expr_is_null(condition) && condition.type_tag != 2 { fail(issue, 3, loop_node.condition.start, loop_node.condition.end) }
                 }
                 if issue.code != 0 { return empty }
                 item = allocate_statement(storage, node, condition)
                 if !statement_is_null(item) {
                     item.loop_kind = loop_node.kind
-                    item.then_body = lower_body(source, loop_node.body, locals, functions, storage, expected_return, false, true, issue)
+                    item.then_body = lower_body(source, owner, loop_node.body, locals, functions, storage, expected_return, false, true, issue)
                 }
             } else {
                 if node.kind == 281 || node.kind == 282 {
@@ -4960,7 +5013,7 @@ lower_body :: fn (source : []u8, body : *BlockNode, incoming : *Symbol, function
                         if expression_is_null(target) || target.kind != 1 { fail(issue, 5, node.start, node.end) return empty }
                         target_symbol := symbol_find(source, target.payload_start, target.payload_end, locals)
                         target_tag : u64 = if target_symbol == (mimi_buffer_empty() as *Symbol) { 0 } else { target_symbol.type_tag }
-                        value := lower_expr(source, node.value.right, locals, functions, storage, issue)
+                        value := lower_expr(source, owner, node.value.right, locals, functions, storage, issue)
                         if target_tag == 0 { fail(issue, 2, target.start, target.end) return empty }
                         if !target_symbol.mutable { fail(issue, 7, target.start, target.end) return empty }
                         if expr_is_null(value) || !type_assignable(target_tag, value.type_tag) { fail(issue, 3, node.start, node.end) return empty }
@@ -4974,9 +5027,9 @@ lower_body :: fn (source : []u8, body : *BlockNode, incoming : *Symbol, function
                         if node.kind != 285 && node.kind != 280 && node.kind != 303 { fail(issue, 5, node.start, node.end) return empty }
                         value : *Expr = mimi_buffer_empty() as *Expr
                         if node.kind == 285 {
-                            value = lower_expr(source, node.binding.initializer, locals, functions, storage, issue)
+                            value = lower_expr(source, owner, node.binding.initializer, locals, functions, storage, issue)
                         } else {
-                            if !expression_is_null(node.value) { value = lower_expr(source, node.value, locals, functions, storage, issue) }
+                            if !expression_is_null(node.value) { value = lower_expr(source, owner, node.value, locals, functions, storage, issue) }
                         }
                         if issue.code != 0 { return empty }
                         if node.kind != 280 && expr_is_null(value) { fail(issue, 4, node.start, node.end) return empty }
@@ -5021,17 +5074,31 @@ lower_body :: fn (source : []u8, body : *BlockNode, incoming : *Symbol, function
     first
 }
 
-lower_module :: fn (source : []u8, parsed : *ModuleNode, storage : *Storage) LowerResult {
-    issue := LowerIssue { code = 0, start = 0, end = 0 }
+pub lower_inputs :: fn (first : *ModuleInput, storage : *Storage) LowerResult {
+    issue := LowerIssue { code = 0, start = 0, end = 0, owner = first }
     empty : *Module = mimi_buffer_empty() as *Module
-    if module_node_is_null(parsed) { fail(&issue, 6, 0, 0) return LowerResult { module = empty, issue = issue } }
+    if first == (mimi_buffer_empty() as *ModuleInput) { fail(&issue, 6, 0, 0) return LowerResult { module = empty, issue = issue } }
     if !allocate(storage, 16) { fail(&issue, 4, 0, 0) return LowerResult { module = empty, issue = issue } }
     result := storage.last as *Module
     result.functions = mimi_buffer_empty() as *Function
     result.function_count = 0
     last : *Function = mimi_buffer_empty() as *Function
+    owner := first
+    while owner != (mimi_buffer_empty() as *ModuleInput) {
+    issue.owner = owner
+    source := owner.source
+    parsed := owner.parsed
+    if module_node_is_null(parsed) { fail(&issue, 6, 0, 0) return LowerResult { module = empty, issue = issue } }
     declaration := parsed.declarations
     while declaration != (mimi_buffer_empty() as *ModuleDeclarationNode) {
+        if declaration.kind == 4 {
+            if find_import(source, declaration.name_start, declaration.name_end, owner) == (mimi_buffer_empty() as *ModuleInput) {
+                fail(&issue, 6, declaration.start, declaration.end)
+                return LowerResult { module = empty, issue = issue }
+            }
+            declaration = declaration.next
+            continue
+        }
         if (declaration.kind != 1 && declaration.kind != 7) || function_node_is_null(declaration.function) {
             fail(&issue, 6, declaration.start, declaration.end)
             return LowerResult { module = empty, issue = issue }
@@ -5039,7 +5106,7 @@ lower_module :: fn (source : []u8, parsed : *ModuleNode, storage : *Storage) Low
         function := declaration.function
         tag := type_tag(source, function.return_type)
         if tag == 0 { fail(&issue, 6, function.start, function.end) return LowerResult { module = empty, issue = issue } }
-        if !allocate(storage, 56) { fail(&issue, 4, function.start, function.end) return LowerResult { module = empty, issue = issue } }
+        if !allocate(storage, 96) { fail(&issue, 4, function.start, function.end) return LowerResult { module = empty, issue = issue } }
         item := storage.last as *Function
         item.name_start = function.name_start
         item.name_end = function.name_end
@@ -5048,6 +5115,10 @@ lower_module :: fn (source : []u8, parsed : *ModuleNode, storage : *Storage) Low
         item.body = mimi_buffer_empty() as *Statement
         item.next = mimi_buffer_empty() as *Function
         item.is_external = declaration.kind == 7
+        item.source = source
+        item.owner = owner
+        item.syntax = function
+        item.is_public = declaration.is_public
         last_parameter : *Parameter = mimi_buffer_empty() as *Parameter
         source_parameter := function.parameters
         while !parameter_list_is_null(source_parameter) {
@@ -5063,7 +5134,7 @@ lower_module :: fn (source : []u8, parsed : *ModuleNode, storage : *Storage) Low
             last_parameter = parameter
             source_parameter = source_parameter.next
         }
-        if name_is(source, item.name_start, item.name_end, "main") && (item.is_external || item.parameters != (mimi_buffer_empty() as *Parameter)) {
+        if owner.id == 0 && name_is(source, item.name_start, item.name_end, "main") && (item.is_external || item.parameters != (mimi_buffer_empty() as *Parameter)) {
             fail(&issue, 6, item.name_start, item.name_end)
             return LowerResult { module = empty, issue = issue }
         }
@@ -5072,9 +5143,13 @@ lower_module :: fn (source : []u8, parsed : *ModuleNode, storage : *Storage) Low
         result.function_count = result.function_count + 1
         declaration = declaration.next
     }
-    declaration = parsed.declarations
+    owner = owner.next
+    }
     current := result.functions
-    while declaration != (mimi_buffer_empty() as *ModuleDeclarationNode) {
+    while current != (mimi_buffer_empty() as *Function) {
+        owner = current.owner
+        issue.owner = owner
+        source := current.source
         if !current.is_external {
             locals : *Symbol = mimi_buffer_empty() as *Symbol
             parameter := current.parameters
@@ -5083,10 +5158,10 @@ lower_module :: fn (source : []u8, parsed : *ModuleNode, storage : *Storage) Low
                 if locals == (mimi_buffer_empty() as *Symbol) { fail(&issue, 4, parameter.name_start, parameter.name_end) return LowerResult { module = empty, issue = issue } }
                 parameter = parameter.next
             }
-            current.body = lower_body(source, declaration.function.body, locals, result.functions, storage, current.return_tag, true, false, &issue)
+            current.body = lower_body(source, owner, current.syntax.body, locals, result.functions, storage, current.return_tag, true, false, &issue)
             if issue.code != 0 { return LowerResult { module = empty, issue = issue } }
         }
-        declaration = declaration.next
+        current.syntax = mimi_buffer_empty() as *FunctionNode
         current = current.next
     }
     LowerResult { module = result, issue = issue }
@@ -5095,7 +5170,19 @@ lower_module :: fn (source : []u8, parsed : *ModuleNode, storage : *Storage) Low
 pub lower_text :: fn (source : []u8, storage : *Storage) LowerResult {
     syntax := expression_arena_init()
     parsed := parse_module(source, &syntax)
-    result := lower_module(source, parsed, storage)
+    if !allocate(storage, 64) {
+        lexer_issue := LowerIssue { code = 4, start = 0, end = 0, owner = mimi_buffer_empty() as *ModuleInput }
+        expression_arena_release(&syntax)
+        return LowerResult { module = mimi_buffer_empty() as *Module, issue = lexer_issue }
+    }
+    owner := storage.last as *ModuleInput
+    owner.id = 0
+    owner.path = ""
+    owner.source = source
+    owner.parsed = parsed
+    owner.imports = mimi_buffer_empty() as *ImportInput
+    owner.next = mimi_buffer_empty() as *ModuleInput
+    result := lower_inputs(owner, storage)
     expression_arena_release(&syntax)
     result
 }
@@ -5166,6 +5253,16 @@ c_name :: fn (output : *CBuffer, source : []u8, start : u64, end : u64, prefix :
     true
 }
 
+c_uint :: fn (output : *CBuffer, value : u64) bool {
+    if value >= 10 && !c_uint(output, value / 10) { return false }
+    c_push(output, (48 + value % 10) as u8)
+}
+
+c_function_name :: fn (output : *CBuffer, function : *Function) bool {
+    if !c_text(output, "m_") || !c_uint(output, function.owner.id) || !c_push(output, 95) { return false }
+    c_name(output, function.source, function.name_start, function.name_end, "")
+}
+
 c_type :: fn (output : *CBuffer, tag : u64) bool {
     if tag == 1 { return c_text(output, "int64_t") }
     if tag == 2 { return c_text(output, "_Bool") }
@@ -5216,10 +5313,11 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
         return c_push(output, 41)
     }
     if value.kind == 263 {
+        if value.callee == (mimi_buffer_empty() as *Function) { return false }
         if value.is_external {
-            if !c_span(output, source, value.payload_start, value.payload_end) { return false }
+            if !c_span(output, value.callee.source, value.callee.name_start, value.callee.name_end) { return false }
         } else {
-            if !c_name(output, source, value.payload_start, value.payload_end, "m_") { return false }
+            if !c_function_name(output, value.callee) { return false }
         }
         if !c_push(output, 40) { return false }
         if !c_arguments(output, source, value.right) { return false }
@@ -5330,19 +5428,19 @@ pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
     if module_is_null(module) || !c_text(output, "#include <stdint.h>\n#include <stdbool.h>\n\n") { return false }
     prototype := module.functions
     while prototype != (mimi_buffer_empty() as *Function) {
-        is_main := name_is(source, prototype.name_start, prototype.name_end, "main")
+        is_main := prototype.owner.id == 0 && name_is(prototype.source, prototype.name_start, prototype.name_end, "main")
         if is_main {
             if prototype.return_tag != 1 || prototype.parameters != (mimi_buffer_empty() as *Parameter) { return false }
             if !c_text(output, "int main(void);\n") { return false }
         } else {
             if !c_text(output, if prototype.is_external { "extern " } else { "static " }) || !c_type(output, prototype.return_tag) || !c_push(output, 32) { return false }
             if prototype.is_external {
-                if !c_span(output, source, prototype.name_start, prototype.name_end) { return false }
+                if !c_span(output, prototype.source, prototype.name_start, prototype.name_end) { return false }
             } else {
-                if !c_name(output, source, prototype.name_start, prototype.name_end, "m_") { return false }
+                if !c_function_name(output, prototype) { return false }
             }
             if !c_push(output, 40) { return false }
-            if !c_parameters(output, source, prototype.parameters) || !c_text(output, ");\n") { return false }
+            if !c_parameters(output, prototype.source, prototype.parameters) || !c_text(output, ");\n") { return false }
         }
         prototype = prototype.next
     }
@@ -5354,17 +5452,17 @@ pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
             function = function.next
             continue
         }
-        is_main := name_is(source, function.name_start, function.name_end, "main")
+        is_main := function.owner.id == 0 && name_is(function.source, function.name_start, function.name_end, "main")
         if is_main {
             if has_main || function.return_tag != 1 { return false }
             has_main = true
             if !c_text(output, "int main(void) {\n") { return false }
         } else {
             if !c_text(output, "static ") || !c_type(output, function.return_tag) || !c_push(output, 32) { return false }
-            if !c_name(output, source, function.name_start, function.name_end, "m_") || !c_push(output, 40) { return false }
-            if !c_parameters(output, source, function.parameters) || !c_text(output, ") {\n") { return false }
+            if !c_function_name(output, function) || !c_push(output, 40) { return false }
+            if !c_parameters(output, function.source, function.parameters) || !c_text(output, ") {\n") { return false }
         }
-        if !c_block(output, source, function.body, function.return_tag, 1, true) { return false }
+        if !c_block(output, function.source, function.body, function.return_tag, 1, true) { return false }
         if !c_text(output, "}\n\n") { return false }
         function = function.next
     }

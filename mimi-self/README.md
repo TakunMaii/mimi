@@ -28,7 +28,8 @@ bindings, assignments, arithmetic, boolean expressions, numeric casts, returns,
 `if`/`else`, `while`, `loop`, `do-while`, integer range `for`, `break`, and `continue`. `main` still
 takes no parameters. It writes temporary C, invokes the host `cc`, and removes
 the C file. Direct scalar `extern` calls can link against host C symbols.
-Collection `for`, match, defer, aggregates, imports, pointer-based C ABI calls, and generics
+Imports of public scalar functions support transitive calls and module-local C names.
+Collection `for`, match, defer, aggregates, imported types, pointer-based C ABI calls, and generics
 remain unsupported in stage1.
 Whole-expression scalar `if`/`else` values are also supported; embedded `if`
 expressions remain outside the current stage1 subset.
