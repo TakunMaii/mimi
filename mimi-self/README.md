@@ -49,7 +49,8 @@ and type parsing, declarations for functions/structs/enums, tuple destructuring,
 casts, and source-aware statement ASTs. Function bodies recursively retain
 bindings, assignments, expressions, control flow, match, and defer blocks.
 An initial semantic pass resolves local names and checks scalar, tuple element,
-and return types. `source.analyze_text` returns a diagnostic for lexical,
+and return types. Inner blocks may shadow outer bindings. `source.analyze_text`
+passes the current `lexer.mi` and `compiler.mi` sources and returns a diagnostic for lexical,
 parse, name, or initial type errors, which `source.render` can display with
 source context. Full type checking and code generation are still open; stage0 is
 the Rust compiler. See

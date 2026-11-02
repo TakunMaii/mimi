@@ -4090,6 +4090,15 @@ name_in_scope :: fn (source : []u8, start : u64, end : u64, head : *NameSymbol) 
     false
 }
 
+name_in_current_block :: fn (source : []u8, start : u64, end : u64, head : *NameSymbol, incoming : *NameSymbol) bool {
+    symbol := head
+    while symbol != incoming {
+        if source_names_equal(source, start, end, symbol.start, symbol.end) { return true }
+        symbol = symbol.next
+    }
+    false
+}
+
 name_is_global :: fn (source : []u8, start : u64, end : u64, module : *ModuleNode) bool {
     declaration := module.declarations
     while declaration != (mimi_buffer_empty() as *ModuleDeclarationNode) {
@@ -4137,7 +4146,7 @@ name_resolve_block :: fn (source : []u8, module : *ModuleNode, block : *BlockNod
             if !name_resolve_expression(source, module, statement.binding.initializer, locals, issue) { return false }
             start := statement.binding.name_start
             end := statement.binding.name_end
-            if name_in_scope(source, start, end, locals) { issue.code = 2 issue.start = start issue.end = end return false }
+            if name_in_current_block(source, start, end, locals, incoming) { issue.code = 2 issue.start = start issue.end = end return false }
             locals = name_symbol_push(storage, locals, start, end)
             if locals == (mimi_buffer_empty() as *NameSymbol) { issue.code = 3 return false }
         } else {
@@ -4145,7 +4154,7 @@ name_resolve_block :: fn (source : []u8, module : *ModuleNode, block : *BlockNod
                 if !name_resolve_expression(source, module, statement.tuple_binding.value, locals, issue) { return false }
                 name := statement.tuple_binding.names
                 while name != (mimi_buffer_empty() as *DestructureNameNode) {
-                    if name_in_scope(source, name.start, name.end, locals) { issue.code = 2 issue.start = name.start issue.end = name.end return false }
+                    if name_in_current_block(source, name.start, name.end, locals, incoming) { issue.code = 2 issue.start = name.start issue.end = name.end return false }
                     locals = name_symbol_push(storage, locals, name.start, name.end)
                     if locals == (mimi_buffer_empty() as *NameSymbol) { issue.code = 3 return false }
                     name = name.next

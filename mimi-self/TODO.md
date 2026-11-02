@@ -98,6 +98,8 @@ two consecutive stages.
 - [x] Validate tuple destructuring initializer arity when it is a tuple literal.
 - [x] Resolve module, parameter, and local names across nested statement blocks;
   report undefined and duplicate local names with source spans.
+- [x] Match block-local shadowing rules and analyze the self-hosted lexer and
+  compiler sources without front-end diagnostics.
 - [x] Validate destructuring tuple element types during semantic analysis.
 - [x] Check explicit and trailing expression return types for scalar functions.
 - [x] Expose a front-end entry point that reports lexical, parse, name, and

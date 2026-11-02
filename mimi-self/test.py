@@ -264,6 +264,7 @@ def test_source_model(compiler: Path) -> None:
         module_path = mimi_quote(SELF / "src" / "source.mi")
         source_path.write_text(
             f'''source :: @import({module_path})
+extern mimi_slice_from_raw : fn(data : *u8, length : u64, output : *[]u8) void
 main :: fn () i32 {{
     loaded := source.init()
     if !source.load({mimi_quote(input_path)}, &loaded) {{ return 1 }}
@@ -285,6 +286,22 @@ main :: fn () i32 {{
     if lexical_issue.code.len != 5 || lexical_issue.span.start != 22 {{ return 14 }}
     valid := source.analyze_text("main :: fn () i32 {{ 0 }}")
     if valid.code.len != 0 {{ return 15 }}
+    shadowed := source.analyze_text("main :: fn (value : i32) i32 {{ value := 1 if true {{ value := 2 return value }} return value }}")
+    if shadowed.code.len != 0 {{ return 16 }}
+    duplicate := source.analyze_text("main :: fn () i32 {{ value := 1 value := 2 return value }}")
+    if duplicate.code.len == 0 {{ return 17 }}
+    self_file := source.init()
+    if !source.load({mimi_quote(SELF / "src" / "lexer.mi")}, &self_file) {{ return 18 }}
+    self_text : []u8 = ""
+    mimi_slice_from_raw(self_file.contents.data, self_file.contents.len, &self_text)
+    self_issue := source.analyze_text(self_text)
+    source.release(&self_file)
+    if self_issue.code.len != 0 {{ return 19 }}
+    if !source.load({mimi_quote(SELF / "src" / "compiler.mi")}, &self_file) {{ return 20 }}
+    mimi_slice_from_raw(self_file.contents.data, self_file.contents.len, &self_text)
+    self_issue = source.analyze_text(self_text)
+    source.release(&self_file)
+    if self_issue.code.len != 0 {{ return 21 }}
     graph := source.module_graph_init()
     if !source.module_begin(&graph, "root.mi") {{ return 6 }}
     if source.module_begin(&graph, "root.mi") {{ return 7 }}
