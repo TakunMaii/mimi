@@ -80,5 +80,16 @@ main :: fn () i32 {
     if !check_issue("main :: fn (argc : i64, argv : **u8) i32 { argc as i32 }", 6) { return 43 }
     if !check_issue("main :: fn (argc : i32, argv : **u8) i32 { argv[1][0] as i32 }", 0) { return 44 }
     if !check_issue("extern mimi_slice_from_raw : fn(data : *u8, length : u64, output : *[]u8) void main :: fn () i32 { text := \"xy\" copied : []u8 = \"\" mimi_slice_from_raw(text.ptr, text.len, &copied) copied[1] as i32 }", 0) { return 45 }
+    struct_storage := ir.init()
+    struct_source := "Point :: struct { x : i32 } read :: fn (point : *Point) i32 { point.x } main :: fn () i32 { point := Point { x = 42 } read(&point) }"
+    struct_lowered := ir.lower_text(struct_source, &struct_storage)
+    if struct_lowered.issue.code != 0 || struct_lowered.module.type_count != 1 { return 46 }
+    if struct_lowered.module.types.syntax.field_count != 1 || struct_lowered.module.functions.owner.types != struct_lowered.module.types { return 47 }
+    if struct_lowered.module.functions.parameters.type_tag != 1000000 { return 48 }
+    if struct_lowered.module.functions.next.body.value.type_tag != 1000 { return 49 }
+    struct_output := ir.c_buffer_init()
+    if !ir.emit_c(struct_source, struct_lowered.module, &struct_output) { return 50 }
+    ir.c_buffer_release(&struct_output)
+    ir.release(&struct_storage)
     0
 }

@@ -4310,7 +4310,7 @@ type_compatible :: fn (left : u64, right : u64) bool {
 }
 
 type_assignable :: fn (expected : u64, actual : u64) bool {
-    expected == 0 || actual == 0 || expected == actual || (expected == 3 && actual == 1) || ((expected == 7 || expected == 9 || expected == 10 || expected == 11) && actual == 12)
+    expected == 0 || actual == 0 || expected == actual || (expected == 3 && actual == 1) || ((expected == 7 || expected == 9 || expected == 10 || expected == 11 || expected >= 1000000) && actual == 12)
 }
 
 type_fail :: fn (issue : *NameIssue, code : u64, expression : *ExprNode) u64 {
@@ -4537,14 +4537,20 @@ pub check_module_tuple_types :: fn (source : []u8, module : *ModuleNode, storage
 pub Storage :: struct {
     head : *void,
     last : *void,
+    syntax_storage : ExpressionArena,
 }
 
 pub init :: fn () Storage {
     empty := mimi_arena_empty()
-    Storage { head = empty, last = empty }
+    Storage { head = empty, last = empty, syntax_storage = expression_arena_init() }
 }
 
-pub release :: fn (storage : *Storage) void { mimi_arena_release(storage as *ExpressionArena) }
+pub release :: fn (storage : *Storage) void {
+    mimi_arena_release(storage as *ExpressionArena)
+    syntax := storage.syntax_storage
+    expression_arena_release(&syntax)
+    storage.syntax_storage = syntax
+}
 
 allocate :: fn (storage : *Storage, size : u64) bool {
     mimi_arena_allocate(storage as *ExpressionArena, size, 8) != 0
@@ -4577,6 +4583,7 @@ pub Statement :: struct {
     else_body : *Statement,
     loop_kind : u64,
     range_end : *Expr,
+    target : *Expr,
 }
 
 pub Parameter :: struct {
@@ -4607,6 +4614,17 @@ pub ModuleInput :: struct {
     parsed : *ModuleNode,
     imports : *ImportInput,
     next : *ModuleInput,
+    types : *StructType,
+}
+
+pub StructType :: struct {
+    id : u64,
+    owner : *ModuleInput,
+    name_start : u64,
+    name_end : u64,
+    syntax : *StructNode,
+    next : *StructType,
+    is_public : bool,
 }
 
 pub ImportInput :: struct {
@@ -4618,6 +4636,8 @@ pub ImportInput :: struct {
 pub Module :: struct {
     functions : *Function,
     function_count : u64,
+    types : *StructType,
+    type_count : u64,
 }
 
 pub LowerIssue :: struct {
@@ -4682,10 +4702,45 @@ name_is :: fn (source : []u8, start : u64, end : u64, expected : []u8) bool {
     true
 }
 
-type_tag :: fn (source : []u8, node : *ExprNode) u64 {
+struct_by_name :: fn (source : []u8, start : u64, end : u64, owner : *ModuleInput) *StructType {
+    current := owner.types
+    while current != (mimi_buffer_empty() as *StructType) {
+        if current.owner == owner && names_match(source, start, end, current.owner.source, current.name_start, current.name_end) { return current }
+        current = current.next
+    }
+    mimi_buffer_empty() as *StructType
+}
+
+struct_by_id :: fn (owner : *ModuleInput, id : u64) *StructType {
+    current := owner.types
+    while current != (mimi_buffer_empty() as *StructType) {
+        if current.id == id { return current }
+        current = current.next
+    }
+    mimi_buffer_empty() as *StructType
+}
+
+struct_for_tag :: fn (owner : *ModuleInput, tag : u64) *StructType {
+    if tag >= 1000000 { return struct_by_id(owner, tag - 1000000) }
+    if tag >= 1000 { return struct_by_id(owner, tag - 1000) }
+    mimi_buffer_empty() as *StructType
+}
+
+struct_field :: fn (source : []u8, start : u64, end : u64, definition : *StructType) *StructFieldNode {
+    field := definition.syntax.fields
+    while field != (mimi_buffer_empty() as *StructFieldNode) {
+        if names_match(source, start, end, definition.owner.source, field.name_start, field.name_end) { return field }
+        field = field.next
+    }
+    mimi_buffer_empty() as *StructFieldNode
+}
+
+type_tag :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode) u64 {
     if expression_is_null(node) { return 0 }
     if node.kind == 271 {
         inner := node.left
+        inner_tag := type_tag(source, owner, inner)
+        if inner_tag >= 1000 && inner_tag < 1000000 { return 1000000 + inner_tag - 1000 }
         if !expression_is_null(inner) {
             if inner.kind == 270 && name_is(source, inner.start, inner.end, "u8") { return 7 }
             if inner.kind == 271 && !expression_is_null(inner.left) && inner.left.kind == 270 && name_is(source, inner.left.start, inner.left.end, "u8") { return 9 }
@@ -4694,6 +4749,13 @@ type_tag :: fn (source : []u8, node : *ExprNode) u64 {
         return 10
     }
     if node.kind == 272 && !expression_is_null(node.left) && node.left.kind == 270 && name_is(source, node.left.start, node.left.end, "u8") { return 8 }
+    if node.kind == 260 && !expression_is_null(node.left) && !expression_is_null(node.right) && node.left.kind == 270 && node.right.kind == 270 {
+        target := find_import(source, node.left.start, node.left.end, owner)
+        if target != (mimi_buffer_empty() as *ModuleInput) {
+            found := struct_by_name(source, node.right.start, node.right.end, target)
+            if found != (mimi_buffer_empty() as *StructType) && found.is_public { return 1000 + found.id }
+        }
+    }
     if node.kind != 270 { return 0 }
     token := next_token(source, node.start)
     if token.0 != 1 { return 0 }
@@ -4701,7 +4763,31 @@ type_tag :: fn (source : []u8, node : *ExprNode) u64 {
     if name_is(source, token.1, token.2, "void") { return 6 }
     if name_is(source, token.1, token.2, "f32") || name_is(source, token.1, token.2, "f64") { return 3 }
     if name_is(source, token.1, token.2, "i8") || name_is(source, token.1, token.2, "i16") || name_is(source, token.1, token.2, "i32") || name_is(source, token.1, token.2, "i64") || name_is(source, token.1, token.2, "u8") || name_is(source, token.1, token.2, "u16") || name_is(source, token.1, token.2, "u32") || name_is(source, token.1, token.2, "u64") { return 1 }
+    found := struct_by_name(source, token.1, token.2, owner)
+    if found != (mimi_buffer_empty() as *StructType) { return 1000 + found.id }
     0
+}
+
+lower_struct_fields :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, definition : *StructType, locals : *Symbol, functions : *Function, storage : *Storage, issue : *LowerIssue) *Expr {
+    empty : *Expr = mimi_buffer_empty() as *Expr
+    if expression_is_null(node) { return empty }
+    if node.kind == 262 {
+        left := lower_struct_fields(source, owner, node.left, definition, locals, functions, storage, issue)
+        right := lower_struct_fields(source, owner, node.right, definition, locals, functions, storage, issue)
+        if expr_is_null(left) || expr_is_null(right) { return empty }
+        return allocate_ir_expr(storage, node, 0, left, right)
+    }
+    if node.kind != 292 || expression_is_null(node.left) || node.left.kind != 1 { fail(issue, 1, node.start, node.end) return empty }
+    field := struct_field(source, node.left.start, node.left.end, definition)
+    if field == (mimi_buffer_empty() as *StructFieldNode) { fail(issue, 2, node.left.start, node.left.end) return empty }
+    field_tag := type_tag(definition.owner.source, definition.owner, field.data_type)
+    value := lower_expr(source, owner, node.right, locals, functions, storage, issue)
+    if expr_is_null(value) || field_tag == 0 || !type_assignable(field_tag, value.type_tag) { fail(issue, 3, node.start, node.end) return empty }
+    result := allocate_ir_expr(storage, node, field_tag, empty, value)
+    if expr_is_null(result) { fail(issue, 4, node.start, node.end) return empty }
+    result.payload_start = node.left.start
+    result.payload_end = node.left.end
+    result
 }
 
 symbol_find :: fn (source : []u8, start : u64, end : u64, head : *Symbol) *Symbol {
@@ -4749,7 +4835,7 @@ allocate_ir_expr :: fn (storage : *Storage, source_node : *ExprNode, tag : u64, 
 
 numeric :: fn (tag : u64) bool { tag == 1 || tag == 3 }
 
-pointer_tag :: fn (tag : u64) bool { tag >= 7 && tag <= 12 && tag != 8 }
+pointer_tag :: fn (tag : u64) bool { (tag >= 7 && tag <= 12 && tag != 8) || tag >= 1000000 }
 
 names_match :: fn (source : []u8, start : u64, end : u64, other : []u8, other_start : u64, other_end : u64) bool {
     if end < start || other_end < other_start || end - start != other_end - other_start { return false }
@@ -4853,6 +4939,21 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
         return result
     }
     if node.kind == 289 { return lower_expr(source, owner, node.left, locals, functions, storage, issue) }
+    if node.kind == 291 {
+        tag := type_tag(source, owner, node.left)
+        if tag < 1000 || tag >= 1000000 { fail(issue, 1, node.start, node.end) return empty }
+        definition := struct_for_tag(owner, tag)
+        if definition == (mimi_buffer_empty() as *StructType) { fail(issue, 2, node.start, node.end) return empty }
+        count : u64 = 0
+        fields := node.right
+        while !expression_is_null(fields) {
+            if fields.kind == 262 { count = count + 1 fields = fields.left } else { count = count + 1 break }
+        }
+        if count != definition.syntax.field_count { fail(issue, 3, node.start, node.end) return empty }
+        values := lower_struct_fields(source, owner, node.right, definition, locals, functions, storage, issue)
+        if !expression_is_null(node.right) && expr_is_null(values) { return empty }
+        return allocate_ir_expr(storage, node, tag, empty, values)
+    }
     if node.kind == 263 {
         if expression_is_null(node.left) { fail(issue, 1, node.start, node.end) return empty }
         callee_owner := owner
@@ -4893,6 +4994,18 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
     if node.kind == 260 {
         receiver := lower_expr(source, owner, node.left, locals, functions, storage, issue)
         if expr_is_null(receiver) { return empty }
+        definition := struct_for_tag(owner, receiver.type_tag)
+        if definition != (mimi_buffer_empty() as *StructType) && !expression_is_null(node.right) && node.right.kind == 1 {
+            field := struct_field(source, node.right.start, node.right.end, definition)
+            if field == (mimi_buffer_empty() as *StructFieldNode) { fail(issue, 2, node.right.start, node.right.end) return empty }
+            tag := type_tag(definition.owner.source, definition.owner, field.data_type)
+            if tag == 0 { fail(issue, 3, node.right.start, node.right.end) return empty }
+            result := allocate_ir_expr(storage, node, tag, receiver, empty)
+            if expr_is_null(result) { fail(issue, 4, node.start, node.end) return empty }
+            result.payload_start = node.right.start
+            result.payload_end = node.right.end
+            return result
+        }
         if receiver.type_tag != 8 || expression_is_null(node.right) || node.right.kind != 1 { fail(issue, 1, node.start, node.end) return empty }
         tag : u64 = 0
         if name_is(source, node.right.start, node.right.end, "ptr") { tag = 7 }
@@ -4913,6 +5026,7 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
         value := lower_expr(source, owner, node.left, locals, functions, storage, issue)
         if expr_is_null(value) { return empty }
         tag : u64 = if value.type_tag == 8 { 11 } else { 10 }
+        if value.type_tag >= 1000 && value.type_tag < 1000000 { tag = 1000000 + value.type_tag - 1000 }
         return allocate_ir_expr(storage, node, tag, value, empty)
     }
     if node.kind == 297 {
@@ -4922,6 +5036,7 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
         if value.type_tag == 7 { tag = 1 }
         if value.type_tag == 9 { tag = 7 }
         if value.type_tag == 11 { tag = 8 }
+        if value.type_tag >= 1000000 { tag = 1000 + value.type_tag - 1000000 }
         if tag == 0 { fail(issue, 3, node.start, node.end) return empty }
         return allocate_ir_expr(storage, node, tag, value, empty)
     }
@@ -4937,7 +5052,7 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
     if node.kind == 4 || node.kind == 5 { return allocate_ir_expr(storage, node, 2, empty, empty) }
     if node.kind == 293 {
         value := lower_expr(source, owner, node.left, locals, functions, storage, issue)
-        tag := type_tag(source, node.right)
+        tag := type_tag(source, owner, node.right)
         if expr_is_null(value) || tag == 0 { fail(issue, 1, node.start, node.end) return empty }
         if !(numeric(value.type_tag) && numeric(tag)) && !(pointer_tag(tag) && pointer_tag(value.type_tag)) {
             fail(issue, 3, node.start, node.end)
@@ -4979,7 +5094,7 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
 }
 
 allocate_statement :: fn (storage : *Storage, node : *StatementNode, value : *Expr) *Statement {
-    if !allocate(storage, 96) { return mimi_buffer_empty() as *Statement }
+    if !allocate(storage, 104) { return mimi_buffer_empty() as *Statement }
     item := storage.last as *Statement
     item.kind = node.kind
     item.type_tag = 0
@@ -4993,6 +5108,7 @@ allocate_statement :: fn (storage : *Storage, node : *StatementNode, value : *Ex
     item.else_body = mimi_buffer_empty() as *Statement
     item.loop_kind = 0
     item.range_end = mimi_buffer_empty() as *Expr
+    item.target = mimi_buffer_empty() as *Expr
     item
 }
 
@@ -5001,7 +5117,7 @@ lower_if_node :: fn (source : []u8, owner : *ModuleInput, node : *IfNode, locals
     condition := lower_expr(source, owner, node.condition, locals, functions, storage, issue)
     if expr_is_null(condition) { return empty }
     if condition.type_tag != 2 { fail(issue, 3, node.condition.start, node.condition.end) return empty }
-    if !allocate(storage, 96) { fail(issue, 4, node.start, node.end) return empty }
+    if !allocate(storage, 104) { fail(issue, 4, node.start, node.end) return empty }
     item := storage.last as *Statement
     item.kind = 304
     item.type_tag = 0
@@ -5015,6 +5131,7 @@ lower_if_node :: fn (source : []u8, owner : *ModuleInput, node : *IfNode, locals
     item.else_body = empty
     item.loop_kind = 0
     item.range_end = mimi_buffer_empty() as *Expr
+    item.target = mimi_buffer_empty() as *Expr
     if issue.code != 0 { return empty }
     if !block_node_is_null(node.else_branch) {
         item.else_body = lower_body(source, owner, node.else_branch, locals, functions, storage, expected_return, false, in_loop, issue)
@@ -5078,17 +5195,22 @@ lower_body :: fn (source : []u8, owner : *ModuleInput, body : *BlockNode, incomi
                 } else {
                     if node.kind == 284 {
                         target := node.value.left
-                        if expression_is_null(target) || target.kind != 1 { fail(issue, 5, node.start, node.end) return empty }
-                        target_symbol := symbol_find(source, target.payload_start, target.payload_end, locals)
-                        target_tag : u64 = if target_symbol == (mimi_buffer_empty() as *Symbol) { 0 } else { target_symbol.type_tag }
+                        if expression_is_null(target) { fail(issue, 5, node.start, node.end) return empty }
+                        root := target
+                        while root.kind == 260 || root.kind == 261 { root = root.left }
+                        if root.kind != 1 { fail(issue, 5, target.start, target.end) return empty }
+                        target_symbol := symbol_find(source, root.payload_start, root.payload_end, locals)
+                        lowered_target := lower_expr(source, owner, target, locals, functions, storage, issue)
+                        target_tag : u64 = if expr_is_null(lowered_target) { 0 } else { lowered_target.type_tag }
                         value := lower_expr(source, owner, node.value.right, locals, functions, storage, issue)
-                        if target_tag == 0 { fail(issue, 2, target.start, target.end) return empty }
+                        if target_symbol == (mimi_buffer_empty() as *Symbol) || target_tag == 0 { fail(issue, 2, target.start, target.end) return empty }
                         if !target_symbol.mutable { fail(issue, 7, target.start, target.end) return empty }
                         if expr_is_null(value) || !type_assignable(target_tag, value.type_tag) { fail(issue, 3, node.start, node.end) return empty }
                         item = allocate_statement(storage, node, value)
                         if !statement_is_null(item) {
-                            item.name_start = target.payload_start
-                            item.name_end = target.payload_end
+                            item.target = lowered_target
+                            item.name_start = root.payload_start
+                            item.name_end = root.payload_end
                             item.type_tag = target_tag
                         }
                     } else {
@@ -5114,7 +5236,7 @@ lower_body :: fn (source : []u8, owner : *ModuleInput, body : *BlockNode, incomi
                             item.name_start = node.binding.name_start
                             item.name_end = node.binding.name_end
                             tag := value.type_tag
-                            annotated := type_tag(source, node.binding.data_type)
+                            annotated := type_tag(source, owner, node.binding.data_type)
                             if annotated != 0 {
                                 if !type_assignable(annotated, tag) { fail(issue, 3, node.start, node.end) return empty }
                                 tag = annotated
@@ -5146,12 +5268,48 @@ pub lower_inputs :: fn (first : *ModuleInput, storage : *Storage) LowerResult {
     issue := LowerIssue { code = 0, start = 0, end = 0, owner = first }
     empty : *Module = mimi_buffer_empty() as *Module
     if first == (mimi_buffer_empty() as *ModuleInput) { fail(&issue, 6, 0, 0) return LowerResult { module = empty, issue = issue } }
-    if !allocate(storage, 16) { fail(&issue, 4, 0, 0) return LowerResult { module = empty, issue = issue } }
+    if !allocate(storage, 32) { fail(&issue, 4, 0, 0) return LowerResult { module = empty, issue = issue } }
     result := storage.last as *Module
     result.functions = mimi_buffer_empty() as *Function
     result.function_count = 0
-    last : *Function = mimi_buffer_empty() as *Function
+    result.types = mimi_buffer_empty() as *StructType
+    result.type_count = 0
+    last_type : *StructType = mimi_buffer_empty() as *StructType
     owner := first
+    while owner != (mimi_buffer_empty() as *ModuleInput) {
+        issue.owner = owner
+        if module_node_is_null(owner.parsed) { fail(&issue, 6, 0, 0) return LowerResult { module = empty, issue = issue } }
+        owner.types = mimi_buffer_empty() as *StructType
+        declaration := owner.parsed.declarations
+        while declaration != (mimi_buffer_empty() as *ModuleDeclarationNode) {
+            if declaration.kind == 2 {
+                if declaration.struct_node == (mimi_buffer_empty() as *StructNode) || !allocate(storage, 56) {
+                    fail(&issue, 4, declaration.start, declaration.end)
+                    return LowerResult { module = empty, issue = issue }
+                }
+                item := storage.last as *StructType
+                item.id = result.type_count
+                item.owner = owner
+                item.name_start = declaration.name_start
+                item.name_end = declaration.name_end
+                item.syntax = declaration.struct_node
+                item.next = mimi_buffer_empty() as *StructType
+                item.is_public = declaration.is_public
+                if result.type_count == 0 { result.types = item } else { last_type.next = item }
+                last_type = item
+                result.type_count = result.type_count + 1
+            }
+            declaration = declaration.next
+        }
+        owner = owner.next
+    }
+    owner = first
+    while owner != (mimi_buffer_empty() as *ModuleInput) {
+        owner.types = result.types
+        owner = owner.next
+    }
+    last : *Function = mimi_buffer_empty() as *Function
+    owner = first
     while owner != (mimi_buffer_empty() as *ModuleInput) {
     issue.owner = owner
     source := owner.source
@@ -5167,12 +5325,16 @@ pub lower_inputs :: fn (first : *ModuleInput, storage : *Storage) LowerResult {
             declaration = declaration.next
             continue
         }
+        if declaration.kind == 2 {
+            declaration = declaration.next
+            continue
+        }
         if (declaration.kind != 1 && declaration.kind != 7) || function_node_is_null(declaration.function) {
             fail(&issue, 6, declaration.start, declaration.end)
             return LowerResult { module = empty, issue = issue }
         }
         function := declaration.function
-        tag := type_tag(source, function.return_type)
+        tag := type_tag(source, owner, function.return_type)
         if tag == 0 { fail(&issue, 6, function.start, function.end) return LowerResult { module = empty, issue = issue } }
         if !allocate(storage, 96) { fail(&issue, 4, function.start, function.end) return LowerResult { module = empty, issue = issue } }
         item := storage.last as *Function
@@ -5190,7 +5352,7 @@ pub lower_inputs :: fn (first : *ModuleInput, storage : *Storage) LowerResult {
         last_parameter : *Parameter = mimi_buffer_empty() as *Parameter
         source_parameter := function.parameters
         while !parameter_list_is_null(source_parameter) {
-            parameter_tag := type_tag(source, source_parameter.data_type)
+            parameter_tag := type_tag(source, owner, source_parameter.data_type)
             if parameter_tag == 0 || parameter_tag == 6 { fail(&issue, 6, source_parameter.name_start, source_parameter.name_end) return LowerResult { module = empty, issue = issue } }
             if !allocate(storage, 32) { fail(&issue, 4, source_parameter.name_start, source_parameter.name_end) return LowerResult { module = empty, issue = issue } }
             parameter := storage.last as *Parameter
@@ -5236,11 +5398,11 @@ pub lower_inputs :: fn (first : *ModuleInput, storage : *Storage) LowerResult {
 }
 
 pub lower_text :: fn (source : []u8, storage : *Storage) LowerResult {
-    syntax := expression_arena_init()
+    syntax := storage.syntax_storage
     parsed := parse_module(source, &syntax)
-    if !allocate(storage, 64) {
+    storage.syntax_storage = syntax
+    if !allocate(storage, 72) {
         lexer_issue := LowerIssue { code = 4, start = 0, end = 0, owner = mimi_buffer_empty() as *ModuleInput }
-        expression_arena_release(&syntax)
         return LowerResult { module = mimi_buffer_empty() as *Module, issue = lexer_issue }
     }
     owner := storage.last as *ModuleInput
@@ -5250,8 +5412,8 @@ pub lower_text :: fn (source : []u8, storage : *Storage) LowerResult {
     owner.parsed = parsed
     owner.imports = mimi_buffer_empty() as *ImportInput
     owner.next = mimi_buffer_empty() as *ModuleInput
+    owner.types = mimi_buffer_empty() as *StructType
     result := lower_inputs(owner, storage)
-    expression_arena_release(&syntax)
     result
 }
 
@@ -5332,6 +5494,8 @@ c_function_name :: fn (output : *CBuffer, function : *Function) bool {
 }
 
 c_type :: fn (output : *CBuffer, tag : u64) bool {
+    if tag >= 1000000 { return c_text(output, "m_s") && c_uint(output, tag - 1000000) && c_push(output, 42) }
+    if tag >= 1000 { return c_text(output, "m_s") && c_uint(output, tag - 1000) }
     if tag == 1 { return c_text(output, "int64_t") }
     if tag == 2 { return c_text(output, "_Bool") }
     if tag == 3 { return c_text(output, "double") }
@@ -5414,8 +5578,14 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
         if !c_uint(output, decoded_string_len(source, value.payload_start, value.payload_end)) { return false }
         return c_text(output, "})")
     }
+    if value.kind == 291 {
+        if !c_text(output, "((") || !c_type(output, value.type_tag) || !c_text(output, "){") { return false }
+        if !expr_is_null(value.right) && !c_struct_fields(output, source, value.right) { return false }
+        return c_text(output, "})")
+    }
     if value.kind == 260 {
-        if !c_push(output, 40) || !c_expr(output, source, value.left) || !c_text(output, ").") { return false }
+        if !c_push(output, 40) || !c_expr(output, source, value.left) || !c_text(output, if value.left.type_tag >= 1000000 { ")->" } else { ")." }) { return false }
+        if value.left.type_tag >= 1000 { return c_name(output, source, value.payload_start, value.payload_end, "f_") }
         if value.type_tag == 7 { return c_text(output, "ptr") }
         if value.type_tag == 1 { return c_text(output, "len") }
         return false
@@ -5434,6 +5604,10 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
         return c_push(output, 41)
     }
     if value.kind == 297 {
+        if value.left.type_tag >= 1000000 {
+            if !c_text(output, "(*((") || !c_type(output, value.left.type_tag) || !c_push(output, 41) || !c_expr(output, source, value.left) { return false }
+            return c_push(output, 41)
+        }
         prefix : []u8 = "(*((uint8_t*)"
         if value.left.type_tag == 9 { prefix = "(*((void**)" }
         if value.left.type_tag == 11 { prefix = "(*((m_slice*)" }
@@ -5458,6 +5632,14 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
         return false
     }
     c_push(output, 41)
+}
+
+c_struct_fields :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
+    if value.kind == 262 {
+        return c_struct_fields(output, source, value.left) && c_text(output, ", ") && c_struct_fields(output, source, value.right)
+    }
+    if value.kind != 292 || !c_push(output, 46) || !c_name(output, source, value.payload_start, value.payload_end, "f_") || !c_text(output, " = ") { return false }
+    c_expr(output, source, value.right)
 }
 
 c_indent :: fn (output : *CBuffer, depth : u64) bool {
@@ -5487,7 +5669,7 @@ c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_t
         return c_text(output, ";\n")
     }
     if item.kind == 284 {
-        if !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, " = ") { return false }
+        if !c_expr(output, source, item.target) || !c_text(output, " = ") { return false }
         if !c_expr(output, source, item.value) { return false }
         return c_text(output, ";\n")
     }
@@ -5542,6 +5724,24 @@ c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_t
 
 pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
     if module_is_null(module) || !c_text(output, "#include <stdint.h>\n#include <stdbool.h>\ntypedef struct { uint8_t *ptr; uint64_t len; } m_slice;\n\n") { return false }
+    definition := module.types
+    while definition != (mimi_buffer_empty() as *StructType) {
+        if !c_text(output, "typedef struct m_s") || !c_uint(output, definition.id) || !c_text(output, " m_s") || !c_uint(output, definition.id) || !c_text(output, ";\n") { return false }
+        definition = definition.next
+    }
+    definition = module.types
+    while definition != (mimi_buffer_empty() as *StructType) {
+        if !c_text(output, "struct m_s") || !c_uint(output, definition.id) || !c_text(output, " {\n") { return false }
+        field := definition.syntax.fields
+        while field != (mimi_buffer_empty() as *StructFieldNode) {
+            tag := type_tag(definition.owner.source, definition.owner, field.data_type)
+            if tag == 0 || !c_text(output, "  ") || !c_type(output, tag) || !c_push(output, 32) || !c_name(output, definition.owner.source, field.name_start, field.name_end, "f_") || !c_text(output, ";\n") { return false }
+            field = field.next
+        }
+        if !c_text(output, "};\n") { return false }
+        definition = definition.next
+    }
+    if !c_push(output, 10) { return false }
     prototype := module.functions
     while prototype != (mimi_buffer_empty() as *Function) {
         is_main := prototype.owner.id == 0 && name_is(prototype.source, prototype.name_start, prototype.name_end, "main")

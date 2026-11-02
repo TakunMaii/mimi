@@ -229,7 +229,7 @@ pub lower_loaded_graph :: fn (graph : *ModuleGraph, storage : *lexer.Storage) le
             graph.ast_storage = ast_storage
         }
         file_storage := graph.storage
-        if !arena_api.allocate(&file_storage, 64, 8) { graph.storage = file_storage return lower_failure(4) }
+        if !arena_api.allocate(&file_storage, 72, 8) { graph.storage = file_storage return lower_failure(4) }
         owner := arena_api.last_byte(&file_storage) as *lexer.ModuleInput
         graph.storage = file_storage
         owner.id = index
@@ -238,6 +238,7 @@ pub lower_loaded_graph :: fn (graph : *ModuleGraph, storage : *lexer.Storage) le
         owner.parsed = file.module
         owner.imports = mimi_buffer_empty() as *lexer.ImportInput
         owner.next = mimi_buffer_empty() as *lexer.ModuleInput
+        owner.types = mimi_buffer_empty() as *lexer.StructType
         if first == (mimi_buffer_empty() as *lexer.ModuleInput) { first = owner } else { last.next = owner }
         last = owner
         index = index + 1

@@ -218,8 +218,8 @@ bodies.
 
 The first stage1 executable compiles scalar functions, direct calls, assignments,
 imports of scalar functions, and basic control flow through a typed IR and C backend, then invokes `cc`.
-`main` still takes no parameters. The subset excludes collection `for`, match, defer,
-aggregates, imported aggregate types, pointer-based C ABI calls, and generic specialization; stage2 cannot yet
+`main` accepts either no parameters or `(argc: i32, argv: **u8)`. The subset excludes collection `for`, match, defer,
+tuples, enums, generic specialization, and several aggregate and C ABI cases; stage2 cannot yet
 compile `compiler.mi`. Stage1 currently collapses integer widths and signedness,
 so exact range-bound type parity remains open. Scalar `if` expressions are
 supported when they form a complete expression; embedded forms remain open.
@@ -227,6 +227,8 @@ Next, extend typing and IR lowering across those features.
 The stage1 front end now parses `compiler.mi` itself. The import graph retains
 source and alias edges and can parse imported modules on demand for public
 function and type lookup. Scalar imported calls now lower to module-owned IR.
-The first stage2 blocker is currently the `ByteBuffer` struct declaration in
-`bytes.mi`, which the scalar and byte-slice C backend cannot lower. Pointer
-pointee types and integer widths are not yet represented precisely in IR.
+The C backend now lowers plain struct signatures, literals, field reads and
+writes, struct pointers, and public imported struct types. The first stage2
+blocker is currently the tuple return type of `next_token_raw` in `lexer.mi`.
+Most pointer pointee types and integer widths are not yet represented precisely
+in IR, and struct defaults and generic specialization remain open.

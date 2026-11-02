@@ -410,6 +410,9 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
             ("byte-slice", "main :: fn () i32 { text : []u8 = \"hello\\n\" if text.len == 6 { return 42 } 0 }", 42),
             ("slice-extern", "extern mimi_stderr_write : fn(data : *u8, length : u64) void main :: fn () i32 { text : []u8 = \"hello\\n\" mimi_stderr_write(text.ptr, text.len) 42 }", 42),
             ("slice-index", "extern mimi_slice_from_raw : fn(data : *u8, length : u64, output : *[]u8) void main :: fn () i32 { text := \"xy\" copied : []u8 = \"\" mimi_slice_from_raw(text.ptr, text.len, &copied) if copied[1] == 121 { return 42 } 0 }", 42),
+            ("struct-literal", "Point :: struct { x : i32, y : i32 } main :: fn () i32 { point := Point { x = 20, y = 22 } point.x + point.y }", 42),
+            ("struct-pointer", "Point :: struct { x : i32 } read :: fn (point : *Point) i32 { point.x } main :: fn () i32 { point := Point { x = 42 } read(&point) }", 42),
+            ("struct-assign", "Point :: struct { x : i32 } main :: fn () i32 { point := Point { x = 20 } point.x = 42 point.x }", 42),
         ]
         for name, text, expected_exit in cases:
             program = directory / f"{name} program.mi"
@@ -440,9 +443,12 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
         left.write_text("pub value :: fn () i32 { 20 }\nhidden :: fn () i32 { 0 }\n", encoding="utf-8")
         right.write_text("pub value :: fn () i32 { 22 }\n", encoding="utf-8")
         middle.write_text('left :: @import("left.mi")\npub result :: fn () i32 { left.value() + 22 }\n', encoding="utf-8")
+        point_module = directory / "point.mi"
+        point_module.write_text("pub Point :: struct { x : i32 } pub make :: fn () Point { Point { x = 42 } }\n", encoding="utf-8")
         module_cases = [
             ("same-name", 'left :: @import("left.mi")\nright :: @import("right.mi")\nmain :: fn () i32 { left.value() + right.value() }'),
             ("transitive", 'middle :: @import("middle.mi")\nmain :: fn () i32 { middle.result() }'),
+            ("imported-struct", 'point :: @import("point.mi")\nmain :: fn () i32 { value : point.Point = point.make() value.x }'),
         ]
         for name, text in module_cases:
             program = directory / f"{name}.mi"
