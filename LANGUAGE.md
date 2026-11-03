@@ -51,6 +51,21 @@ tuples (`(T, U)`), and function types (`fn(T, U)R`). A one-element tuple type
 requires a trailing comma, for example `(i32,)`. Generic struct and enum
 declarations use `<T>` parameters and are instantiated as `Pair<i32>`.
 
+## Layout and size intrinsics
+
+`@sizeof(T)`, `@alignof(T)`, and `@offsetof(T, field.path)` are compile-time
+`u64` constants. They can be used wherever an expression or a constant is
+accepted, including `::` declarations and module-level initializers. Field
+paths in `@offsetof` may cross nested structs. Array lengths still require an
+integer literal.
+
+Structs and tuples use the C-compatible layout: fields are placed in
+declaration order at the next offset that satisfies their alignment, the
+aggregate aligns to its largest field, and its size is rounded up to that
+alignment. Scalars align to their size, capped at the target stack-slot size;
+pointers, function values, and slices occupy two words. Enums are a tag word
+followed by the largest payload.
+
 ## Expressions and precedence
 
 From lowest to highest precedence, binary operators are:

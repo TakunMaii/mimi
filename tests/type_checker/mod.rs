@@ -20,6 +20,28 @@ fn infers_numeric_literal_types_by_value() {
 }
 
 #[test]
+fn checks_size_intrinsics_and_field_paths() {
+    let valid = parse(tokenize(
+        "Point :: struct { x : i32, y : i32 } \
+         size :: @sizeof(Point) offset :: @offsetof(Point, y) \
+         doubled : u64 = @sizeof(Point) * 2 \
+         main :: fn () u64 { @sizeof([2]Point) + @alignof(Point) + size + offset + doubled }"
+            .chars(),
+    ));
+    check(&valid).unwrap();
+
+    let missing_type = parse(tokenize(
+        "main :: fn () u64 { @sizeof(Missing) }".chars(),
+    ));
+    assert!(check(&missing_type).is_err());
+
+    let missing_field = parse(tokenize(
+        "Point :: struct { x : i32 } main :: fn () u64 { @offsetof(Point, z) }".chars(),
+    ));
+    assert!(check(&missing_field).is_err());
+}
+
+#[test]
 fn requires_integer_operands_for_bitwise_operators() {
     let valid = parse(tokenize(
         "mask :: fn (value : f64) u64 { (value as u64) & 255 } \

@@ -163,6 +163,12 @@ pub(crate) enum Expression {
         type_name: String,
         member: String,
     },
+    SizeOf(DataType),
+    AlignOf(DataType),
+    OffsetOf {
+        data_type: DataType,
+        fields: Vec<String>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -762,18 +768,14 @@ fn parse_statement_after_name(name: String, tokens: &mut ParserTokens) -> ASTNod
                 if matches!(tokens.peek(), Some(Token::At)) {
                     let mut lookahead = tokens.clone();
                     lookahead.next();
-                    return match lookahead.next() {
-                        Some(Token::Identifier(kind)) if kind == "import" => {
-                            parse_import(name, tokens)
+                    if let Some(Token::Identifier(kind)) = lookahead.next() {
+                        match kind.as_str() {
+                            "import" => return parse_import(name, tokens),
+                            "cimport" => return parse_c_import(name, tokens),
+                            "cDefine" => return parse_c_define(name, tokens),
+                            _ => {}
                         }
-                        Some(Token::Identifier(kind)) if kind == "cimport" => {
-                            parse_c_import(name, tokens)
-                        }
-                        Some(Token::Identifier(kind)) if kind == "cDefine" => {
-                            parse_c_define(name, tokens)
-                        }
-                        _ => panic!("expected @import, @cimport, or @cDefine after '::'"),
-                    };
+                    }
                 }
                 (2, None)
             }
@@ -1515,22 +1517,58 @@ fn parse_expression_from_mode(
             if !matches!(tokens.next(), Some(Token::LeftParen)) {
                 panic!("expected '(' after intrinsic '@{name}'");
             }
-            let mut arguments = Vec::new();
-            if !matches!(tokens.peek(), Some(Token::RightParen)) {
-                loop {
-                    arguments.push(parse_expression(tokens, 0));
-                    match tokens.next() {
-                        Some(Token::Comma) => continue,
-                        Some(Token::RightParen) => break,
-                        _ => panic!("expected ',' or ')' after intrinsic argument"),
-                    }
+            if name == "sizeof" || name == "alignof" {
+                let data_type = parse_type(tokens);
+                assert!(
+                    matches!(tokens.next(), Some(Token::RightParen)),
+                    "expected ')' after '@{name}' type"
+                );
+                if name == "sizeof" {
+                    Expression::SizeOf(data_type)
+                } else {
+                    Expression::AlignOf(data_type)
                 }
+            } else if name == "offsetof" {
+                let data_type = parse_type(tokens);
+                assert!(
+                    matches!(tokens.next(), Some(Token::Comma)),
+                    "expected ',' between '@offsetof' type and field"
+                );
+                let mut fields = Vec::new();
+                loop {
+                    match tokens.next() {
+                        Some(Token::Identifier(field)) => fields.push(field),
+                        _ => panic!("expected field name in '@offsetof'"),
+                    }
+                    if matches!(tokens.peek(), Some(Token::Dot)) {
+                        tokens.next();
+                        continue;
+                    }
+                    break;
+                }
+                assert!(
+                    matches!(tokens.next(), Some(Token::RightParen)),
+                    "expected ')' after '@offsetof' field path"
+                );
+                Expression::OffsetOf { data_type, fields }
             } else {
-                tokens.next();
-            }
-            Expression::Call {
-                name: format!("@{name}"),
-                arguments,
+                let mut arguments = Vec::new();
+                if !matches!(tokens.peek(), Some(Token::RightParen)) {
+                    loop {
+                        arguments.push(parse_expression(tokens, 0));
+                        match tokens.next() {
+                            Some(Token::Comma) => continue,
+                            Some(Token::RightParen) => break,
+                            _ => panic!("expected ',' or ')' after intrinsic argument"),
+                        }
+                    }
+                } else {
+                    tokens.next();
+                }
+                Expression::Call {
+                    name: format!("@{name}"),
+                    arguments,
+                }
             }
         }
         Token::Identifier(name) => Expression::Identifier(name),

@@ -291,8 +291,22 @@ fn constant_scalar_value(
     expression: &Expression,
     data_type: &HirType,
     constants: &std::collections::HashMap<String, crate::hir::HirConstant>,
+    layouts: &TypeLayouts,
+    struct_field_types: &std::collections::HashMap<String, Vec<(String, HirType)>>,
 ) -> Option<ConstantScalar> {
     match expression {
+        Expression::SizeOf(target) | Expression::AlignOf(target) => {
+            let layout = layouts.layout(&(*target).into())?;
+            let value = if matches!(expression, Expression::SizeOf(_)) {
+                layout.size_bytes
+            } else {
+                layout.align_bytes
+            };
+            Some(ConstantScalar::Integer(i128::from(value)))
+        }
+        Expression::OffsetOf { data_type, fields } => Some(ConstantScalar::Integer(i128::from(
+            offset_of_path(struct_field_types, layouts, (*data_type).into(), fields)?,
+        ))),
         Expression::LiteralNumber(text) => {
             if matches!(data_type, HirType::Float { .. }) {
                 text.parse::<f64>().ok().map(ConstantScalar::Float)
@@ -300,25 +314,140 @@ fn constant_scalar_value(
                 text.parse::<i128>().ok().map(ConstantScalar::Integer)
             }
         }
-        Expression::Negate(inner) => match constant_scalar_value(inner, data_type, constants)? {
+        Expression::Add(lhs, rhs)
+        | Expression::Subtract(lhs, rhs)
+        | Expression::Multiply(lhs, rhs)
+        | Expression::Divide(lhs, rhs)
+        | Expression::Remainder(lhs, rhs) => {
+            let lhs = constant_scalar_value(lhs, data_type, constants, layouts, struct_field_types)?;
+            let rhs = constant_scalar_value(rhs, data_type, constants, layouts, struct_field_types)?;
+            match (lhs, rhs) {
+                (ConstantScalar::Integer(a), ConstantScalar::Integer(b)) => {
+                    let value = match expression {
+                        Expression::Add(_, _) => a.checked_add(b)?,
+                        Expression::Subtract(_, _) => a.checked_sub(b)?,
+                        Expression::Multiply(_, _) => a.checked_mul(b)?,
+                        Expression::Divide(_, _) => a.checked_div(b)?,
+                        _ => a.checked_rem(b)?,
+                    };
+                    Some(ConstantScalar::Integer(value))
+                }
+                (ConstantScalar::Float(a), ConstantScalar::Float(b)) => {
+                    let value = match expression {
+                        Expression::Add(_, _) => a + b,
+                        Expression::Subtract(_, _) => a - b,
+                        Expression::Multiply(_, _) => a * b,
+                        Expression::Divide(_, _) => a / b,
+                        _ => return None,
+                    };
+                    Some(ConstantScalar::Float(value))
+                }
+                (ConstantScalar::Integer(a), ConstantScalar::Float(b)) => {
+                    let a = a as f64;
+                    let value = match expression {
+                        Expression::Add(_, _) => a + b,
+                        Expression::Subtract(_, _) => a - b,
+                        Expression::Multiply(_, _) => a * b,
+                        Expression::Divide(_, _) => a / b,
+                        _ => return None,
+                    };
+                    Some(ConstantScalar::Float(value))
+                }
+                (ConstantScalar::Float(a), ConstantScalar::Integer(b)) => {
+                    let b = b as f64;
+                    let value = match expression {
+                        Expression::Add(_, _) => a + b,
+                        Expression::Subtract(_, _) => a - b,
+                        Expression::Multiply(_, _) => a * b,
+                        Expression::Divide(_, _) => a / b,
+                        _ => return None,
+                    };
+                    Some(ConstantScalar::Float(value))
+                }
+            }
+        }
+        Expression::BitAnd(lhs, rhs)
+        | Expression::BitOr(lhs, rhs)
+        | Expression::BitXor(lhs, rhs)
+        | Expression::ShiftLeft(lhs, rhs)
+        | Expression::ShiftRight(lhs, rhs) => {
+            let ConstantScalar::Integer(lhs) =
+                constant_scalar_value(lhs, data_type, constants, layouts, struct_field_types)?
+            else {
+                return None;
+            };
+            let ConstantScalar::Integer(rhs) =
+                constant_scalar_value(rhs, data_type, constants, layouts, struct_field_types)?
+            else {
+                return None;
+            };
+            let value = match expression {
+                Expression::BitAnd(_, _) => lhs & rhs,
+                Expression::BitOr(_, _) => lhs | rhs,
+                Expression::BitXor(_, _) => lhs ^ rhs,
+                Expression::ShiftLeft(_, _) => lhs.checked_shl((rhs as u32) & 63)?,
+                _ => lhs.checked_shr((rhs as u32) & 63)?,
+            };
+            Some(ConstantScalar::Integer(value))
+        }
+        Expression::Negate(inner) => match constant_scalar_value(
+            inner,
+            data_type,
+            constants,
+            layouts,
+            struct_field_types,
+        )? {
             ConstantScalar::Integer(value) => Some(ConstantScalar::Integer(-value)),
             ConstantScalar::Float(value) => Some(ConstantScalar::Float(-value)),
         },
         Expression::LiteralBool(value) => Some(ConstantScalar::Integer(i128::from(*value))),
         Expression::Identifier(name) => {
             let constant = constants.get(name)?;
-            constant_scalar_value(&constant.value, &constant.data_type, constants)
+            constant_scalar_value(
+                &constant.value,
+                &constant.data_type,
+                constants,
+                layouts,
+                struct_field_types,
+            )
         }
         _ => None,
     }
+}
+
+fn offset_of_path(
+    struct_field_types: &std::collections::HashMap<String, Vec<(String, HirType)>>,
+    layouts: &TypeLayouts,
+    data_type: HirType,
+    fields: &[String],
+) -> Option<u64> {
+    let mut current = data_type;
+    let mut offset = 0u64;
+    for field in fields {
+        let HirType::Named(name) = &current else {
+            return None;
+        };
+        let field_type = struct_field_types
+            .get(name)?
+            .iter()
+            .find(|(field_name, _)| field_name == field)?
+            .1
+            .clone();
+        offset = offset.checked_add(layouts.struct_field_offset_bytes(name, field)?)?;
+        current = field_type;
+    }
+    Some(offset)
 }
 
 fn global_initial_bytes(
     expression: &Expression,
     data_type: &HirType,
     constants: &std::collections::HashMap<String, crate::hir::HirConstant>,
+    layouts: &TypeLayouts,
+    struct_field_types: &std::collections::HashMap<String, Vec<(String, HirType)>>,
 ) -> Option<Vec<u8>> {
-    Some(match constant_scalar_value(expression, data_type, constants)? {
+    Some(match constant_scalar_value(expression, data_type, constants, layouts, struct_field_types)?
+    {
         ConstantScalar::Integer(value) => (value as i64).to_le_bytes().to_vec(),
         ConstantScalar::Float(value) => value.to_bits().to_le_bytes().to_vec(),
     })
@@ -1565,6 +1694,48 @@ impl Builder {
                 let value = self.expression(value)?;
                 let result = self.value();
                 self.emit(MirInstruction::Not { result, value });
+                Some(result)
+            }
+            Expression::SizeOf(data_type) | Expression::AlignOf(data_type) => {
+                let layout = self.type_layouts.layout(&(*data_type).into())?;
+                let value = if matches!(expression, Expression::SizeOf(_)) {
+                    layout.size_bytes
+                } else {
+                    layout.align_bytes
+                };
+                let result = self.value();
+                self.emit(MirInstruction::ConstInt {
+                    result,
+                    value: i128::from(value),
+                });
+                self.value_types.insert(
+                    result,
+                    HirType::Integer {
+                        bits: 64,
+                        signed: false,
+                    },
+                );
+                Some(result)
+            }
+            Expression::OffsetOf { data_type, fields } => {
+                let value = offset_of_path(
+                    &self.struct_field_types,
+                    &self.type_layouts,
+                    (*data_type).into(),
+                    fields,
+                )?;
+                let result = self.value();
+                self.emit(MirInstruction::ConstInt {
+                    result,
+                    value: i128::from(value),
+                });
+                self.value_types.insert(
+                    result,
+                    HirType::Integer {
+                        bits: 64,
+                        signed: false,
+                    },
+                );
                 Some(result)
             }
             Expression::BitNot(value) => {
@@ -3109,6 +3280,7 @@ impl Builder {
                 .variable_types
                 .get(name)
                 .cloned()
+                .or_else(|| self.globals.get(name).map(|global| global.data_type.clone()))
                 .or_else(|| {
                     self.resolve_global_constant_name(name)
                         .and_then(|name| self.global_constants.get(&name))
@@ -3272,6 +3444,20 @@ impl Builder {
                 }
                 _ => self.expression_type(inner),
             },
+            Expression::BitAnd(lhs, rhs)
+            | Expression::BitOr(lhs, rhs)
+            | Expression::BitXor(lhs, rhs)
+            | Expression::ShiftLeft(lhs, rhs)
+            | Expression::ShiftRight(lhs, rhs) => {
+                self.expression_type(lhs).or_else(|| self.expression_type(rhs))
+            }
+            Expression::BitNot(value) => self.expression_type(value),
+            Expression::SizeOf(_) | Expression::AlignOf(_) | Expression::OffsetOf { .. } => {
+                Some(HirType::Integer {
+                    bits: 64,
+                    signed: false,
+                })
+            }
             Expression::Add(lhs, rhs)
             | Expression::Multiply(lhs, rhs)
             | Expression::Divide(lhs, rhs)
@@ -5464,6 +5650,8 @@ pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout
                 initializer,
                 &global.data_type,
                 &global_constants,
+                &type_layouts,
+                &struct_field_types,
             )
             .unwrap_or_else(|| {
                 panic!(

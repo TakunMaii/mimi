@@ -996,6 +996,7 @@ fn imported_constant_expression(
 ) -> bool {
     match expression {
         Expression::LiteralNumber(_) | Expression::LiteralBool(_) => true,
+        Expression::SizeOf(_) | Expression::AlignOf(_) | Expression::OffsetOf { .. } => true,
         Expression::LiteralString(_) => {
             matches!(expected, Some(DataType::Slice(element)) if *element == DataType::U8)
         }
@@ -1268,11 +1269,6 @@ pub(crate) fn check_with_import_paths(
         }
     }
 
-    let imported_symbols = scopes[0]
-        .iter()
-        .filter(|(name, _)| name.contains('.'))
-        .map(|(name, symbol)| (name.clone(), *symbol))
-        .collect::<HashMap<_, _>>();
 
     for node in nodes {
         if let ASTNode::EnumDefinition {
@@ -1521,6 +1517,50 @@ pub(crate) fn check_with_import_paths(
             .collect())
     } else {
         Err(errors)
+    }
+}
+
+/// Validates that every named type used by a size/offset intrinsic exists.
+fn validate_measured_type(
+    data_type: DataType,
+    structs: &HashMap<&'static str, StructInfo>,
+) -> Result<(), TypeError> {
+    match data_type {
+        DataType::Struct(name) | DataType::Enum(name) | DataType::CEnum(name) => {
+            if structs.contains_key(name) {
+                Ok(())
+            } else {
+                Err(error(format!("unknown type '{name}'")))
+            }
+        }
+        DataType::GenericStruct(name, arguments) | DataType::GenericEnum(name, arguments) => {
+            if !structs.contains_key(name) {
+                return Err(error(format!("unknown type '{name}'")));
+            }
+            for argument in arguments {
+                if let crate::parser::GenericArgument::Type(inner) = argument {
+                    validate_measured_type(*inner, structs)?;
+                }
+            }
+            Ok(())
+        }
+        DataType::Pointer(inner) | DataType::Slice(inner) => {
+            validate_measured_type(*inner, structs)
+        }
+        DataType::Array(_, inner) => validate_measured_type(*inner, structs),
+        DataType::Tuple(elements) => {
+            for element in elements {
+                validate_measured_type(*element, structs)?;
+            }
+            Ok(())
+        }
+        DataType::Function(parameters, result) => {
+            for parameter in parameters {
+                validate_measured_type(*parameter, structs)?;
+            }
+            validate_measured_type(*result, structs)
+        }
+        _ => Ok(()),
     }
 }
 
@@ -2177,6 +2217,41 @@ fn infer_expression(
                 return Err(error("'~' requires an integer operand"));
             }
             Ok(value_type)
+        }
+        Expression::SizeOf(data_type) | Expression::AlignOf(data_type) => {
+            validate_generic_type_use(*data_type, structs)?;
+            validate_measured_type(*data_type, structs)?;
+            require_compatible(DataType::U64, expected)?;
+            Ok(DataType::U64)
+        }
+        Expression::OffsetOf { data_type, fields } => {
+            validate_generic_type_use(*data_type, structs)?;
+            validate_measured_type(*data_type, structs)?;
+            if fields.is_empty() {
+                return Err(error("'@offsetof' requires a field name"));
+            }
+            if let DataType::Struct(name) = data_type {
+                let mut info = structs
+                    .get(name)
+                    .ok_or_else(|| error(format!("unknown struct type '{name}'")))?;
+                for (index, field) in fields.iter().enumerate() {
+                    let Some(field_info) = info.fields.get(field) else {
+                        return Err(error(format!("struct '{name}' has no field '{field}'")));
+                    };
+                    if index + 1 < fields.len() {
+                        let DataType::Struct(next) = field_info.data_type else {
+                            return Err(error(format!(
+                                "'@offsetof' path passes through non-struct field '{field}'"
+                            )));
+                        };
+                        info = structs
+                            .get(next)
+                            .ok_or_else(|| error(format!("unknown struct type '{next}'")))?;
+                    }
+                }
+            }
+            require_compatible(DataType::U64, expected)?;
+            Ok(DataType::U64)
         }
         Expression::If {
             condition,
@@ -3052,6 +3127,7 @@ fn type_storage_stride(
 fn is_constant_expression(expression: &Expression) -> bool {
     match expression {
         Expression::LiteralNumber(_) | Expression::LiteralBool(_) => true,
+        Expression::SizeOf(_) | Expression::AlignOf(_) | Expression::OffsetOf { .. } => true,
         Expression::ArrayLiteral(values) => values.iter().all(is_constant_expression),
         Expression::Negate(value) | Expression::Not(value) => is_constant_expression(value),
         Expression::Add(lhs, rhs)

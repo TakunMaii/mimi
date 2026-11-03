@@ -4552,6 +4552,58 @@ fn builds_and_runs_trailing_if_values_and_all_paths_returns() {
 }
 
 #[test]
+fn builds_and_runs_layout_intrinsics() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_layout_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_layout_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "Header :: struct { kind : u16, flags : u16, length : u64 } \
+         Inner :: struct { a : u8, b : u16 } \
+         Outer :: struct { inner : Inner, tail : u8 } \
+         Pair :: struct { x : i32, y : i32 } \
+         header_size :: @sizeof(Header) \
+         buffer_size : u64 = @sizeof(Outer) \
+         main :: fn () i32 { \
+         if @sizeof(u8) != 1 { return 1 } \
+         if @sizeof(u64) != 8 { return 2 } \
+         if @sizeof(*u8) != 8 { return 3 } \
+         if @sizeof([]u8) != 16 { return 4 } \
+         if @sizeof(Pair) != 8 { return 5 } \
+         if @alignof(Pair) != 4 { return 6 } \
+         if @sizeof(Header) != 16 { return 7 } \
+         if @alignof(Header) != 8 { return 8 } \
+         if @sizeof(Inner) != 4 { return 9 } \
+         if @sizeof(Outer) != 6 { return 10 } \
+         if @offsetof(Outer, inner) != 0 { return 11 } \
+         if @offsetof(Outer, inner.b) != 2 { return 12 } \
+         if @offsetof(Outer, tail) != 4 { return 13 } \
+         if @sizeof([3]u16) != 6 { return 14 } \
+         if @sizeof((i32, bool)) != 8 { return 15 } \
+         if header_size != 16 { return 16 } \
+         if buffer_size != 6 { return 17 } \
+         if @offsetof(Outer, inner.b) as i32 != 2 { return 18 } \
+         if (header_size * 2) != 32 { return 19 } \
+         0 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_bitwise_and_shift_operators() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

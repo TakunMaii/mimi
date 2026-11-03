@@ -127,17 +127,14 @@ impl TypeLayouts {
                 .map(|(_, offset)| *offset);
         }
         let fields = self.structs.get(name)?;
-        let slot_bytes = self.target.stack_slot_bytes();
-        if slot_bytes == 0 {
-            return None;
-        }
         let mut offset = 0u64;
         for (field_name, field_type) in fields {
+            let field = self.layout(field_type)?;
+            offset = align_up(offset, field.align_bytes)?;
             if field_name == member {
                 return Some(offset);
             }
-            let field_size = self.layout(field_type)?.size_bytes;
-            offset = offset.checked_add(self.round_to_slot(field_size)?)?;
+            offset = offset.checked_add(field.size_bytes)?;
         }
         None
     }
@@ -148,10 +145,15 @@ impl TypeLayouts {
         index: usize,
     ) -> Option<u64> {
         let mut offset = 0u64;
-        for element in elements.iter().take(index) {
-            offset = offset.checked_add(self.round_to_slot(self.layout(element)?.size_bytes)?)?;
+        for (position, element) in elements.iter().enumerate() {
+            let layout = self.layout(element)?;
+            offset = align_up(offset, layout.align_bytes)?;
+            if position == index {
+                return Some(offset);
+            }
+            offset = offset.checked_add(layout.size_bytes)?;
         }
-        (index < elements.len()).then_some(offset)
+        None
     }
 
     pub(crate) fn enum_uses_storage(&self, name: &str) -> bool {
@@ -228,14 +230,16 @@ impl TypeLayouts {
             }
             HirType::Tuple(elements) => {
                 let mut size = 0u64;
+                let mut align = 1u64;
                 for element in elements {
-                    size = size.checked_add(
-                        self.round_to_slot(self.layout_inner(element, visiting)?.size_bytes)?,
-                    )?;
+                    let element = self.layout_inner(element, visiting)?;
+                    size = align_up(size, element.align_bytes)?;
+                    size = size.checked_add(element.size_bytes)?;
+                    align = align.max(element.align_bytes.max(1));
                 }
                 Some(TypeLayout {
-                    size_bytes: size,
-                    align_bytes: self.target.stack_slot_bytes(),
+                    size_bytes: align_up(size, align)?,
+                    align_bytes: align,
                 })
             }
             HirType::Named(name) if self.structs.contains_key(name) => {
@@ -250,20 +254,18 @@ impl TypeLayouts {
                         align_bytes: record.align_bytes,
                     });
                 }
-                let slot_bytes = self.target.stack_slot_bytes();
-                if slot_bytes == 0 {
-                    return None;
-                }
                 let mut size = 0u64;
-                // MIR currently places each struct field on a stack-slot boundary.
+                let mut align = 1u64;
                 for (_, field_type) in self.structs.get(name)? {
                     let field = self.layout_inner(field_type, visiting)?;
-                    size = size.checked_add(self.round_to_slot(field.size_bytes)?)?;
+                    size = align_up(size, field.align_bytes)?;
+                    size = size.checked_add(field.size_bytes)?;
+                    align = align.max(field.align_bytes.max(1));
                 }
                 visiting.remove(&key);
                 Some(TypeLayout {
-                    size_bytes: size,
-                    align_bytes: slot_bytes,
+                    size_bytes: align_up(size, align)?,
+                    align_bytes: align,
                 })
             }
             HirType::Named(name) if self.enums.contains_key(name) => {
@@ -301,6 +303,14 @@ impl TypeLayouts {
             _ => None,
         }
     }
+}
+
+/// Rounds `value` up to the next multiple of `align` (a power of two or 1).
+pub(crate) fn align_up(value: u64, align: u64) -> Option<u64> {
+    let align = align.max(1);
+    value
+        .checked_add(align - 1)
+        .map(|value| value / align * align)
 }
 
 pub(crate) fn scalar_storage_size(data_type: &HirType) -> Option<u8> {
@@ -364,18 +374,24 @@ mod tests {
                 .layout(&HirType::Named("inner".into()))
                 .unwrap()
                 .size_bytes,
-            16
+            8
         );
-        assert_eq!(layouts.layout(&holder).unwrap().size_bytes, 56);
+        assert_eq!(layouts.layout(&holder).unwrap().size_bytes, 40);
         assert_eq!(
-            layouts.struct_field_offset_slots("holder", "items"),
+            layouts.struct_field_offset_bytes("holder", "items"),
             Some(0)
         );
-        assert_eq!(layouts.struct_field_offset_slots("holder", "view"), Some(4));
-        assert_eq!(layouts.struct_field_offset_slots("holder", "tail"), Some(6));
+        assert_eq!(
+            layouts.struct_field_offset_bytes("holder", "view"),
+            Some(16)
+        );
+        assert_eq!(
+            layouts.struct_field_offset_bytes("holder", "tail"),
+            Some(32)
+        );
         assert_eq!(
             layouts.abi_class(&holder),
-            Some(AbiClass::IndirectAggregate { slots: 7 })
+            Some(AbiClass::IndirectAggregate { slots: 5 })
         );
     }
 
@@ -384,7 +400,7 @@ mod tests {
         let layouts = TypeLayouts::new(TargetDataLayout::HOST_64, HashMap::new(), HashMap::new());
         let tuple = HirType::Tuple(vec![integer(32), HirType::Bool]);
 
-        assert_eq!(layouts.layout(&tuple).unwrap().size_bytes, 16);
+        assert_eq!(layouts.layout(&tuple).unwrap().size_bytes, 8);
         assert_eq!(
             layouts.tuple_element_offset_bytes(
                 match &tuple {
@@ -393,11 +409,11 @@ mod tests {
                 },
                 1
             ),
-            Some(8)
+            Some(4)
         );
         assert_eq!(
             layouts.abi_class(&tuple),
-            Some(AbiClass::IndirectAggregate { slots: 2 })
+            Some(AbiClass::IndirectAggregate { slots: 1 })
         );
     }
 
@@ -460,11 +476,11 @@ mod tests {
                 .layout(&HirType::Named("holder".into()))
                 .unwrap()
                 .size_bytes,
-            24
+            16
         );
         assert_eq!(
-            layouts.struct_field_offset_slots("holder", "value"),
-            Some(2)
+            layouts.struct_field_offset_bytes("holder", "value"),
+            Some(12)
         );
     }
 

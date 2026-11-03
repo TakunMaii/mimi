@@ -1004,8 +1004,7 @@ fn qualify_imported_expression(
         | Expression::BitOr(lhs, rhs)
         | Expression::BitXor(lhs, rhs)
         | Expression::ShiftLeft(lhs, rhs)
-        | Expression::ShiftRight(lhs, rhs)
- => {
+        | Expression::ShiftRight(lhs, rhs) => {
             qualify_imported_expression(lhs, package, local_type_names);
             qualify_imported_expression(rhs, package, local_type_names);
         }
@@ -1081,6 +1080,12 @@ fn qualify_imported_expression(
             }
             *return_type = qualify_imported_type(*return_type, package, local_type_names);
             qualify_imported_expression(body, package, local_type_names);
+        }
+        Expression::SizeOf(data_type) | Expression::AlignOf(data_type) => {
+            *data_type = qualify_imported_type(*data_type, package, local_type_names);
+        }
+        Expression::OffsetOf { data_type, .. } => {
+            *data_type = qualify_imported_type(*data_type, package, local_type_names);
         }
         Expression::StaticAccess { type_name, .. } => {
             if local_type_names.contains(type_name) || type_name.contains('.') {

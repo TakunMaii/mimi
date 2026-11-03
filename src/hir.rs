@@ -598,13 +598,25 @@ fn infer_constant_type(
             _ => infer_constant_type(inner, expected, constants, namespace, enum_variants)
                 .filter(is_scalar_numeric_type),
         },
-        Expression::Not(_) | Expression::And(_, _) | Expression::Or(_, _)
-        | Expression::BitAnd(_, _)
-        | Expression::BitOr(_, _)
-        | Expression::BitXor(_, _)
-        | Expression::ShiftLeft(_, _)
-        | Expression::ShiftRight(_, _)
- => Some(HirType::Bool),
+        Expression::Not(_) | Expression::And(_, _) | Expression::Or(_, _) => Some(HirType::Bool),
+        Expression::BitAnd(lhs, rhs) | Expression::BitOr(lhs, rhs) | Expression::BitXor(lhs, rhs) => {
+            let lhs_type =
+                infer_constant_type(lhs, expected, constants, namespace, enum_variants)?;
+            let rhs_type =
+                infer_constant_type(rhs, expected, constants, namespace, enum_variants)?;
+            common_numeric_type(&lhs_type, &rhs_type)
+        }
+        Expression::ShiftLeft(lhs, rhs) | Expression::ShiftRight(lhs, rhs) => {
+            infer_constant_type(lhs, expected, constants, namespace, enum_variants)?;
+            infer_constant_type(rhs, expected, constants, namespace, enum_variants)?;
+            infer_constant_type(lhs, expected, constants, namespace, enum_variants)
+        }
+        Expression::SizeOf(_) | Expression::AlignOf(_) | Expression::OffsetOf { .. } => {
+            Some(HirType::Integer {
+                bits: 64,
+                signed: false,
+            })
+        }
         Expression::Equal(_, _)
         | Expression::NotEqual(_, _)
         | Expression::LessThan(_, _)
@@ -693,6 +705,7 @@ fn is_constant_expression(
 ) -> bool {
     match expression {
         Expression::LiteralBool(_) | Expression::LiteralNumber(_) => true,
+        Expression::SizeOf(_) | Expression::AlignOf(_) | Expression::OffsetOf { .. } => true,
         Expression::LiteralString(_) => {
             matches!(expected, Some(HirType::Slice(inner)) if **inner == HirType::Integer { bits: 8, signed: false })
         }
@@ -724,8 +737,7 @@ fn is_constant_expression(
         | Expression::BitOr(lhs, rhs)
         | Expression::BitXor(lhs, rhs)
         | Expression::ShiftLeft(lhs, rhs)
-        | Expression::ShiftRight(lhs, rhs)
- => {
+        | Expression::ShiftRight(lhs, rhs) => {
             is_constant_expression(lhs, constants, namespace, enum_variants, None)
                 && is_constant_expression(rhs, constants, namespace, enum_variants, None)
         }
@@ -974,12 +986,11 @@ fn generic_applications(
             | Expression::GreaterThanOrEqual(a, b)
             | Expression::And(a, b)
             | Expression::Or(a, b)
-        | Expression::BitAnd(a, b)
-        | Expression::BitOr(a, b)
-        | Expression::BitXor(a, b)
-        | Expression::ShiftLeft(a, b)
-        | Expression::ShiftRight(a, b)
- => {
+            | Expression::BitAnd(a, b)
+            | Expression::BitOr(a, b)
+            | Expression::BitXor(a, b)
+            | Expression::ShiftLeft(a, b)
+            | Expression::ShiftRight(a, b) => {
                 visit_expr(a, output);
                 visit_expr(b, output);
             }
@@ -1023,7 +1034,10 @@ fn generic_applications(
             | Expression::LiteralNumber(_)
             | Expression::LiteralString(_)
             | Expression::LiteralBool(_)
-            | Expression::StaticAccess { .. } => {}
+            | Expression::StaticAccess { .. }
+        | Expression::SizeOf(_)
+        | Expression::AlignOf(_)
+        | Expression::OffsetOf { .. } => {}
         }
     }
     fn visit_nodes(
@@ -1466,8 +1480,7 @@ fn collect_free_names(
         | Expression::BitOr(left, right)
         | Expression::BitXor(left, right)
         | Expression::ShiftLeft(left, right)
-        | Expression::ShiftRight(left, right)
- => {
+        | Expression::ShiftRight(left, right) => {
             collect_free_names(left, bound, captures);
             collect_free_names(right, bound, captures);
         }
@@ -1543,7 +1556,10 @@ fn collect_free_names(
         Expression::LiteralNumber(_)
         | Expression::LiteralString(_)
         | Expression::LiteralBool(_)
-        | Expression::StaticAccess { .. } => {}
+        | Expression::StaticAccess { .. }
+        | Expression::SizeOf(_)
+        | Expression::AlignOf(_)
+        | Expression::OffsetOf { .. } => {}
     }
 }
 
@@ -1579,8 +1595,7 @@ fn lift_lambdas_in_expression(
         | Expression::BitOr(left, right)
         | Expression::BitXor(left, right)
         | Expression::ShiftLeft(left, right)
-        | Expression::ShiftRight(left, right)
- => {
+        | Expression::ShiftRight(left, right) => {
             lift_lambdas_in_expression(left, functions, used_names, next_lambda);
             lift_lambdas_in_expression(right, functions, used_names, next_lambda);
         }
@@ -1674,7 +1689,10 @@ fn lift_lambdas_in_expression(
         | Expression::LiteralNumber(_)
         | Expression::LiteralString(_)
         | Expression::LiteralBool(_)
-        | Expression::StaticAccess { .. } => {}
+        | Expression::StaticAccess { .. }
+        | Expression::SizeOf(_)
+        | Expression::AlignOf(_)
+        | Expression::OffsetOf { .. } => {}
     }
 }
 

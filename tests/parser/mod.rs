@@ -357,6 +357,33 @@ fn parses_bitwise_and_before_comparison_and_unary_not() {
 }
 
 #[test]
+fn parses_size_intrinsics_with_types_and_field_paths() {
+    let nodes = parse(tokenize(
+        "main :: fn () bool { @sizeof(Point) + 1 != @offsetof(Outer, inner.value) }".chars(),
+    ));
+    let ASTNode::FunctionDefinition {
+        body: Expression::Block(items),
+        ..
+    } = &nodes[0]
+    else {
+        panic!("expected a function");
+    };
+    let [ASTNode::Expression(Expression::NotEqual(left, right))] = items.as_slice() else {
+        panic!("expected a comparison of size intrinsics");
+    };
+    assert!(matches!(
+        left.as_ref(),
+        Expression::Add(inner, value)
+            if matches!(inner.as_ref(), Expression::SizeOf(DataType::Struct("Point")))
+                && matches!(value.as_ref(), Expression::LiteralNumber(_))
+    ));
+    assert!(matches!(
+        right.as_ref(),
+        Expression::OffsetOf { fields, .. } if fields == &["inner".to_string(), "value".to_string()]
+    ));
+}
+
+#[test]
 fn tokenizes_character_literals_and_escapes() {
     assert_eq!(
         tokenize("'a' '\\n' '\\'' '\\\\' '\\0' '\\r' '\\t'".chars()),

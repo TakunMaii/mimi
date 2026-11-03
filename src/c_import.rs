@@ -782,7 +782,10 @@ fn rewrite_callback_expression(
         | Expression::LiteralNumber(_)
         | Expression::LiteralString(_)
         | Expression::LiteralBool(_)
-        | Expression::StaticAccess { .. } => {}
+        | Expression::StaticAccess { .. }
+        | Expression::SizeOf(_)
+        | Expression::AlignOf(_)
+        | Expression::OffsetOf { .. } => {}
     }
 }
 

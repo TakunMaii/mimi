@@ -171,6 +171,9 @@ two consecutive stages.
 - [ ] Lower module-level variables and constants in stage1.
 - [ ] Lex and lower bitwise and shift operators (`&`, `|`, `^`, `~`, `<<`, `>>`)
   in stage1; the self-hosted lexer still rejects a single `|`.
+- [ ] Support `@sizeof`, `@alignof`, and `@offsetof` in stage1 and keep its
+  struct layout C-compatible; the self-hosted backend currently emits C
+  structs but cannot evaluate layout intrinsics.
 - [ ] Specialize generic structs in stage1: intern an instance per
   declaration and argument tag list (mirroring `enum_intern`), record
   parameter-to-tag captures on `StructType`, and resolve field tags through
