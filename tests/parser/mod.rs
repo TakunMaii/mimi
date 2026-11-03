@@ -215,7 +215,7 @@ fn parses_unary_negation() {
 #[test]
 fn parses_pointer_addressing_and_assignment() {
     let nodes = parse(tokenize(
-        "get :: fn (pointer : *i32) i32 { *pointer } set :: fn (pointer : *i32) void { *pointer = 2 } main :: fn () *i32 { value := 1 &value }".chars(),
+        "get :: fn (pointer : *i32) i32 { *pointer } set :: fn (pointer : *i32) void { *pointer = 2 } main :: fn () *i32 { value := 1 return &value }".chars(),
     ));
     assert!(matches!(
         &nodes[0],
@@ -242,7 +242,7 @@ fn parses_pointer_addressing_and_assignment() {
             ..
         } if matches!(items.as_slice(), [
             ASTNode::VariableDefinition { name, .. },
-            ASTNode::Expression(Expression::AddressOf(inner)),
+            ASTNode::Return(Some(Expression::AddressOf(inner))),
         ] if name == "value" && matches!(inner.as_ref(), Expression::Identifier(name) if name == "value"))
     ));
 }
@@ -281,6 +281,79 @@ fn lexer_errors_include_the_offending_source_span() {
     let error = super::lexer::tokenize_spanned("value := \"bad\\q\"").unwrap_err();
     assert!(error.message.contains("unsupported string escape"));
     assert_eq!(error.span, super::lexer::Span { start: 13, end: 15 });
+}
+
+#[test]
+fn parses_bitwise_operators_with_rust_like_precedence() {
+    let nodes = parse(tokenize(
+        "main :: fn () i32 { 1 | 2 & 3 ^ 4 << 1 + 1 }".chars(),
+    ));
+    let ASTNode::FunctionDefinition {
+        body: Expression::Block(items),
+        ..
+    } = &nodes[0]
+    else {
+        panic!("expected a function");
+    };
+    let [ASTNode::Expression(expression)] = items.as_slice() else {
+        panic!("expected one expression statement");
+    };
+    let Expression::BitOr(_, right) = expression else {
+        panic!("expected '|' at the top level");
+    };
+    let Expression::BitXor(left, right_xor) = right.as_ref() else {
+        panic!("expected '^' below '&'");
+    };
+    assert!(
+        matches!(left.as_ref(), Expression::BitAnd(_, _)),
+        "expected '&' to bind tighter than '^'"
+    );
+    assert!(
+        matches!(
+            right_xor.as_ref(),
+            Expression::ShiftLeft(_, shift_right)
+                if matches!(shift_right.as_ref(), Expression::Add(_, _))
+        ),
+        "expected '+' to bind tighter than '<<'"
+    );
+}
+
+#[test]
+fn parses_bitwise_and_before_comparison_and_unary_not() {
+    let nodes = parse(tokenize(
+        "main :: fn () bool { mask & 3 == 1 } check :: fn () i32 { ~value }".chars(),
+    ));
+    let ASTNode::FunctionDefinition {
+        body: Expression::Block(items),
+        ..
+    } = &nodes[0]
+    else {
+        panic!("expected a function");
+    };
+    let [ASTNode::Expression(expression)] = items.as_slice() else {
+        panic!("expected one expression statement");
+    };
+    assert!(
+        matches!(
+            expression,
+            Expression::Equal(left, right)
+                if matches!(left.as_ref(), Expression::BitAnd(_, _))
+                    && matches!(right.as_ref(), Expression::LiteralNumber(_))
+        ),
+        "expected '&' to bind tighter than '=='"
+    );
+
+    let ASTNode::FunctionDefinition {
+        body: Expression::Block(items),
+        ..
+    } = &nodes[1]
+    else {
+        panic!("expected a function");
+    };
+    let [ASTNode::Expression(Expression::BitNot(inner))] = items.as_slice() else {
+        panic!("expected '~'");
+    };
+    assert!(matches!(inner.as_ref(), Expression::Identifier(name) if name == "value"));
 }
 
 #[test]

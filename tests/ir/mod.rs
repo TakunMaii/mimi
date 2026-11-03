@@ -4552,6 +4552,43 @@ fn builds_and_runs_trailing_if_values_and_all_paths_returns() {
 }
 
 #[test]
+fn builds_and_runs_bitwise_and_shift_operators() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_bits_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_bits_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { \
+         if (12 & 10) != 8 { return 1 } \
+         if (12 | 10) != 14 { return 2 } \
+         if (12 ^ 10) != 6 { return 3 } \
+         if ~0 != -1 { return 4 } \
+         if (1 << 4) != 16 { return 5 } \
+         if (32 >> 2) != 8 { return 6 } \
+         signed : i32 = -8 \
+         if (signed >> 1) != -4 { return 7 } \
+         unsigned : u64 = 18446744073709551615 \
+         if (unsigned >> 60) != 15 { return 8 } \
+         0 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_character_literals() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

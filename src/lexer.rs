@@ -35,8 +35,13 @@ pub(crate) enum Token {
     LessThanOrEqual,
     GreaterThan,
     GreaterThanOrEqual,
+    ShiftLeft,
+    ShiftRight,
     AndAnd,
     Ampersand,
+    Pipe,
+    Caret,
+    Tilde,
     At,
     OrOr,
     Bang,
@@ -321,6 +326,9 @@ pub(crate) fn tokenize_spanned(source: &str) -> Result<Vec<SpannedToken>, LexErr
                     if chars.get(index) == Some(&'=') {
                         index += 1;
                         Some(Token::LessThanOrEqual)
+                    } else if chars.get(index) == Some(&'<') {
+                        index += 1;
+                        Some(Token::ShiftLeft)
                     } else {
                         Some(Token::LessThan)
                     }
@@ -329,6 +337,9 @@ pub(crate) fn tokenize_spanned(source: &str) -> Result<Vec<SpannedToken>, LexErr
                     if chars.get(index) == Some(&'=') {
                         index += 1;
                         Some(Token::GreaterThanOrEqual)
+                    } else if chars.get(index) == Some(&'>') {
+                        index += 1;
+                        Some(Token::ShiftRight)
                     } else {
                         Some(Token::GreaterThan)
                     }
@@ -343,15 +354,15 @@ pub(crate) fn tokenize_spanned(source: &str) -> Result<Vec<SpannedToken>, LexErr
                 }
                 '@' => Some(Token::At),
                 '|' => {
-                    if chars.get(index) != Some(&'|') {
-                        return Err(LexError {
-                            message: "expected '||'".into(),
-                            span: make_span(start, index, &byte_offsets),
-                        });
+                    if chars.get(index) == Some(&'|') {
+                        index += 1;
+                        Some(Token::OrOr)
+                    } else {
+                        Some(Token::Pipe)
                     }
-                    index += 1;
-                    Some(Token::OrOr)
                 }
+                '^' => Some(Token::Caret),
+                '~' => Some(Token::Tilde),
                 '+' => Some(Token::Plus),
                 '-' => Some(Token::Minus),
                 '*' => Some(Token::Star),

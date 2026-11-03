@@ -121,6 +121,36 @@ pub(crate) enum MirInstruction {
         result: ValueId,
         value: ValueId,
     },
+    BitAnd {
+        result: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    BitOr {
+        result: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    BitXor {
+        result: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    BitNot {
+        result: ValueId,
+        value: ValueId,
+    },
+    Shl {
+        result: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    Shr {
+        result: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+        signed: bool,
+    },
     Compare {
         result: ValueId,
         lhs: ValueId,
@@ -1537,6 +1567,21 @@ impl Builder {
                 self.emit(MirInstruction::Not { result, value });
                 Some(result)
             }
+            Expression::BitNot(value) => {
+                let value = self.expression(value)?;
+                let data_type = self.value_type(value);
+                let result = self.value();
+                self.emit(MirInstruction::BitNot { result, value });
+                if let Some(data_type) = data_type {
+                    self.value_types.insert(result, data_type);
+                }
+                Some(result)
+            }
+            Expression::BitAnd(lhs, rhs) => self.binary_bits(lhs, rhs, 0),
+            Expression::BitOr(lhs, rhs) => self.binary_bits(lhs, rhs, 1),
+            Expression::BitXor(lhs, rhs) => self.binary_bits(lhs, rhs, 2),
+            Expression::ShiftLeft(lhs, rhs) => self.binary_bits(lhs, rhs, 3),
+            Expression::ShiftRight(lhs, rhs) => self.binary_bits(lhs, rhs, 4),
             Expression::And(lhs, rhs) => self.logical(lhs, rhs, true),
             Expression::Or(lhs, rhs) => self.logical(lhs, rhs, false),
             Expression::Equal(lhs, rhs)
@@ -2431,6 +2476,29 @@ impl Builder {
                 lhs,
                 rhs,
                 signed,
+            },
+        };
+        self.emit(instruction);
+        if let Some(data_type) = self.value_type(lhs) {
+            self.value_types.insert(result, data_type);
+        }
+        Some(result)
+    }
+
+    fn binary_bits(&mut self, lhs: &Expression, rhs: &Expression, kind: u8) -> Option<ValueId> {
+        let lhs = self.expression(lhs)?;
+        let rhs = self.expression(rhs)?;
+        let result = self.value();
+        let instruction = match kind {
+            0 => MirInstruction::BitAnd { result, lhs, rhs },
+            1 => MirInstruction::BitOr { result, lhs, rhs },
+            2 => MirInstruction::BitXor { result, lhs, rhs },
+            3 => MirInstruction::Shl { result, lhs, rhs },
+            _ => MirInstruction::Shr {
+                result,
+                lhs,
+                rhs,
+                signed: !self.value_is_unsigned_integer(lhs),
             },
         };
         self.emit(instruction);

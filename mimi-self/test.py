@@ -35,9 +35,9 @@ def test_compile_diagnostics(compiler: Path, *, self_hosted: bool = False) -> No
         ),
         (
             "lex-error",
-            "main :: fn () i32 { 1 | 2 }",
+            "main :: fn () i32 { 1 /* }",
             "error[lex]",
-            ("1:23", "^"),
+            ("1:23", "^~~~"),
         ),
         (
             "type-error",
@@ -49,7 +49,7 @@ def test_compile_diagnostics(compiler: Path, *, self_hosted: bool = False) -> No
     if self_hosted:
         cases = [
             ("parse-error", "main :: fn () i32 { 1 + }", "error[E_PARSE]: expected an expression after operator", ("1:25", "^")),
-            ("lex-error", "main :: fn () i32 { 1 | 2 }", "error[E_LEX]", ("1:23", "^")),
+            ("lex-error", "main :: fn () i32 { 1 /* }", "error[E_LEX]", ("1:23", "^~~~")),
             ("type-error", "main :: fn () i32 { missing_name }", "error[E_NAME]: undefined identifier", ("1:21", "^~~~~~~~~~~~")),
         ]
     with tempfile.TemporaryDirectory(prefix="mimi-self-errors-") as temporary:
@@ -203,7 +203,7 @@ def test_compiler_parity(reference: Path, candidate: Path, *, self_hosted: bool 
         ),
         ("character-error", "main :: fn () i32 { 'ab' }", 1, "error[lex]"),
         ("parse-error", "main :: fn () i32 { 1 + }", 1, "error[parse]"),
-        ("lex-error", "main :: fn () i32 { 1 | 2 }", 1, "error[lex]"),
+        ("lex-error", "main :: fn () i32 { 1 /* }", 1, "error[lex]"),
         (
             "type-error",
             "main :: fn () i32 { missing_name }",
@@ -262,7 +262,7 @@ def test_compiler_parity(reference: Path, candidate: Path, *, self_hosted: bool 
                     if label == "candidate" and self_hosted:
                         expected_candidate_location = {
                             "parse-error": ("1:25", "^"),
-                            "lex-error": ("1:23", "^"),
+                            "lex-error": ("1:23", "^~~~"),
                             "type-error": ("1:21", "^~~~~~~~~~~~"),
                         }.get(name)
                         if expected_candidate_location is not None and location != expected_candidate_location:

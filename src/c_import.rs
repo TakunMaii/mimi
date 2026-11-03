@@ -715,6 +715,7 @@ fn rewrite_callback_expression(
         | Expression::Not(inner)
         | Expression::AddressOf(inner)
         | Expression::Dereference(inner)
+        | Expression::BitNot(inner)
         | Expression::Cast { value: inner, .. }
         | Expression::MemberAccess { object: inner, .. } => {
             rewrite_callback_expression(inner, adapters)
@@ -732,6 +733,12 @@ fn rewrite_callback_expression(
         | Expression::GreaterThanOrEqual(left, right)
         | Expression::And(left, right)
         | Expression::Or(left, right)
+        | Expression::BitAnd(left, right)
+        | Expression::BitOr(left, right)
+        | Expression::BitXor(left, right)
+        | Expression::ShiftLeft(left, right)
+        | Expression::ShiftRight(left, right)
+
         | Expression::Index {
             object: left,
             index: right,

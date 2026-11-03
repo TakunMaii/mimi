@@ -532,6 +532,12 @@ fn encoded_function_size(function: &LirFunction) -> Result<usize, String> {
                 | LirInstruction::Sub { .. }
                 | LirInstruction::Mul { .. }
                 | LirInstruction::Div { .. }
+                | LirInstruction::BitAnd { .. }
+                | LirInstruction::BitOr { .. }
+                | LirInstruction::BitXor { .. }
+                | LirInstruction::BitNot { .. }
+                | LirInstruction::Shl { .. }
+                | LirInstruction::Shr { .. }
                 | LirInstruction::Neg { .. } => 1,
                 LirInstruction::FloatBinary { .. } => 4,
                 LirInstruction::FloatNeg { .. } => 3,
@@ -1032,6 +1038,39 @@ fn encode_function(
                     let base = if *signed { 0x9ac0_0c00 } else { 0x9ac0_0800 };
                     base | (rhs.0 << 16) | (lhs.0 << 5) | destination.0
                 }
+                LirInstruction::BitAnd {
+                    destination,
+                    lhs,
+                    rhs,
+                } => 0x8a00_0000 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+                LirInstruction::BitOr {
+                    destination,
+                    lhs,
+                    rhs,
+                } => 0xaa00_0000 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+                LirInstruction::BitXor {
+                    destination,
+                    lhs,
+                    rhs,
+                } => 0xca00_0000 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+                LirInstruction::BitNot {
+                    destination,
+                    value,
+                } => 0xaa20_03e0 | (value.0 << 16) | destination.0,
+                LirInstruction::Shl {
+                    destination,
+                    lhs,
+                    rhs,
+                } => 0x9ac0_2000 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+                LirInstruction::Shr {
+                    destination,
+                    lhs,
+                    rhs,
+                    signed,
+                } => {
+                    let base = if *signed { 0x9ac0_2800 } else { 0x9ac0_2400 };
+                    base | (rhs.0 << 16) | (lhs.0 << 5) | destination.0
+                }
                 LirInstruction::Not { destination, value } => {
                     push_word(bytes, 0xf100_001f | (value.0 << 5));
                     push_word(bytes, 0x9a9f_17e0 | destination.0);
@@ -1414,6 +1453,12 @@ fn block_encoded_size(
             | LirInstruction::Sub { .. }
             | LirInstruction::Mul { .. }
             | LirInstruction::Div { .. }
+            | LirInstruction::BitAnd { .. }
+            | LirInstruction::BitOr { .. }
+            | LirInstruction::BitXor { .. }
+            | LirInstruction::BitNot { .. }
+            | LirInstruction::Shl { .. }
+            | LirInstruction::Shr { .. }
             | LirInstruction::Neg { .. } => 1,
             LirInstruction::FloatBinary { .. } => 4,
             LirInstruction::FloatNeg { .. } => 3,
@@ -1581,7 +1626,34 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
         | LirInstruction::NumericConvert {
             destination, value, ..
         } => vec![*destination, *value],
-        LirInstruction::Not { destination, value } => vec![*destination, *value],
+        LirInstruction::Not { destination, value }
+        | LirInstruction::BitNot { destination, value } => vec![*destination, *value],
+        LirInstruction::BitAnd {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::BitOr {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::BitXor {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::Shl {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::Shr {
+            destination,
+            lhs,
+            rhs,
+            ..
+        } => vec![*destination, *lhs, *rhs],
         LirInstruction::LoadSlot { destination, .. } => vec![*destination],
         LirInstruction::StoreSlot { value, .. } => vec![*value],
         LirInstruction::SlotAddress { destination, .. } => vec![*destination],
@@ -2437,6 +2509,57 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                 } => assembly.push_str(&format!(
                     "    {} x{}, x{}, x{}\n",
                     if *signed { "sdiv" } else { "udiv" },
+                    destination.0,
+                    lhs.0,
+                    rhs.0
+                )),
+                LirInstruction::BitAnd {
+                    destination,
+                    lhs,
+                    rhs,
+                } => assembly.push_str(&format!(
+                    "    and x{}, x{}, x{}\n",
+                    destination.0, lhs.0, rhs.0
+                )),
+                LirInstruction::BitOr {
+                    destination,
+                    lhs,
+                    rhs,
+                } => assembly.push_str(&format!(
+                    "    orr x{}, x{}, x{}\n",
+                    destination.0, lhs.0, rhs.0
+                )),
+                LirInstruction::BitXor {
+                    destination,
+                    lhs,
+                    rhs,
+                } => assembly.push_str(&format!(
+                    "    eor x{}, x{}, x{}\n",
+                    destination.0, lhs.0, rhs.0
+                )),
+                LirInstruction::BitNot {
+                    destination,
+                    value,
+                } => assembly.push_str(&format!(
+                    "    mvn x{}, x{}\n",
+                    destination.0, value.0
+                )),
+                LirInstruction::Shl {
+                    destination,
+                    lhs,
+                    rhs,
+                } => assembly.push_str(&format!(
+                    "    lsl x{}, x{}, x{}\n",
+                    destination.0, lhs.0, rhs.0
+                )),
+                LirInstruction::Shr {
+                    destination,
+                    lhs,
+                    rhs,
+                    signed,
+                } => assembly.push_str(&format!(
+                    "    {} x{}, x{}, x{}\n",
+                    if *signed { "asr" } else { "lsr" },
                     destination.0,
                     lhs.0,
                     rhs.0

@@ -264,6 +264,32 @@ fn emit_instruction(
             lhs,
             rhs,
             ..
+        }
+        | LirInstruction::BitAnd {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::BitOr {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::BitXor {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::Shl {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::Shr {
+            destination,
+            lhs,
+            rhs,
+            ..
         } => {
             load_value(assembly, function, *lhs, "rax")?;
             load_value(assembly, function, *rhs, "rcx")?;
@@ -285,6 +311,17 @@ fn emit_instruction(
                         "    xor edx, edx\n    div rcx\n    mov rax, rdx\n"
                     });
                 }
+                LirInstruction::BitAnd { .. } => assembly.push_str("    and rax, rcx\n"),
+                LirInstruction::BitOr { .. } => assembly.push_str("    or rax, rcx\n"),
+                LirInstruction::BitXor { .. } => assembly.push_str("    xor rax, rcx\n"),
+                LirInstruction::Shl { .. } => assembly.push_str("    shl rax, cl\n"),
+                LirInstruction::Shr { signed, .. } => {
+                    assembly.push_str(if *signed {
+                        "    sar rax, cl\n"
+                    } else {
+                        "    shr rax, cl\n"
+                    });
+                }
                 _ => unreachable!(),
             }
             store_value(assembly, function, *destination, "rax")?;
@@ -292,6 +329,11 @@ fn emit_instruction(
         LirInstruction::Neg { destination, value } => {
             load_value(assembly, function, *value, "rax")?;
             assembly.push_str("    neg rax\n");
+            store_value(assembly, function, *destination, "rax")?;
+        }
+        LirInstruction::BitNot { destination, value } => {
+            load_value(assembly, function, *value, "rax")?;
+            assembly.push_str("    not rax\n");
             store_value(assembly, function, *destination, "rax")?;
         }
         LirInstruction::Not { destination, value } => {
@@ -842,9 +884,36 @@ fn instruction_values(instruction: &LirInstruction, values: &mut Vec<ValueId>) {
             lhs,
             rhs,
             ..
+        }
+        | LirInstruction::BitAnd {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::BitOr {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::BitXor {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::Shl {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::Shr {
+            destination,
+            lhs,
+            rhs,
+            ..
         } => values.extend([*destination, *lhs, *rhs]),
         LirInstruction::Neg { destination, value }
         | LirInstruction::Not { destination, value }
+        | LirInstruction::BitNot { destination, value }
         | LirInstruction::FloatNeg {
             destination, value, ..
         }

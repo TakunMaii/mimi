@@ -317,10 +317,36 @@ fn instruction_uses_defs(instruction: &LirInstruction) -> (Vec<ValueId>, Vec<Val
             lhs,
             rhs,
             ..
-        } => (vec![*lhs, *rhs], vec![*destination]),
-        LirInstruction::Neg { destination, value } | LirInstruction::Not { destination, value } => {
-            (vec![*value], vec![*destination])
         }
+        | LirInstruction::BitAnd {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::BitOr {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::BitXor {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::Shl {
+            destination,
+            lhs,
+            rhs,
+        }
+        | LirInstruction::Shr {
+            destination,
+            lhs,
+            rhs,
+            ..
+        } => (vec![*lhs, *rhs], vec![*destination]),
+        LirInstruction::Neg { destination, value }
+        | LirInstruction::Not { destination, value }
+        | LirInstruction::BitNot { destination, value } => (vec![*value], vec![*destination]),
         LirInstruction::FloatNeg {
             destination, value, ..
         } => (vec![*value], vec![*destination]),
@@ -435,6 +461,32 @@ fn rewrite_function(
                     rhs,
                     ..
                 }
+                | LirInstruction::BitAnd {
+                    destination,
+                    lhs,
+                    rhs,
+                }
+                | LirInstruction::BitOr {
+                    destination,
+                    lhs,
+                    rhs,
+                }
+                | LirInstruction::BitXor {
+                    destination,
+                    lhs,
+                    rhs,
+                }
+                | LirInstruction::Shl {
+                    destination,
+                    lhs,
+                    rhs,
+                }
+                | LirInstruction::Shr {
+                    destination,
+                    lhs,
+                    rhs,
+                    ..
+                }
                 | LirInstruction::Compare {
                     destination,
                     lhs,
@@ -468,7 +520,8 @@ fn rewrite_function(
                     map_value(rhs)?;
                 }
                 LirInstruction::Neg { destination, value }
-                | LirInstruction::Not { destination, value } => {
+                | LirInstruction::Not { destination, value }
+                | LirInstruction::BitNot { destination, value } => {
                     map_value(destination)?;
                     map_value(value)?;
                 }

@@ -33,7 +33,8 @@ written to the same path.
   ranges, overflow, and ABI parity remain unresolved. Stage0 now lowers
   unsigned division and comparison correctly.
 - The self-hosted compiler has no module-level variables or constants, no
-  `@cimport`, no generic structs, and no closures.
+  `@cimport`, no generic structs, no closures, and no bitwise or shift
+  operators; programs using them are rejected by its lexer.
 - Collection loops are implemented for byte slices; other collection element
   types are not yet lowered.
 - Match and enum `if` lowering require identifier scrutinees. General

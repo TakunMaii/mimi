@@ -61,13 +61,24 @@ From lowest to highest precedence, binary operators are:
 | `&&` | left |
 | `==`, `!=` | left |
 | `<`, `<=`, `>`, `>=` | left |
+| `\|` | left |
+| `^` | left |
+| `&` | left |
+| `<<`, `>>` | left |
 | `+`, `-` | left |
 | `*`, `/`, `%` | left |
 
-Prefix `-`, `!`, `&`, and `*` bind more tightly than binary operators. Casts
-use `value as Type`. Calls, indexing, slicing, member access, and casts can be
-chained. Comparisons are not chainable; parenthesize when expressing a
+Prefix `-`, `!`, `~`, `&`, and `*` bind more tightly than binary operators.
+Casts use `value as Type`. Calls, indexing, slicing, member access, and casts
+can be chained. Comparisons are not chainable; parenthesize when expressing a
 comparison of comparison results.
+
+Bitwise operators require integer operands. `~` is the bitwise complement and
+`!` the boolean negation. Shifts use the low six bits of the right operand
+(counts 0–63); `>>` is arithmetic for signed left operands and logical for
+unsigned ones. `&` is both the address-of prefix and the bitwise-and operator:
+a `&` that follows an expression continues it as bitwise-and, so a bare
+address-of expression that follows another statement should be parenthesized.
 
 ## Control flow and ranges
 

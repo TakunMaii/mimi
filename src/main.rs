@@ -979,7 +979,8 @@ fn qualify_imported_expression(
         Expression::Negate(inner)
         | Expression::Not(inner)
         | Expression::AddressOf(inner)
-        | Expression::Dereference(inner) => {
+        | Expression::Dereference(inner)
+        | Expression::BitNot(inner) => {
             qualify_imported_expression(inner, package, local_type_names);
         }
         Expression::Cast { value, data_type } => {
@@ -998,7 +999,13 @@ fn qualify_imported_expression(
         | Expression::GreaterThan(lhs, rhs)
         | Expression::GreaterThanOrEqual(lhs, rhs)
         | Expression::And(lhs, rhs)
-        | Expression::Or(lhs, rhs) => {
+        | Expression::Or(lhs, rhs)
+        | Expression::BitAnd(lhs, rhs)
+        | Expression::BitOr(lhs, rhs)
+        | Expression::BitXor(lhs, rhs)
+        | Expression::ShiftLeft(lhs, rhs)
+        | Expression::ShiftRight(lhs, rhs)
+ => {
             qualify_imported_expression(lhs, package, local_type_names);
             qualify_imported_expression(rhs, package, local_type_names);
         }

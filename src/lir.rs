@@ -167,6 +167,36 @@ pub(crate) enum LirInstruction {
         destination: ValueId,
         value: ValueId,
     },
+    BitAnd {
+        destination: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    BitOr {
+        destination: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    BitXor {
+        destination: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    BitNot {
+        destination: ValueId,
+        value: ValueId,
+    },
+    Shl {
+        destination: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    Shr {
+        destination: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+        signed: bool,
+    },
     Compare {
         destination: ValueId,
         lhs: ValueId,
@@ -436,6 +466,41 @@ fn lower_function(
                         MirInstruction::Not { result, value } => LirInstruction::Not {
                             destination: *result,
                             value: *value,
+                        },
+                        MirInstruction::BitAnd { result, lhs, rhs } => LirInstruction::BitAnd {
+                            destination: *result,
+                            lhs: *lhs,
+                            rhs: *rhs,
+                        },
+                        MirInstruction::BitOr { result, lhs, rhs } => LirInstruction::BitOr {
+                            destination: *result,
+                            lhs: *lhs,
+                            rhs: *rhs,
+                        },
+                        MirInstruction::BitXor { result, lhs, rhs } => LirInstruction::BitXor {
+                            destination: *result,
+                            lhs: *lhs,
+                            rhs: *rhs,
+                        },
+                        MirInstruction::BitNot { result, value } => LirInstruction::BitNot {
+                            destination: *result,
+                            value: *value,
+                        },
+                        MirInstruction::Shl { result, lhs, rhs } => LirInstruction::Shl {
+                            destination: *result,
+                            lhs: *lhs,
+                            rhs: *rhs,
+                        },
+                        MirInstruction::Shr {
+                            result,
+                            lhs,
+                            rhs,
+                            signed,
+                        } => LirInstruction::Shr {
+                            destination: *result,
+                            lhs: *lhs,
+                            rhs: *rhs,
+                            signed: *signed,
                         },
                         MirInstruction::Compare {
                             result,

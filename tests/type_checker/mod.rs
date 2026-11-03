@@ -20,6 +20,27 @@ fn infers_numeric_literal_types_by_value() {
 }
 
 #[test]
+fn requires_integer_operands_for_bitwise_operators() {
+    let valid = parse(tokenize(
+        "mask :: fn (value : f64) u64 { (value as u64) & 255 } \
+         shift :: fn (value : u64, count : u64) u64 { value << count } \
+         invert :: fn (value : u8) u8 { ~value }"
+            .chars(),
+    ));
+    check(&valid).unwrap();
+
+    let float_and = parse(tokenize(
+        "bad :: fn (value : f64) f64 { value & 1.0 }".chars(),
+    ));
+    assert!(check(&float_and).is_err());
+
+    let float_not = parse(tokenize(
+        "bad :: fn (value : f64) f64 { ~value }".chars(),
+    ));
+    assert!(check(&float_not).is_err());
+}
+
+#[test]
 fn module_level_variables_and_constants_are_visible_in_functions() {
     let valid = parse(tokenize(
         "answer := 42 limit : i32 = 100 origin :: 0 \

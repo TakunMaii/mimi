@@ -2149,6 +2149,35 @@ fn infer_expression(
             infer_expression(rhs, scopes, functions, structs, Some(DataType::Bool))?;
             Ok(DataType::Bool)
         }
+        Expression::BitAnd(lhs, rhs)
+        | Expression::BitOr(lhs, rhs)
+        | Expression::BitXor(lhs, rhs)
+        | Expression::ShiftLeft(lhs, rhs)
+        | Expression::ShiftRight(lhs, rhs) => {
+            let lhs_type = infer_expression(lhs, scopes, functions, structs, expected)?;
+            let rhs_type = infer_expression(rhs, scopes, functions, structs, None)?;
+            if !lhs_type.is_integer() || !rhs_type.is_integer() {
+                return Err(error(
+                    "bitwise and shift operators require integer operands",
+                ));
+            }
+            let shifting =
+                matches!(expression, Expression::ShiftLeft(_, _) | Expression::ShiftRight(_, _));
+            let result_type = if shifting {
+                lhs_type
+            } else {
+                common_numeric_type(lhs_type, rhs_type).unwrap_or(lhs_type)
+            };
+            require_compatible(result_type, expected)?;
+            Ok(result_type)
+        }
+        Expression::BitNot(value) => {
+            let value_type = infer_expression(value, scopes, functions, structs, expected)?;
+            if !value_type.is_integer() {
+                return Err(error("'~' requires an integer operand"));
+            }
+            Ok(value_type)
+        }
         Expression::If {
             condition,
             then_branch,

@@ -1,5 +1,53 @@
 use crate::lexer::Token;
 
+/// Parser token cursor. Tokens can be pushed back so a type-context `>>` can
+/// be split into the two `>` tokens that close nested generic applications.
+#[derive(Clone)]
+pub(crate) struct ParserTokens {
+    tokens: Vec<Token>,
+    index: usize,
+    pending: Vec<Token>,
+}
+
+impl Iterator for ParserTokens {
+    type Item = Token;
+
+    fn next(&mut self) -> Option<Token> {
+        ParserTokens::next(self)
+    }
+}
+
+impl ParserTokens {
+    fn new(tokens: Vec<Token>) -> Self {
+        Self {
+            tokens,
+            index: 0,
+            pending: Vec::new(),
+        }
+    }
+
+    fn peek(&self) -> Option<&Token> {
+        self.pending
+            .last()
+            .or_else(|| self.tokens.get(self.index))
+    }
+
+    fn next(&mut self) -> Option<Token> {
+        if let Some(token) = self.pending.pop() {
+            return Some(token);
+        }
+        let token = self.tokens.get(self.index).cloned();
+        if token.is_some() {
+            self.index += 1;
+        }
+        token
+    }
+
+    fn push_back(&mut self, token: Token) {
+        self.pending.push(token);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum DataType {
     U8,
@@ -63,6 +111,12 @@ pub(crate) enum Expression {
     GreaterThanOrEqual(Box<Expression>, Box<Expression>),
     And(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
+    BitAnd(Box<Expression>, Box<Expression>),
+    BitOr(Box<Expression>, Box<Expression>),
+    BitXor(Box<Expression>, Box<Expression>),
+    BitNot(Box<Expression>),
+    ShiftLeft(Box<Expression>, Box<Expression>),
+    ShiftRight(Box<Expression>, Box<Expression>),
     If {
         condition: Box<Expression>,
         then_branch: Box<Expression>,
@@ -126,6 +180,11 @@ enum BinaryOperator {
     GreaterThanOrEqual,
     And,
     Or,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -296,7 +355,7 @@ pub(crate) enum Pattern {
 
 #[cfg(test)]
 pub(crate) fn parse(tokens: Vec<Token>) -> Vec<ASTNode> {
-    let mut tokens = tokens.into_iter().peekable();
+    let mut tokens = ParserTokens::new(tokens);
     let mut nodes = vec![];
 
     while let Some(token) = tokens.next() {
@@ -311,12 +370,12 @@ pub(crate) fn parse_spanned(
     source_len: usize,
 ) -> Result<Vec<ASTNode>, ParseError> {
     let token_count = input.len();
-    let mut tokens = input
-        .iter()
-        .map(|token| token.token.clone())
-        .collect::<Vec<_>>()
-        .into_iter()
-        .peekable();
+    let mut tokens = ParserTokens::new(
+        input
+            .iter()
+            .map(|token| token.token.clone())
+            .collect::<Vec<_>>(),
+    );
     let mut nodes = Vec::new();
 
     while let Some(token) = tokens.next() {
@@ -367,9 +426,7 @@ pub(crate) fn parse_spanned(
     Ok(nodes)
 }
 
-fn parse_statement_token<I>(token: Token, tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_statement_token(token: Token, tokens: &mut ParserTokens) -> ASTNode
 {
     match token {
         Token::Pub => ASTNode::Public(Box::new(parse_statement_token(
@@ -401,9 +458,7 @@ where
     }
 }
 
-fn parse_external_function<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_external_function(tokens: &mut ParserTokens) -> ASTNode
 {
     let name = match tokens.next() {
         Some(Token::Identifier(name)) => name,
@@ -456,9 +511,7 @@ where
     }
 }
 
-fn parse_block_expression<I>(tokens: &mut std::iter::Peekable<I>) -> Expression
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_block_expression(tokens: &mut ParserTokens) -> Expression
 {
     assert!(
         matches!(tokens.next(), Some(Token::LeftBrace)),
@@ -467,9 +520,7 @@ where
     Expression::Block(parse_block(tokens))
 }
 
-fn parse_if<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_if(tokens: &mut ParserTokens) -> ASTNode
 {
     if let Some((variant, binding)) = peek_variant_pattern(tokens) {
         tokens.next();
@@ -517,9 +568,7 @@ where
     }
 }
 
-fn peek_variant_pattern<I>(tokens: &std::iter::Peekable<I>) -> Option<(String, Option<String>)>
-where
-    I: Iterator<Item = Token> + Clone,
+fn peek_variant_pattern(tokens: &ParserTokens) -> Option<(String, Option<String>)>
 {
     let mut lookahead = tokens.clone();
     let variant = match lookahead.next()? {
@@ -542,9 +591,7 @@ where
     matches!(lookahead.next(), Some(Token::Colon)).then_some((variant, binding))
 }
 
-fn parse_match<I>(tokens: &mut std::iter::Peekable<I>) -> Expression
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_match(tokens: &mut ParserTokens) -> Expression
 {
     let value = parse_expression(tokens, 0);
     assert!(
@@ -596,9 +643,7 @@ where
     }
 }
 
-fn parse_while<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_while(tokens: &mut ParserTokens) -> ASTNode
 {
     let condition = parse_block_condition(tokens);
     ASTNode::While {
@@ -607,9 +652,7 @@ where
     }
 }
 
-fn parse_do_while<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_do_while(tokens: &mut ParserTokens) -> ASTNode
 {
     let body = parse_block_expression(tokens);
     assert!(
@@ -620,9 +663,7 @@ where
     ASTNode::DoWhile { body, condition }
 }
 
-fn parse_for<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_for(tokens: &mut ParserTokens) -> ASTNode
 {
     let binding = match tokens.next() {
         Some(Token::Identifier(name)) => name,
@@ -665,18 +706,14 @@ where
     }
 }
 
-fn parse_loop<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_loop(tokens: &mut ParserTokens) -> ASTNode
 {
     ASTNode::Loop {
         body: parse_block_expression(tokens),
     }
 }
 
-fn parse_defer<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_defer(tokens: &mut ParserTokens) -> ASTNode
 {
     ASTNode::Defer {
         body: if matches!(tokens.peek(), Some(Token::LeftBrace)) {
@@ -687,9 +724,7 @@ where
     }
 }
 
-fn parse_if_expression<I>(tokens: &mut std::iter::Peekable<I>) -> Expression
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_if_expression(tokens: &mut ParserTokens) -> Expression
 {
     let condition = parse_block_condition(tokens);
     let then_branch = parse_block_expression(tokens);
@@ -705,9 +740,7 @@ where
     }
 }
 
-fn parse_statement_after_name<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_statement_after_name(name: String, tokens: &mut ParserTokens) -> ASTNode
 {
     let (node_kind, data_type) = match tokens.next() {
         Some(Token::Equal) => (0, None),
@@ -774,9 +807,7 @@ where
     }
 }
 
-fn parse_tuple_destructuring<I>(first: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_tuple_destructuring(first: String, tokens: &mut ParserTokens) -> ASTNode
 {
     let mut names = vec![first];
     while matches!(tokens.peek(), Some(Token::Comma)) {
@@ -804,12 +835,10 @@ where
     }
 }
 
-fn parse_index_assignment_or_expression<I>(
+fn parse_index_assignment_or_expression(
     name: String,
-    tokens: &mut std::iter::Peekable<I>,
+    tokens: &mut ParserTokens,
 ) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
 {
     let target = parse_expression_from(Token::Identifier(name), tokens, 0);
     if !matches!(tokens.peek(), Some(Token::Equal)) {
@@ -832,9 +861,7 @@ where
     }
 }
 
-fn parse_import<I>(alias: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_import(alias: String, tokens: &mut ParserTokens) -> ASTNode
 {
     assert!(
         matches!(tokens.next(), Some(Token::At)),
@@ -859,9 +886,7 @@ where
     ASTNode::Import { alias, path }
 }
 
-fn parse_c_import<I>(alias: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_c_import(alias: String, tokens: &mut ParserTokens) -> ASTNode
 {
     assert!(matches!(tokens.next(), Some(Token::At)));
     assert!(
@@ -883,9 +908,7 @@ where
     ASTNode::CImport { alias, path }
 }
 
-fn parse_c_define<I>(_alias: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_c_define(_alias: String, tokens: &mut ParserTokens) -> ASTNode
 {
     assert!(matches!(tokens.next(), Some(Token::At)));
     assert!(matches!(tokens.next(), Some(Token::Identifier(name)) if name == "cDefine"));
@@ -907,9 +930,7 @@ where
     ASTNode::CDefine { name, value }
 }
 
-fn parse_function<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_function(name: String, tokens: &mut ParserTokens) -> ASTNode
 {
     assert!(
         matches!(tokens.next(), Some(Token::LeftParen)),
@@ -949,9 +970,7 @@ where
     }
 }
 
-fn parse_struct_definition<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_struct_definition(name: String, tokens: &mut ParserTokens) -> ASTNode
 {
     let parameters = parse_generic_parameters(tokens);
     assert!(
@@ -1038,9 +1057,7 @@ where
     }
 }
 
-fn struct_member_starts_method<I>(tokens: &std::iter::Peekable<I>) -> bool
-where
-    I: Iterator<Item = Token> + Clone,
+fn struct_member_starts_method(tokens: &ParserTokens) -> bool
 {
     let mut lookahead = tokens.clone();
     matches!(lookahead.next(), Some(Token::Identifier(_)))
@@ -1051,9 +1068,7 @@ where
         && matches!(lookahead.next(), Some(Token::Fn))
 }
 
-fn parse_enum_definition<I>(name: String, tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_enum_definition(name: String, tokens: &mut ParserTokens) -> ASTNode
 {
     let parameters = parse_generic_parameters(tokens);
     assert!(
@@ -1092,9 +1107,7 @@ where
     }
 }
 
-fn parse_generic_parameters<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<String>
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_generic_parameters(tokens: &mut ParserTokens) -> Vec<String>
 {
     if !matches!(tokens.peek(), Some(Token::LessThan)) {
         return Vec::new();
@@ -1112,6 +1125,10 @@ where
         match tokens.next() {
             Some(Token::Comma) => continue,
             Some(Token::GreaterThan) => break,
+            Some(Token::ShiftRight) => {
+                tokens.push_back(Token::GreaterThan);
+                break;
+            }
             _ => panic!("expected ',' or '>' after generic parameter"),
         }
     }
@@ -1139,9 +1156,7 @@ fn parse_data_type(name: &str) -> DataType {
     }
 }
 
-fn parse_named_type<I>(first: String, tokens: &mut std::iter::Peekable<I>) -> DataType
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_named_type(first: String, tokens: &mut ParserTokens) -> DataType
 {
     let mut name = first;
     while matches!(tokens.peek(), Some(Token::Dot)) {
@@ -1168,9 +1183,7 @@ where
     data_type
 }
 
-fn parse_generic_arguments<I>(tokens: &mut std::iter::Peekable<I>) -> Option<Vec<GenericArgument>>
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_generic_arguments(tokens: &mut ParserTokens) -> Option<Vec<GenericArgument>>
 {
     if !matches!(tokens.next(), Some(Token::LessThan)) {
         return None;
@@ -1203,6 +1216,10 @@ where
         match tokens.next()? {
             Token::Comma => continue,
             Token::GreaterThan => return Some(arguments),
+            Token::ShiftRight => {
+                tokens.push_back(Token::GreaterThan);
+                return Some(arguments);
+            }
             _ => return None,
         }
     }
@@ -1377,17 +1394,13 @@ fn parse_generic_argument_encoding(value: &str) -> Option<GenericArgument> {
     }
 }
 
-fn parse_type<I>(tokens: &mut std::iter::Peekable<I>) -> DataType
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_type(tokens: &mut ParserTokens) -> DataType
 {
     let first = tokens.next().expect("expected type");
     parse_type_from(first, tokens)
 }
 
-fn parse_type_from<I>(first: Token, tokens: &mut std::iter::Peekable<I>) -> DataType
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_type_from(first: Token, tokens: &mut ParserTokens) -> DataType
 {
     if matches!(first, Token::LeftParen) {
         let mut elements = Vec::new();
@@ -1465,41 +1478,33 @@ where
     }
 }
 
-fn parse_expression<I>(tokens: &mut std::iter::Peekable<I>, min_precedence: u8) -> Expression
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_expression(tokens: &mut ParserTokens, min_precedence: u8) -> Expression
 {
     let first = tokens.next().expect("expected an expression");
     parse_expression_from_mode(first, tokens, min_precedence, true)
 }
 
-fn parse_block_condition<I>(tokens: &mut std::iter::Peekable<I>) -> Expression
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_block_condition(tokens: &mut ParserTokens) -> Expression
 {
     let first = tokens.next().expect("expected an expression");
     parse_expression_from_mode(first, tokens, 0, false)
 }
 
-fn parse_expression_from<I>(
+fn parse_expression_from(
     first: Token,
-    tokens: &mut std::iter::Peekable<I>,
+    tokens: &mut ParserTokens,
     min_precedence: u8,
 ) -> Expression
-where
-    I: Iterator<Item = Token> + Clone,
 {
     parse_expression_from_mode(first, tokens, min_precedence, true)
 }
 
-fn parse_expression_from_mode<I>(
+fn parse_expression_from_mode(
     first: Token,
-    tokens: &mut std::iter::Peekable<I>,
+    tokens: &mut ParserTokens,
     min_precedence: u8,
     allow_struct_literal: bool,
 ) -> Expression
-where
-    I: Iterator<Item = Token> + Clone,
 {
     let mut lhs = match first {
         Token::At => {
@@ -1536,25 +1541,31 @@ where
         Token::Minus => Expression::Negate(Box::new(parse_expression_from_mode(
             tokens.next().expect("expected an expression"),
             tokens,
-            7,
+            11,
             allow_struct_literal,
         ))),
         Token::Bang => Expression::Not(Box::new(parse_expression_from_mode(
             tokens.next().expect("expected an expression"),
             tokens,
-            7,
+            11,
+            allow_struct_literal,
+        ))),
+        Token::Tilde => Expression::BitNot(Box::new(parse_expression_from_mode(
+            tokens.next().expect("expected an expression"),
+            tokens,
+            11,
             allow_struct_literal,
         ))),
         Token::Ampersand => Expression::AddressOf(Box::new(parse_expression_from_mode(
             tokens.next().expect("expected an expression"),
             tokens,
-            7,
+            11,
             allow_struct_literal,
         ))),
         Token::Star => Expression::Dereference(Box::new(parse_expression_from_mode(
             tokens.next().expect("expected an expression"),
             tokens,
-            7,
+            11,
             allow_struct_literal,
         ))),
         Token::LeftParen => {
@@ -1753,7 +1764,7 @@ where
             continue;
         }
         if matches!(tokens.peek(), Some(Token::As)) {
-            let precedence = 7;
+            let precedence = 11;
             if precedence < min_precedence {
                 break;
             }
@@ -1774,11 +1785,16 @@ where
             Some(Token::LessThanOrEqual) => (4, BinaryOperator::LessThanOrEqual),
             Some(Token::GreaterThan) => (4, BinaryOperator::GreaterThan),
             Some(Token::GreaterThanOrEqual) => (4, BinaryOperator::GreaterThanOrEqual),
-            Some(Token::Plus) => (5, BinaryOperator::Add),
-            Some(Token::Minus) => (5, BinaryOperator::Subtract),
-            Some(Token::Star) => (6, BinaryOperator::Multiply),
-            Some(Token::Slash) => (6, BinaryOperator::Divide),
-            Some(Token::Percent) => (6, BinaryOperator::Remainder),
+            Some(Token::Pipe) => (5, BinaryOperator::BitOr),
+            Some(Token::Caret) => (6, BinaryOperator::BitXor),
+            Some(Token::Ampersand) => (7, BinaryOperator::BitAnd),
+            Some(Token::ShiftLeft) => (8, BinaryOperator::ShiftLeft),
+            Some(Token::ShiftRight) => (8, BinaryOperator::ShiftRight),
+            Some(Token::Plus) => (9, BinaryOperator::Add),
+            Some(Token::Minus) => (9, BinaryOperator::Subtract),
+            Some(Token::Star) => (10, BinaryOperator::Multiply),
+            Some(Token::Slash) => (10, BinaryOperator::Divide),
+            Some(Token::Percent) => (10, BinaryOperator::Remainder),
             _ => break,
         };
         if precedence < min_precedence {
@@ -1809,15 +1825,18 @@ where
             }
             BinaryOperator::And => Expression::And(Box::new(lhs), Box::new(rhs)),
             BinaryOperator::Or => Expression::Or(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::BitAnd => Expression::BitAnd(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::BitOr => Expression::BitOr(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::BitXor => Expression::BitXor(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::ShiftLeft => Expression::ShiftLeft(Box::new(lhs), Box::new(rhs)),
+            BinaryOperator::ShiftRight => Expression::ShiftRight(Box::new(lhs), Box::new(rhs)),
         };
     }
 
     lhs
 }
 
-fn generic_literal_follows<I>(tokens: &std::iter::Peekable<I>) -> bool
-where
-    I: Iterator<Item = Token> + Clone,
+fn generic_literal_follows(tokens: &ParserTokens) -> bool
 {
     let mut lookahead = tokens.clone();
     if parse_generic_arguments(&mut lookahead).is_none() {
@@ -1826,9 +1845,7 @@ where
     brace_starts_struct_literal(&lookahead)
 }
 
-fn parse_pointer_assignment_or_expression<I>(tokens: &mut std::iter::Peekable<I>) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_pointer_assignment_or_expression(tokens: &mut ParserTokens) -> ASTNode
 {
     let target = parse_expression_from(Token::Star, tokens, 0);
     if !matches!(tokens.peek(), Some(Token::Equal)) {
@@ -1845,12 +1862,10 @@ where
     }
 }
 
-fn parse_member_assignment_or_expression<I>(
+fn parse_member_assignment_or_expression(
     name: String,
-    tokens: &mut std::iter::Peekable<I>,
+    tokens: &mut ParserTokens,
 ) -> ASTNode
-where
-    I: Iterator<Item = Token> + Clone,
 {
     let target = parse_expression_from(Token::Identifier(name), tokens, 0);
     if !matches!(tokens.peek(), Some(Token::Equal)) {
@@ -1873,9 +1888,7 @@ where
     }
 }
 
-fn parse_arguments<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<Expression>
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_arguments(tokens: &mut ParserTokens) -> Vec<Expression>
 {
     assert!(matches!(tokens.next(), Some(Token::LeftParen)));
     let mut arguments = Vec::new();
@@ -1894,9 +1907,7 @@ where
     arguments
 }
 
-fn parse_lambda<I>(tokens: &mut std::iter::Peekable<I>) -> Expression
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_lambda(tokens: &mut ParserTokens) -> Expression
 {
     assert!(
         matches!(tokens.next(), Some(Token::LeftParen)),
@@ -1932,9 +1943,7 @@ where
     }
 }
 
-fn brace_starts_struct_literal<I>(tokens: &std::iter::Peekable<I>) -> bool
-where
-    I: Iterator<Item = Token> + Clone,
+fn brace_starts_struct_literal(tokens: &ParserTokens) -> bool
 {
     let mut lookahead = tokens.clone();
     if !matches!(lookahead.next(), Some(Token::LeftBrace)) {
@@ -1947,12 +1956,10 @@ where
     }
 }
 
-fn parse_qualified_struct_literal<I>(
+fn parse_qualified_struct_literal(
     first: &str,
-    tokens: &mut std::iter::Peekable<I>,
+    tokens: &mut ParserTokens,
 ) -> Option<Expression>
-where
-    I: Iterator<Item = Token> + Clone,
 {
     let mut lookahead = tokens.clone();
     let mut segments = 0;
@@ -1983,9 +1990,7 @@ where
     })
 }
 
-fn parse_struct_fields<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<(String, Expression)>
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_struct_fields(tokens: &mut ParserTokens) -> Vec<(String, Expression)>
 {
     let mut fields = Vec::new();
     while !matches!(tokens.peek(), Some(Token::RightBrace)) {
@@ -2008,9 +2013,7 @@ where
     fields
 }
 
-fn parse_brace_expression<I>(tokens: &mut std::iter::Peekable<I>) -> Expression
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_brace_expression(tokens: &mut ParserTokens) -> Expression
 {
     if matches!(tokens.peek(), Some(Token::RightBrace)) {
         tokens.next();
@@ -2040,9 +2043,7 @@ where
     Expression::Block(parse_block(tokens))
 }
 
-fn parse_block<I>(tokens: &mut std::iter::Peekable<I>) -> Vec<ASTNode>
-where
-    I: Iterator<Item = Token> + Clone,
+fn parse_block(tokens: &mut ParserTokens) -> Vec<ASTNode>
 {
     let mut items = Vec::new();
 

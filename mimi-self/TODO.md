@@ -169,6 +169,8 @@ two consecutive stages.
 - [x] Use a trailing `if`/`else` as the enclosing block's value and accept
   function bodies in which every branch returns.
 - [ ] Lower module-level variables and constants in stage1.
+- [ ] Lex and lower bitwise and shift operators (`&`, `|`, `^`, `~`, `<<`, `>>`)
+  in stage1; the self-hosted lexer still rejects a single `|`.
 - [ ] Specialize generic structs in stage1: intern an instance per
   declaration and argument tag list (mirroring `enum_intern`), record
   parameter-to-tag captures on `StructType`, and resolve field tags through
