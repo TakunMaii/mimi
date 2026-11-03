@@ -1,21 +1,47 @@
+// Returns the exclusive end offset of a character literal starting at `start`
+// (which must point at the opening quote), or 0 when the literal is malformed.
+char_literal_end_raw :: fn (source : *u8, source_length : u64, start : u64) u64 {
+    index := start + 1
+    if index >= source_length { return 0 }
+    first := source[index]
+    if first == '\'' { return 0 }
+    if first == '\\' {
+        index = index + 1
+        if index >= source_length { return 0 }
+        escaped := source[index]
+        if escaped != '\\' && escaped != '\'' && escaped != '"' && escaped != 'n' && escaped != 'r' && escaped != 't' && escaped != '0' { return 0 }
+        index = index + 1
+    } else {
+        if first >= 128 { return 0 }
+        index = index + 1
+    }
+    if index >= source_length { return 0 }
+    if source[index] != '\'' { return 0 }
+    index + 1
+}
+
+pub char_literal_end :: fn (source : []u8, start : u64) u64 {
+    char_literal_end_raw(source.ptr, source.len, start)
+}
+
 pub next_token_raw :: fn (source : *u8, source_length : u64, cursor : u64) (u8, u64, u64) {
     index := cursor
     while index < source_length {
         byte := source[index]
-        if byte == 32 || byte == 9 || byte == 10 || byte == 13 {
+        if byte == ' ' || byte == '\t' || byte == '\n' || byte == '\r' {
             index = index + 1
         } else {
-            if byte == 47 && index + 1 < source_length && source[index + 1] == 47 {
+            if byte == '/' && index + 1 < source_length && source[index + 1] == '/' {
                 index = index + 2
                 while index < source_length && source[index] != 10 {
                     index = index + 1
                 }
             } else {
-                if byte == 47 && index + 1 < source_length && source[index + 1] == 42 {
+                if byte == '/' && index + 1 < source_length && source[index + 1] == '*' {
                     index = index + 2
                     closed := false
                     while index + 1 < source_length && !closed {
-                        if source[index] == 42 && source[index + 1] == 47 {
+                        if source[index] == '*' && source[index + 1] == '/' {
                             index = index + 2
                             closed = true
                         } else {
@@ -27,22 +53,22 @@ pub next_token_raw :: fn (source : *u8, source_length : u64, cursor : u64) (u8, 
                     }
                 } else {
                     start := index
-                    if byte == 34 {
+                    if byte == '"' {
                         index = index + 1
                         closed := false
                         while index < source_length && !closed {
-                            if source[index] == 92 {
+                            if source[index] == '\\' {
                                         if index + 1 >= source_length {
                                             return (255, index, index)
                                         }
                                         escaped := source[index + 1]
-                                        if escaped == 34 || escaped == 92 || escaped == 110 || escaped == 114 || escaped == 116 {
+                                        if escaped == '"' || escaped == '\\' || escaped == 'n' || escaped == 'r' || escaped == 't' {
                                             index = index + 2
                                         } else {
                                             return (255, index, index)
                                         }
                             } else {
-                                if source[index] == 34 {
+                                if source[index] == '"' {
                                     index = index + 1
                                     closed = true
                                 } else {
@@ -55,7 +81,7 @@ pub next_token_raw :: fn (source : *u8, source_length : u64, cursor : u64) (u8, 
                         }
                         return (3, start, index)
                     } else {
-                        if (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || byte == 95 || byte >= 128 {
+                        if (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') || byte == '_' || byte >= 128 {
                             if byte >= 128 {
                                 width := utf8_width_raw(source, source_length, index)
                                 if width == 0 || !utf8_identifier_start_raw(source, index, width) { return (255, index, index) }
@@ -65,7 +91,7 @@ pub next_token_raw :: fn (source : *u8, source_length : u64, cursor : u64) (u8, 
                             }
                             while index < source_length {
                                 next := source[index]
-                                if (next >= 65 && next <= 90) || (next >= 97 && next <= 122) || (next >= 48 && next <= 57) || next == 95 || next >= 128 {
+                                if (next >= 'A' && next <= 'Z') || (next >= 'a' && next <= 'z') || (next >= '0' && next <= '9') || next == '_' || next >= 128 {
                                     if next >= 128 {
                                         width := utf8_width_raw(source, source_length, index)
                                         if width == 0 || !utf8_identifier_continue_raw(source, index, width) { return (255, index, index) }
@@ -79,30 +105,35 @@ pub next_token_raw :: fn (source : *u8, source_length : u64, cursor : u64) (u8, 
                             }
                             return (identifier_kind_raw(source, start, index), start, index)
                         } else {
-                            if byte >= 48 && byte <= 57 {
+                            if byte >= '0' && byte <= '9' {
                                 previous := index
                                 after_member_dot := false
-                                while previous > 0 && (source[previous - 1] == 32 || source[previous - 1] == 9 || source[previous - 1] == 10 || source[previous - 1] == 13) {
+                                while previous > 0 && (source[previous - 1] == ' ' || source[previous - 1] == '\t' || source[previous - 1] == '\n' || source[previous - 1] == '\r') {
                                     previous = previous - 1
                                 }
-                                if previous > 0 && source[previous - 1] == 46 {
+                                if previous > 0 && source[previous - 1] == '.' {
                                     after_member_dot = true
                                 }
                                 index = index + 1
-                                while index < source_length && source[index] >= 48 && source[index] <= 57 {
+                                while index < source_length && source[index] >= '0' && source[index] <= '9' {
                                     index = index + 1
                                 }
-                                if !after_member_dot && index < source_length && source[index] == 46 && (index + 1 >= source_length || source[index + 1] != 46) {
+                                if !after_member_dot && index < source_length && source[index] == '.' && (index + 1 >= source_length || source[index + 1] != '.') {
                                     index = index + 1
-                                    while index < source_length && source[index] >= 48 && source[index] <= 57 {
+                                    while index < source_length && source[index] >= '0' && source[index] <= '9' {
                                         index = index + 1
                                     }
-                                    if index < source_length && source[index] == 46 && (index + 1 >= source_length || source[index + 1] != 46) {
+                                    if index < source_length && source[index] == '.' && (index + 1 >= source_length || source[index + 1] != '.') {
                                         return (255, index, index)
                                     }
                                 }
                                 return (2, start, index)
                             } else {
+                                if byte == '\'' {
+                                    end := char_literal_end_raw(source, source_length, index)
+                                    if end == 0 { return (255, index, index) }
+                                    return (2, start, end)
+                                }
                                 next_byte : u8 = 0
                                 if index + 1 < source_length {
                                     next_byte = source[index + 1]
@@ -150,6 +181,7 @@ pub lex_next :: fn (source : []u8, cursor : u64) LexResult {
 }
 
 pub error_code :: fn (source : []u8, cursor : u64) u8 {
+    if cursor < source.len && source[cursor] == '\'' && char_literal_end(source, cursor) == 0 { return 6 }
     index : u64 = 0
     in_string := false
     escaped := false
@@ -157,7 +189,7 @@ pub error_code :: fn (source : []u8, cursor : u64) u8 {
     while index < cursor && index < source.len {
         byte := source[index]
         if in_block_comment {
-            if byte == 42 && index + 1 < source.len && source[index + 1] == 47 {
+            if byte == '*' && index + 1 < source.len && source[index + 1] == '/' {
                 in_block_comment = false
                 index = index + 2
             } else {
@@ -169,28 +201,28 @@ pub error_code :: fn (source : []u8, cursor : u64) u8 {
                     escaped = false
                     index = index + 1
                 } else {
-                    if byte == 92 {
+                    if byte == '\\' {
                         escaped = true
                         index = index + 1
                     } else {
-                        if byte == 34 {
+                        if byte == '"' {
                             in_string = false
                         }
                         index = index + 1
                     }
                 }
             } else {
-                if byte == 34 {
+                if byte == '"' {
                     in_string = true
                     index = index + 1
                 } else {
-                    if byte == 47 && index + 1 < source.len && source[index + 1] == 47 {
+                    if byte == '/' && index + 1 < source.len && source[index + 1] == '/' {
                         index = index + 2
                         while index < cursor && index < source.len && source[index] != 10 {
                             index = index + 1
                         }
                     } else {
-                        if byte == 47 && index + 1 < source.len && source[index + 1] == 42 {
+                        if byte == '/' && index + 1 < source.len && source[index + 1] == '*' {
                             in_block_comment = true
                             index = index + 2
                         } else {
@@ -205,10 +237,10 @@ pub error_code :: fn (source : []u8, cursor : u64) u8 {
     if in_string {
         if escaped { return 4 }
         if cursor >= source.len { return 3 }
-        if source[cursor] == 92 {
+        if source[cursor] == '\\' {
             if cursor + 1 >= source.len { return 4 }
             value := source[cursor + 1]
-            if value != 34 && value != 92 && value != 110 && value != 114 && value != 116 { return 4 }
+            if value != '"' && value != '\\' && value != 'n' && value != 'r' && value != 't' { return 4 }
         }
         return 3
     }
@@ -224,6 +256,7 @@ pub error_message :: fn (source : []u8, cursor : u64) []u8 {
     if code == 3 { return "unterminated string literal" }
     if code == 4 { return "invalid string escape" }
     if code == 5 { return "invalid UTF-8 sequence in identifier" }
+    if code == 6 { return "malformed character literal" }
     "unexpected character"
 }
 
@@ -234,6 +267,14 @@ pub error_span :: fn (source : []u8, cursor : u64) (u64, u64) {
         return (source.len, source.len)
     }
     if code == 5 { return (cursor, cursor + 1) }
+    if code == 6 {
+        end := cursor + 1
+        while end < source.len && end < cursor + 4 && source[end] != '\'' {
+            end = end + 1
+        }
+        if end < source.len && source[end] == '\'' { end = end + 1 }
+        return (cursor, end)
+    }
     if code == 4 {
         end := cursor + 2
         if end > source.len { end = source.len }
@@ -249,7 +290,7 @@ pub error_span :: fn (source : []u8, cursor : u64) (u64, u64) {
         while index < source.len {
             byte := source[index]
             if in_block_comment {
-                if byte == 42 && index + 1 < source.len && source[index + 1] == 47 {
+                if byte == '*' && index + 1 < source.len && source[index + 1] == '/' {
                     in_block_comment = false
                     index = index + 2
                 } else {
@@ -261,25 +302,25 @@ pub error_span :: fn (source : []u8, cursor : u64) (u64, u64) {
                         escaped = false
                         index = index + 1
                     } else {
-                        if byte == 92 {
+                        if byte == '\\' {
                             escaped = true
                             index = index + 1
                         } else {
-                            if byte == 34 { in_string = false }
+                            if byte == '"' { in_string = false }
                             index = index + 1
                         }
                     }
                 } else {
-                    if byte == 34 {
+                    if byte == '"' {
                         string_start = index
                         in_string = true
                         index = index + 1
                     } else {
-                        if byte == 47 && index + 1 < source.len && source[index + 1] == 47 {
+                        if byte == '/' && index + 1 < source.len && source[index + 1] == '/' {
                             index = index + 2
                             while index < source.len && source[index] != 10 { index = index + 1 }
                         } else {
-                            if byte == 47 && index + 1 < source.len && source[index + 1] == 42 {
+                            if byte == '/' && index + 1 < source.len && source[index + 1] == '*' {
                                 comment_start = index
                                 in_block_comment = true
                                 index = index + 2
@@ -419,7 +460,7 @@ pub decoded_string_len :: fn (source : []u8, start : u64, end : u64) u64 {
     index := start + 1
     length : u64 = 0
     while index + 1 < end {
-        if source[index] == 92 {
+        if source[index] == '\\' {
             index = index + 2
         } else {
             index = index + 1
@@ -433,7 +474,7 @@ pub decoded_string_len_raw :: fn (source : *u8, start : u64, end : u64) u64 {
     index := start + 1
     length : u64 = 0
     while index + 1 < end {
-        if source[index] == 92 { index = index + 2 } else { index = index + 1 }
+        if source[index] == '\\' { index = index + 2 } else { index = index + 1 }
         length = length + 1
     }
     length
@@ -444,11 +485,11 @@ pub decoded_string_byte :: fn (source : []u8, start : u64, end : u64, position :
     decoded : u64 = 0
     while index + 1 < end {
         value := source[index]
-        if value == 92 {
+        if value == '\\' {
             escaped := source[index + 1]
-            if escaped == 110 { value = 10 } else {
-                if escaped == 114 { value = 13 } else {
-                    if escaped == 116 { value = 9 } else { value = escaped }
+            if escaped == 'n' { value = 10 } else {
+                if escaped == 'r' { value = 13 } else {
+                    if escaped == 't' { value = 9 } else { value = escaped }
                 }
             }
             index = index + 2
@@ -466,11 +507,11 @@ pub decoded_string_byte_raw :: fn (source : *u8, start : u64, end : u64, positio
     decoded : u64 = 0
     while index + 1 < end {
         value := source[index]
-        if value == 92 {
+        if value == '\\' {
             escaped := source[index + 1]
-            if escaped == 110 { value = 10 } else {
-                if escaped == 114 { value = 13 } else {
-                    if escaped == 116 { value = 9 } else { value = escaped }
+            if escaped == 'n' { value = 10 } else {
+                if escaped == 'r' { value = 13 } else {
+                    if escaped == 't' { value = 9 } else { value = escaped }
                 }
             }
             index = index + 2
@@ -512,19 +553,19 @@ identifier_kind_raw :: fn (source : *u8, start : u64, end : u64) u8 {
 }
 
 paired_kind :: fn (first : u8, second : u8) u8 {
-    if first == 61 && second == 61 { return 128 }
-    if first == 33 && second == 61 { return 129 }
-    if first == 60 && second == 61 { return 130 }
-    if first == 62 && second == 61 { return 131 }
-    if first == 38 && second == 38 { return 132 }
-    if first == 124 && second == 124 { return 133 }
-    if first == 61 && second == 62 { return 134 }
-    if first == 46 && second == 46 { return 135 }
+    if first == '=' && second == '=' { return 128 }
+    if first == '!' && second == '=' { return 129 }
+    if first == '<' && second == '=' { return 130 }
+    if first == '>' && second == '=' { return 131 }
+    if first == '&' && second == '&' { return 132 }
+    if first == '|' && second == '|' { return 133 }
+    if first == '=' && second == '>' { return 134 }
+    if first == '.' && second == '.' { return 135 }
     0
 }
 
 single_kind :: fn (byte : u8) u8 {
-    if byte == 44 || byte == 46 || byte == 58 || byte == 61 || byte == 60 || byte == 62 || byte == 38 || byte == 64 || byte == 33 || byte == 43 || byte == 45 || byte == 42 || byte == 47 || byte == 37 || byte == 40 || byte == 41 || byte == 123 || byte == 125 || byte == 91 || byte == 93 {
+    if byte == ',' || byte == '.' || byte == ':' || byte == '=' || byte == '<' || byte == '>' || byte == '&' || byte == '@' || byte == '!' || byte == '+' || byte == '-' || byte == '*' || byte == '/' || byte == '%' || byte == '(' || byte == ')' || byte == '{' || byte == '}' || byte == '[' || byte == ']' {
         return byte
     }
     0
@@ -870,16 +911,16 @@ pub parse_binding_header :: fn (source : []u8, storage : *ExpressionArena) *Bind
     name := next_token(source, 0)
     if name.0 != 1 { return mimi_buffer_empty() as *BindingHeader }
     colon := next_token(source, name.2)
-    if colon.0 != 58 { return mimi_buffer_empty() as *BindingHeader }
+    if colon.0 != ':' { return mimi_buffer_empty() as *BindingHeader }
     marker := next_token(source, colon.2)
     binding_kind : u64 = 0
     type_start : u64 = 0
     type_end : u64 = 0
     value_start : u64 = marker.2
-    if marker.0 == 58 {
+    if marker.0 == ':' {
         binding_kind = 2
     } else {
-        if marker.0 == 61 {
+        if marker.0 == '=' {
             binding_kind = 0
         } else {
             binding_kind = 1
@@ -891,9 +932,9 @@ pub parse_binding_header :: fn (source : []u8, storage : *ExpressionArena) *Bind
                 token := next_token(source, cursor)
                 if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *BindingHeader }
                 cursor = token.2
-                if token.0 == 91 { nesting = nesting + 1 } else {
-                    if token.0 == 93 && nesting > 0 { nesting = nesting - 1 } else {
-                        if token.0 == 61 && nesting == 0 {
+                if token.0 == '[' { nesting = nesting + 1 } else {
+                    if token.0 == ']' && nesting > 0 { nesting = nesting - 1 } else {
+                        if token.0 == '=' && nesting == 0 {
                             type_end = token.1
                             value_start = token.2
                             found_equal = true
@@ -997,7 +1038,7 @@ pub parse_defer_statement :: fn (source : []u8, storage : *ExpressionArena) *Sta
     if keyword.0 != 172 { return mimi_buffer_empty() as *StatementNode }
     next := next_token(source, keyword.2)
     if next.0 == 0 { return mimi_buffer_empty() as *StatementNode }
-    if next.0 == 123 {
+    if next.0 == '{' {
         body := parse_block_span(source[next.1:source.len], next.1, storage)
         if block_node_is_null(body) || next_token(source, body.end).0 != 0 { return mimi_buffer_empty() as *StatementNode }
         if mimi_arena_allocate(storage, 104, 8) == 0 { return mimi_buffer_empty() as *StatementNode }
@@ -1050,22 +1091,22 @@ pub parse_assignment_statement :: fn (source : []u8, storage : *ExpressionArena)
         if token.0 == 0 { break }
         if token.0 == 255 { return mimi_buffer_empty() as *StatementNode }
         cursor = token.2
-        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-            if token.0 == 41 {
+        if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+            if token.0 == ')' {
                 if paren_depth == 0 { return mimi_buffer_empty() as *StatementNode }
                 paren_depth = paren_depth - 1
             } else {
-                if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-                    if token.0 == 93 {
+                if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+                    if token.0 == ']' {
                         if bracket_depth == 0 { return mimi_buffer_empty() as *StatementNode }
                         bracket_depth = bracket_depth - 1
                     } else {
-                        if token.0 == 123 { brace_depth = brace_depth + 1 } else {
-                            if token.0 == 125 {
+                        if token.0 == '{' { brace_depth = brace_depth + 1 } else {
+                            if token.0 == '}' {
                                 if brace_depth == 0 { return mimi_buffer_empty() as *StatementNode }
                                 brace_depth = brace_depth - 1
                             } else {
-                                if token.0 == 61 && paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
+                                if token.0 == '=' && paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
                                     if equal_start != source.len { return mimi_buffer_empty() as *StatementNode }
                                     equal_start = token.1
                                     equal_end = token.2
@@ -1146,12 +1187,12 @@ pub parse_tuple_binding :: fn (source : []u8, storage : *ExpressionArena) *Tuple
         last = item
         count = count + 1
         separator := next_token(source, name.2)
-        if separator.0 == 44 {
+        if separator.0 == ',' {
             cursor = separator.2
         } else {
-            if separator.0 != 58 { return mimi_buffer_empty() as *TupleBindingNode }
+            if separator.0 != ':' { return mimi_buffer_empty() as *TupleBindingNode }
             equal := next_token(source, separator.2)
-            if equal.0 != 61 { return mimi_buffer_empty() as *TupleBindingNode }
+            if equal.0 != '=' { return mimi_buffer_empty() as *TupleBindingNode }
             value_start = equal.2
             break
         }
@@ -1182,7 +1223,7 @@ pub parse_function_header :: fn (source : []u8, storage : *ExpressionArena) *Fun
     colon2 := next_token(source, colon1.2)
     function_keyword := next_token(source, colon2.2)
     open := next_token(source, function_keyword.2)
-    if colon1.0 != 58 || colon2.0 != 58 || function_keyword.0 != 160 || open.0 != 40 {
+    if colon1.0 != ':' || colon2.0 != ':' || function_keyword.0 != 160 || open.0 != '(' {
         return mimi_buffer_empty() as *FunctionHeader
     }
     parameters_start := open.2
@@ -1192,8 +1233,8 @@ pub parse_function_header :: fn (source : []u8, storage : *ExpressionArena) *Fun
         token := next_token(source, cursor)
         if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *FunctionHeader }
         cursor = token.2
-        if token.0 == 40 { nesting = nesting + 1 } else {
-            if token.0 == 41 { nesting = nesting - 1 }
+        if token.0 == '(' { nesting = nesting + 1 } else {
+            if token.0 == ')' { nesting = nesting - 1 }
         }
     }
     if nesting != 0 { return mimi_buffer_empty() as *FunctionHeader }
@@ -1202,21 +1243,21 @@ pub parse_function_header :: fn (source : []u8, storage : *ExpressionArena) *Fun
     return_type_start : u64 = return_type.1
     return_type_end : u64 = return_type.2
     body_open := return_type
-    if return_type.0 != 123 {
+    if return_type.0 != '{' {
         if return_type.0 == 0 || return_type.0 == 255 { return mimi_buffer_empty() as *FunctionHeader }
         type_end := return_type.2
         type_cursor := return_type.2
         while type_cursor < source.len {
             token := next_token(source, type_cursor)
             if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *FunctionHeader }
-            if token.0 == 123 {
+            if token.0 == '{' {
                 body_open = token
                 break
             }
             type_end = token.2
             type_cursor = token.2
         }
-        if body_open.0 != 123 { return mimi_buffer_empty() as *FunctionHeader }
+        if body_open.0 != '{' { return mimi_buffer_empty() as *FunctionHeader }
         return_type_end = type_end
         parsed_return_type := parse_type(source[return_type_start:return_type_end], storage)
         if expression_is_null(parsed_return_type) { return mimi_buffer_empty() as *FunctionHeader }
@@ -1244,7 +1285,7 @@ pub block_node_is_null :: fn (block : *BlockNode) bool {
 
 pub parse_block_span :: fn (source : []u8, offset : u64, storage : *ExpressionArena) *BlockNode {
     opening := next_token(source, 0)
-    if opening.0 != 123 { return mimi_buffer_empty() as *BlockNode }
+    if opening.0 != '{' { return mimi_buffer_empty() as *BlockNode }
     cursor := opening.2
     depth : u64 = 1
     close_start : u64 = 0
@@ -1253,8 +1294,8 @@ pub parse_block_span :: fn (source : []u8, offset : u64, storage : *ExpressionAr
         token := next_token(source, cursor)
         if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *BlockNode }
         cursor = token.2
-        if token.0 == 123 { depth = depth + 1 } else {
-            if token.0 == 125 {
+        if token.0 == '{' { depth = depth + 1 } else {
+            if token.0 == '}' {
                 depth = depth - 1
                 if depth == 0 {
                     close_start = token.1
@@ -1290,21 +1331,21 @@ pub parse_statement_block :: fn (source : []u8, offset : u64, storage : *Express
     last : *StatementNode = mimi_buffer_empty() as *StatementNode
     while cursor < closing {
         token := next_token(source, cursor)
-        if token.0 == 125 && token.1 == closing { break }
+        if token.0 == '}' && token.1 == closing { break }
         if token.0 == 0 || token.0 == 255 || token.2 > closing { return mimi_buffer_empty() as *BlockNode }
         at_top_level := paren_depth == 0 && bracket_depth == 0 && brace_depth == 0
         first_token := next_token(source, segment_start)
         starts_new := false
         if (previous_kind == 0 || can_end_expression(previous_kind)) && statement_starts_here(source, token) { starts_new = true }
-        if previous_kind == 125 && expression_starts_statement(token.0) { starts_new = true }
+        if previous_kind == '}' && expression_starts_statement(token.0) { starts_new = true }
         if can_end_expression(previous_kind) && starts_expression_atom(token.0) { starts_new = true }
-        if previous_kind == 93 && token.0 == 1 && !seen_equal {
+        if previous_kind == ']' && token.0 == 1 && !seen_equal {
             name := next_token(source, segment_start)
             colon := next_token(source, name.2)
             marker := next_token(source, colon.2)
-            if name.0 == 1 && colon.0 == 58 && marker.0 == 91 { starts_new = false }
+            if name.0 == 1 && colon.0 == ':' && marker.0 == '[' { starts_new = false }
         }
-        if previous_kind == 125 && token.0 == 169 && first_token.0 == 168 { starts_new = false }
+        if previous_kind == '}' && token.0 == 169 && first_token.0 == 168 { starts_new = false }
         if at_top_level && token.1 > segment_start && first_token.1 < token.1 && starts_new {
             previous := parse_statement_piece(source[segment_start:token.1], segment_start + offset, storage)
             if statement_node_is_null(previous) { return mimi_buffer_empty() as *BlockNode }
@@ -1316,19 +1357,19 @@ pub parse_statement_block :: fn (source : []u8, offset : u64, storage : *Express
         }
         cursor = token.2
         previous_kind = token.0
-        if at_top_level && token.0 == 61 { seen_equal = true }
-        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-            if token.0 == 41 {
+        if at_top_level && token.0 == '=' { seen_equal = true }
+        if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+            if token.0 == ')' {
                 if paren_depth == 0 { return mimi_buffer_empty() as *BlockNode }
                 paren_depth = paren_depth - 1
             } else {
-                if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-                    if token.0 == 93 {
+                if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+                    if token.0 == ']' {
                         if bracket_depth == 0 { return mimi_buffer_empty() as *BlockNode }
                         bracket_depth = bracket_depth - 1
                     } else {
-                        if token.0 == 123 { brace_depth = brace_depth + 1 } else {
-                            if token.0 == 125 {
+                        if token.0 == '{' { brace_depth = brace_depth + 1 } else {
+                            if token.0 == '}' {
                                 if brace_depth == 0 { return mimi_buffer_empty() as *BlockNode }
                                 brace_depth = brace_depth - 1
                             }
@@ -1352,25 +1393,25 @@ pub parse_statement_block :: fn (source : []u8, offset : u64, storage : *Express
 }
 
 expression_starts_statement :: fn (kind : u8) bool {
-    kind == 1 || kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 40 || kind == 42 || kind == 38 || kind == 45 || kind == 33
+    kind == 1 || kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == '(' || kind == '*' || kind == '&' || kind == '-' || kind == '!'
 }
 
 can_end_expression :: fn (kind : u8) bool {
-    kind == 1 || kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 41 || kind == 93 || kind == 125
+    kind == 1 || kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == ')' || kind == ']' || kind == '}'
 }
 
 starts_expression_atom :: fn (kind : u8) bool {
-    kind == 1 || kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 33 || kind == 38
+    kind == 1 || kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == '!' || kind == '&'
 }
 
 statement_starts_here :: fn (source : []u8, token : (u8, u64, u64)) bool {
     if token.0 == 163 || token.0 == 164 || token.0 == 168 || token.0 == 169 || token.0 == 170 || token.0 == 171 || token.0 == 172 || token.0 == 175 || token.0 == 176 || token.0 == 177 { return true }
     if token.0 != 1 { return false }
     separator := next_token(source, token.2)
-    if separator.0 == 58 {
+    if separator.0 == ':' {
         return true
     }
-    separator.0 == 61 || separator.0 == 44
+    separator.0 == '=' || separator.0 == ','
 }
 
 parse_statement_piece :: fn (source : []u8, offset : u64, storage : *ExpressionArena) *StatementNode {
@@ -1413,7 +1454,7 @@ parse_statement_piece :: fn (source : []u8, offset : u64, storage : *ExpressionA
             statement = parse_defer_statement(source, storage)
         } else {
             tuple_value : *TupleBindingNode = mimi_buffer_empty() as *TupleBindingNode
-            if next_token(source, first.2).0 == 44 { tuple_value = parse_tuple_binding(source, storage) }
+            if next_token(source, first.2).0 == ',' { tuple_value = parse_tuple_binding(source, storage) }
             if !tuple_binding_is_null(tuple_value) {
                 statement = allocate_control_statement(storage, 309, tuple_value.start, tuple_value.end)
                 statement.tuple_binding = tuple_value
@@ -1695,12 +1736,12 @@ parse_if_statement_at :: fn (source : []u8, offset : u64, storage : *ExpressionA
         token := next_token(source, cursor)
         if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *IfNode }
         cursor = token.2
-        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-            if token.0 == 41 {
+        if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+            if token.0 == ')' {
                 if paren_depth == 0 { return mimi_buffer_empty() as *IfNode }
                 paren_depth = paren_depth - 1
             } else {
-                if token.0 == 123 && paren_depth == 0 {
+                if token.0 == '{' && paren_depth == 0 {
                     condition_end = token.1
                     block_start = token.1
                     found_block = true
@@ -1721,7 +1762,7 @@ parse_if_statement_at :: fn (source : []u8, offset : u64, storage : *ExpressionA
     if remainder.0 != 0 {
         if remainder.0 != 165 { return mimi_buffer_empty() as *IfNode }
         else_start := next_token(source, remainder.2)
-        if else_start.0 == 123 {
+        if else_start.0 == '{' {
             else_branch = parse_block_span(source[else_start.1:source.len], offset + else_start.1, storage)
             if block_node_is_null(else_branch) { return mimi_buffer_empty() as *IfNode }
             end = else_branch.end - offset
@@ -1764,17 +1805,17 @@ pub parse_if_let_statement :: fn (source : []u8, storage : *ExpressionArena) *If
     binding_start : u64 = 0
     binding_end : u64 = 0
     next := next_token(source, cursor)
-    if next.0 == 40 {
+    if next.0 == '(' {
         binding := next_token(source, next.2)
         close := next_token(source, binding.2)
-        if binding.0 != 1 || close.0 != 41 { return mimi_buffer_empty() as *IfLetNode }
+        if binding.0 != 1 || close.0 != ')' { return mimi_buffer_empty() as *IfLetNode }
         binding_start = binding.1
         binding_end = binding.2
         cursor = close.2
     }
     colon := next_token(source, cursor)
     equal := next_token(source, colon.2)
-    if colon.0 != 58 || equal.0 != 61 { return mimi_buffer_empty() as *IfLetNode }
+    if colon.0 != ':' || equal.0 != '=' { return mimi_buffer_empty() as *IfLetNode }
     cursor = equal.2
     paren_depth : u64 = 0
     bracket_depth : u64 = 0
@@ -1784,17 +1825,17 @@ pub parse_if_let_statement :: fn (source : []u8, storage : *ExpressionArena) *If
         token := next_token(source, cursor)
         if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *IfLetNode }
         cursor = token.2
-        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-            if token.0 == 41 {
+        if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+            if token.0 == ')' {
                 if paren_depth == 0 { return mimi_buffer_empty() as *IfLetNode }
                 paren_depth = paren_depth - 1
             } else {
-                if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-                    if token.0 == 93 {
+                if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+                    if token.0 == ']' {
                         if bracket_depth == 0 { return mimi_buffer_empty() as *IfLetNode }
                         bracket_depth = bracket_depth - 1
                     } else {
-                        if token.0 == 123 && paren_depth == 0 && bracket_depth == 0 {
+                        if token.0 == '{' && paren_depth == 0 && bracket_depth == 0 {
                             block_start = token.1
                             found_block = true
                         }
@@ -1815,7 +1856,7 @@ pub parse_if_let_statement :: fn (source : []u8, storage : *ExpressionArena) *If
     if remainder.0 != 0 {
         if remainder.0 != 165 { return mimi_buffer_empty() as *IfLetNode }
         opening := next_token(source, remainder.2)
-        if opening.0 != 123 { return mimi_buffer_empty() as *IfLetNode }
+        if opening.0 != '{' { return mimi_buffer_empty() as *IfLetNode }
         else_branch = parse_block_span(source[opening.1:source.len], opening.1, storage)
         if block_node_is_null(else_branch) || next_token(source, else_branch.end).0 != 0 { return mimi_buffer_empty() as *IfLetNode }
         end = else_branch.end
@@ -1868,7 +1909,7 @@ pub parse_loop_statement :: fn (source : []u8, storage : *ExpressionArena) *Loop
     if keyword.0 == 171 {
         kind = 285
         opening := next_token(source, keyword.2)
-        if opening.0 != 123 { return mimi_buffer_empty() as *LoopNode }
+        if opening.0 != '{' { return mimi_buffer_empty() as *LoopNode }
         block_start = opening.1
     } else {
         if keyword.0 == 169 { kind = 286 } else {
@@ -1876,7 +1917,7 @@ pub parse_loop_statement :: fn (source : []u8, storage : *ExpressionArena) *Loop
         }
         if kind == 287 {
             opening := next_token(source, keyword.2)
-            if opening.0 != 123 { return mimi_buffer_empty() as *LoopNode }
+            if opening.0 != '{' { return mimi_buffer_empty() as *LoopNode }
             block_start = opening.1
         } else {
         cursor := keyword.2
@@ -1887,12 +1928,12 @@ pub parse_loop_statement :: fn (source : []u8, storage : *ExpressionArena) *Loop
             token := next_token(source, cursor)
             if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *LoopNode }
             cursor = token.2
-            if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-                if token.0 == 41 {
+            if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+                if token.0 == ')' {
                     if paren_depth == 0 { return mimi_buffer_empty() as *LoopNode }
                     paren_depth = paren_depth - 1
                 } else {
-                    if token.0 == 123 && paren_depth == 0 {
+                    if token.0 == '{' && paren_depth == 0 {
                         condition_end = token.1
                         block_start = token.1
                         found_block = true
@@ -1948,17 +1989,17 @@ pub parse_for_statement :: fn (source : []u8, storage : *ExpressionArena) *ForNo
         token := next_token(source, cursor)
         if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *ForNode }
         cursor = token.2
-        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-            if token.0 == 41 {
+        if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+            if token.0 == ')' {
                 if paren_depth == 0 { return mimi_buffer_empty() as *ForNode }
                 paren_depth = paren_depth - 1
             } else {
-                if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-                    if token.0 == 93 {
+                if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+                    if token.0 == ']' {
                         if bracket_depth == 0 { return mimi_buffer_empty() as *ForNode }
                         bracket_depth = bracket_depth - 1
                     } else {
-                        if token.0 == 123 && paren_depth == 0 && bracket_depth == 0 {
+                        if token.0 == '{' && paren_depth == 0 && bracket_depth == 0 {
                             header_end = token.1
                             block_start = token.1
                             found_block = true
@@ -2027,17 +2068,17 @@ pub parse_match_expression :: fn (source : []u8, storage : *ExpressionArena) *Ma
         token := next_token(source, cursor)
         if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *MatchNode }
         cursor = token.2
-        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-            if token.0 == 41 {
+        if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+            if token.0 == ')' {
                 if paren_depth == 0 { return mimi_buffer_empty() as *MatchNode }
                 paren_depth = paren_depth - 1
             } else {
-                if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-                    if token.0 == 93 {
+                if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+                    if token.0 == ']' {
                         if bracket_depth == 0 { return mimi_buffer_empty() as *MatchNode }
                         bracket_depth = bracket_depth - 1
                     } else {
-                        if token.0 == 123 && paren_depth == 0 && bracket_depth == 0 {
+                        if token.0 == '{' && paren_depth == 0 && bracket_depth == 0 {
                             opening_start = token.1
                             opening_end = token.2
                             found_open = true
@@ -2057,7 +2098,7 @@ pub parse_match_expression :: fn (source : []u8, storage : *ExpressionArena) *Ma
     last : *MatchArmNode = mimi_buffer_empty() as *MatchArmNode
     close_end : u64 = 0
     while cursor < source.len {
-        if next_token(source, cursor).0 == 125 {
+        if next_token(source, cursor).0 == '}' {
             close := next_token(source, cursor)
             if arm_count == 0 || next_token(source, close.2).0 != 0 { return mimi_buffer_empty() as *MatchNode }
             close_end = close.2
@@ -2073,18 +2114,18 @@ pub parse_match_expression :: fn (source : []u8, storage : *ExpressionArena) *Ma
             token := next_token(source, cursor)
             if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *MatchNode }
             cursor = token.2
-            if token.0 == 40 { local_paren = local_paren + 1 } else {
-                if token.0 == 41 {
+            if token.0 == '(' { local_paren = local_paren + 1 } else {
+                if token.0 == ')' {
                     if local_paren == 0 { return mimi_buffer_empty() as *MatchNode }
                     local_paren = local_paren - 1
                 } else {
-                    if token.0 == 91 { local_bracket = local_bracket + 1 } else {
-                        if token.0 == 93 {
+                    if token.0 == '[' { local_bracket = local_bracket + 1 } else {
+                        if token.0 == ']' {
                             if local_bracket == 0 { return mimi_buffer_empty() as *MatchNode }
                             local_bracket = local_bracket - 1
                         } else {
-                            if token.0 == 123 { local_brace = local_brace + 1 } else {
-                                if token.0 == 125 {
+                            if token.0 == '{' { local_brace = local_brace + 1 } else {
+                                if token.0 == '}' {
                                     if local_brace > 0 { local_brace = local_brace - 1 } else {
                                         if local_paren == 0 && local_bracket == 0 {
                                             segment_end = token.1
@@ -2093,7 +2134,7 @@ pub parse_match_expression :: fn (source : []u8, storage : *ExpressionArena) *Ma
                                         }
                                     }
                                 } else {
-                                    if token.0 == 44 && local_paren == 0 && local_bracket == 0 && local_brace == 0 {
+                                    if token.0 == ',' && local_paren == 0 && local_bracket == 0 && local_brace == 0 {
                                         segment_end = token.1
                                         found_separator = true
                                     }
@@ -2126,10 +2167,10 @@ pub parse_match_expression :: fn (source : []u8, storage : *ExpressionArena) *Ma
         after_variant := next_token(pattern, variant.2)
         binding_start : u64 = 0
         binding_end : u64 = 0
-        if after_variant.0 == 40 {
+        if after_variant.0 == '(' {
             binding := next_token(pattern, after_variant.2)
             binding_close := next_token(pattern, binding.2)
-            if binding.0 != 1 || binding_close.0 != 41 || next_token(pattern, binding_close.2).0 != 0 { return mimi_buffer_empty() as *MatchNode }
+            if binding.0 != 1 || binding_close.0 != ')' || next_token(pattern, binding_close.2).0 != 0 { return mimi_buffer_empty() as *MatchNode }
             binding_start = binding.1 + arm_start
             binding_end = binding.2 + arm_start
         } else {
@@ -2153,11 +2194,11 @@ pub parse_match_expression :: fn (source : []u8, storage : *ExpressionArena) *Ma
         last = arm
         arm_count = arm_count + 1
         separator := next_token(source, segment_end)
-        if separator.0 == 125 {
+        if separator.0 == '}' {
             close_end = separator.2
             break
         }
-        if separator.0 != 44 { return mimi_buffer_empty() as *MatchNode }
+        if separator.0 != ',' { return mimi_buffer_empty() as *MatchNode }
         cursor = separator.2
     }
     if close_end == 0 || next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *MatchNode }
@@ -2177,7 +2218,7 @@ pub generic_parameter_list_is_null :: fn (parameters : *GenericParameterList) bo
 
 pub parse_generic_parameters :: fn (source : []u8, storage : *ExpressionArena) *GenericParameterList {
     opening := next_token(source, 0)
-    if opening.0 != 60 { return mimi_buffer_empty() as *GenericParameterList }
+    if opening.0 != '<' { return mimi_buffer_empty() as *GenericParameterList }
     cursor := opening.2
     first : *GenericParameterNode = mimi_buffer_empty() as *GenericParameterNode
     last : *GenericParameterNode = mimi_buffer_empty() as *GenericParameterNode
@@ -2207,7 +2248,7 @@ pub parse_generic_parameters :: fn (source : []u8, storage : *ExpressionArena) *
         last = item
         count = count + 1
         separator := next_token(source, name.2)
-        if separator.0 == 62 {
+        if separator.0 == '>' {
             if next_token(source, separator.2).0 != 0 { return mimi_buffer_empty() as *GenericParameterList }
             if mimi_arena_allocate(storage, 32, 8) == 0 { return mimi_buffer_empty() as *GenericParameterList }
             result := storage.last as *GenericParameterList
@@ -2217,7 +2258,7 @@ pub parse_generic_parameters :: fn (source : []u8, storage : *ExpressionArena) *
             result.first = first
             return result
         }
-        if separator.0 != 44 { return mimi_buffer_empty() as *GenericParameterList }
+        if separator.0 != ',' { return mimi_buffer_empty() as *GenericParameterList }
         cursor = separator.2
     }
     mimi_buffer_empty() as *GenericParameterList
@@ -2243,14 +2284,14 @@ pub parse_enum_declaration :: fn (source : []u8, storage : *ExpressionArena) *En
     cursor := keyword.2
     parameters : *GenericParameterList = mimi_buffer_empty() as *GenericParameterList
     next := next_token(source, cursor)
-    if next.0 == 60 {
+    if next.0 == '<' {
         close_cursor := next.2
         found_close := false
         while close_cursor < source.len && !found_close {
             token := next_token(source, close_cursor)
             if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *EnumNode }
             close_cursor = token.2
-            if token.0 == 62 { found_close = true }
+            if token.0 == '>' { found_close = true }
         }
         if !found_close { return mimi_buffer_empty() as *EnumNode }
         parameters = parse_generic_parameters(source[next.1:close_cursor], storage)
@@ -2259,14 +2300,14 @@ pub parse_enum_declaration :: fn (source : []u8, storage : *ExpressionArena) *En
         cursor = close_cursor
     }
     opening := next_token(source, cursor)
-    if opening.0 != 123 { return mimi_buffer_empty() as *EnumNode }
+    if opening.0 != '{' { return mimi_buffer_empty() as *EnumNode }
     cursor = opening.2
     first : *EnumVariantNode = mimi_buffer_empty() as *EnumVariantNode
     last : *EnumVariantNode = mimi_buffer_empty() as *EnumVariantNode
     count : u64 = 0
     close_end : u64 = 0
     while cursor < source.len {
-        if next_token(source, cursor).0 == 125 {
+        if next_token(source, cursor).0 == '}' {
             close := next_token(source, cursor)
             close_end = close.2
             break
@@ -2280,13 +2321,13 @@ pub parse_enum_declaration :: fn (source : []u8, storage : *ExpressionArena) *En
             token := next_token(source, cursor)
             if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *EnumNode }
             cursor = token.2
-            if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-                if token.0 == 41 {
+            if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+                if token.0 == ')' {
                     if paren_depth == 0 { return mimi_buffer_empty() as *EnumNode }
                     paren_depth = paren_depth - 1
                 } else {
-                    if token.0 == 123 { bracket_depth = bracket_depth + 1 } else {
-                        if token.0 == 125 {
+                    if token.0 == '{' { bracket_depth = bracket_depth + 1 } else {
+                        if token.0 == '}' {
                             if bracket_depth > 0 { bracket_depth = bracket_depth - 1 } else {
                                 if paren_depth == 0 {
                                     segment_end = token.1
@@ -2295,7 +2336,7 @@ pub parse_enum_declaration :: fn (source : []u8, storage : *ExpressionArena) *En
                                 }
                             }
                         } else {
-                            if token.0 == 44 && paren_depth == 0 && bracket_depth == 0 {
+                            if token.0 == ',' && paren_depth == 0 && bracket_depth == 0 {
                                 segment_end = token.1
                                 found_separator = true
                             }
@@ -2315,7 +2356,7 @@ pub parse_enum_declaration :: fn (source : []u8, storage : *ExpressionArena) *En
         }
         payload : *ExprNode = mimi_buffer_empty() as *ExprNode
         after_name := next_token(variant_source, name.2)
-        if after_name.0 == 40 {
+        if after_name.0 == '(' {
             payload_start := after_name.2
             payload_end := variant_source.len
             close := next_token(variant_source, payload_start)
@@ -2324,8 +2365,8 @@ pub parse_enum_declaration :: fn (source : []u8, storage : *ExpressionArena) *En
             found_payload_close := false
             while scan < variant_source.len && !found_payload_close {
                 close = next_token(variant_source, scan)
-                if close.0 == 40 { depth = depth + 1 } else {
-                    if close.0 == 41 {
+                if close.0 == '(' { depth = depth + 1 } else {
+                    if close.0 == ')' {
                         if depth == 0 {
                             payload_end = close.1
                             found_payload_close = true
@@ -2353,11 +2394,11 @@ pub parse_enum_declaration :: fn (source : []u8, storage : *ExpressionArena) *En
         last = variant
         count = count + 1
         separator := next_token(source, segment_end)
-        if separator.0 == 125 {
+        if separator.0 == '}' {
             close_end = separator.2
             break
         }
-        if separator.0 != 44 { return mimi_buffer_empty() as *EnumNode }
+        if separator.0 != ',' { return mimi_buffer_empty() as *EnumNode }
         cursor = separator.2
     }
     if close_end == 0 || next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *EnumNode }
@@ -2381,14 +2422,14 @@ pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *
     cursor := keyword.2
     parameters : *GenericParameterList = mimi_buffer_empty() as *GenericParameterList
     next := next_token(source, cursor)
-    if next.0 == 60 {
+    if next.0 == '<' {
         close_cursor := next.2
         found_close := false
         while close_cursor < source.len && !found_close {
             token := next_token(source, close_cursor)
             if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *StructNode }
             close_cursor = token.2
-            if token.0 == 62 { found_close = true }
+            if token.0 == '>' { found_close = true }
         }
         if !found_close { return mimi_buffer_empty() as *StructNode }
         parameters = parse_generic_parameters(source[next.1:close_cursor], storage)
@@ -2397,7 +2438,7 @@ pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *
         cursor = close_cursor
     }
     opening := next_token(source, cursor)
-    if opening.0 != 123 { return mimi_buffer_empty() as *StructNode }
+    if opening.0 != '{' { return mimi_buffer_empty() as *StructNode }
     cursor = opening.2
     first : *StructFieldNode = mimi_buffer_empty() as *StructFieldNode
     last : *StructFieldNode = mimi_buffer_empty() as *StructFieldNode
@@ -2407,7 +2448,7 @@ pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *
     method_count : u64 = 0
     close_end : u64 = 0
     while cursor < source.len {
-        if next_token(source, cursor).0 == 125 {
+        if next_token(source, cursor).0 == '}' {
             close := next_token(source, cursor)
             close_end = close.2
             break
@@ -2425,8 +2466,8 @@ pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *
             method_count = method_count + 1
             cursor = method.end
             separator := next_token(source, cursor)
-            if separator.0 == 44 { cursor = separator.2 } else {
-                if separator.0 != 125 { return mimi_buffer_empty() as *StructNode }
+            if separator.0 == ',' { cursor = separator.2 } else {
+                if separator.0 != '}' { return mimi_buffer_empty() as *StructNode }
             }
         } else {
         segment_start := cursor
@@ -2439,25 +2480,25 @@ pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *
             token := next_token(source, cursor)
             if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *StructNode }
             cursor = token.2
-            if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-                if token.0 == 41 {
+            if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+                if token.0 == ')' {
                     if paren_depth == 0 { return mimi_buffer_empty() as *StructNode }
                     paren_depth = paren_depth - 1
                 } else {
-                    if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-                        if token.0 == 93 {
+                    if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+                        if token.0 == ']' {
                             if bracket_depth == 0 { return mimi_buffer_empty() as *StructNode }
                             bracket_depth = bracket_depth - 1
                         } else {
-                            if token.0 == 60 { angle_depth = angle_depth + 1 } else {
-                                if token.0 == 62 && angle_depth > 0 { angle_depth = angle_depth - 1 } else {
-                                    if token.0 == 123 { return mimi_buffer_empty() as *StructNode } else {
-                                        if token.0 == 125 && paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 {
+                            if token.0 == '<' { angle_depth = angle_depth + 1 } else {
+                                if token.0 == '>' && angle_depth > 0 { angle_depth = angle_depth - 1 } else {
+                                    if token.0 == '{' { return mimi_buffer_empty() as *StructNode } else {
+                                        if token.0 == '}' && paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 {
                                             segment_end = token.1
                                             close_end = token.2
                                             found_separator = true
                                         } else {
-                                            if token.0 == 44 && paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 {
+                                            if token.0 == ',' && paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 {
                                                 segment_end = token.1
                                                 found_separator = true
                                             }
@@ -2474,7 +2515,7 @@ pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *
         field_source := source[segment_start:segment_end]
         name := next_token(field_source, 0)
         colon := next_token(field_source, name.2)
-        if name.0 != 1 || colon.0 != 58 { return mimi_buffer_empty() as *StructNode }
+        if name.0 != 1 || colon.0 != ':' { return mimi_buffer_empty() as *StructNode }
         existing := first
         while existing != (mimi_buffer_empty() as *StructFieldNode) {
             if source_names_equal(source, existing.name_start, existing.name_end, name.1 + segment_start, name.2 + segment_start) { return mimi_buffer_empty() as *StructNode }
@@ -2489,13 +2530,13 @@ pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *
         marker_end : u64 = 0
         while scan < field_source.len && marker_kind == 0 {
             token := next_token(field_source, scan)
-            if token.0 == 40 { local_paren = local_paren + 1 } else {
-                if token.0 == 41 && local_paren > 0 { local_paren = local_paren - 1 } else {
-                    if token.0 == 91 { local_bracket = local_bracket + 1 } else {
-                        if token.0 == 93 && local_bracket > 0 { local_bracket = local_bracket - 1 } else {
-                            if token.0 == 60 { local_angle = local_angle + 1 } else {
-                                if token.0 == 62 && local_angle > 0 { local_angle = local_angle - 1 } else {
-                                    if local_paren == 0 && local_bracket == 0 && local_angle == 0 && (token.0 == 58 || token.0 == 61) {
+            if token.0 == '(' { local_paren = local_paren + 1 } else {
+                if token.0 == ')' && local_paren > 0 { local_paren = local_paren - 1 } else {
+                    if token.0 == '[' { local_bracket = local_bracket + 1 } else {
+                        if token.0 == ']' && local_bracket > 0 { local_bracket = local_bracket - 1 } else {
+                            if token.0 == '<' { local_angle = local_angle + 1 } else {
+                                if token.0 == '>' && local_angle > 0 { local_angle = local_angle - 1 } else {
+                                    if local_paren == 0 && local_bracket == 0 && local_angle == 0 && (token.0 == ':' || token.0 == '=') {
                                         marker_kind = token.0
                                         marker_start = token.1
                                         marker_end = token.2
@@ -2516,7 +2557,7 @@ pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *
             default_value = parse_expression(field_source[marker_end:field_source.len], storage)
             if expression_is_null(default_value) { return mimi_buffer_empty() as *StructNode }
             shift_expression_tree(default_value, marker_end + segment_start)
-            mutable = marker_kind == 61
+            mutable = marker_kind == '='
         }
         data_type := parse_type(field_source[colon.2:type_end], storage)
         if expression_is_null(data_type) { return mimi_buffer_empty() as *StructNode }
@@ -2535,11 +2576,11 @@ pub parse_struct_declaration :: fn (source : []u8, storage : *ExpressionArena) *
         last = field
         count = count + 1
         separator := next_token(source, segment_end)
-        if separator.0 == 125 {
+        if separator.0 == '}' {
             close_end = separator.2
             break
         }
-        if separator.0 != 44 { return mimi_buffer_empty() as *StructNode }
+        if separator.0 != ',' { return mimi_buffer_empty() as *StructNode }
         cursor = separator.2
         }
     }
@@ -2563,7 +2604,7 @@ struct_method_starts :: fn (source : []u8, start : u64) bool {
     colon1 := next_token(source, close.2)
     colon2 := next_token(source, colon1.2)
     function := next_token(source, colon2.2)
-    name.0 == 1 && open.0 == 40 && close.0 == 41 && colon1.0 == 58 && colon2.0 == 58 && function.0 == 160
+    name.0 == 1 && open.0 == '(' && close.0 == ')' && colon1.0 == ':' && colon2.0 == ':' && function.0 == 160
 }
 
 parse_struct_method :: fn (source : []u8, start : u64, storage : *ExpressionArena) *StructMethodNode {
@@ -2574,7 +2615,7 @@ parse_struct_method :: fn (source : []u8, start : u64, storage : *ExpressionAren
     colon2 := next_token(source, colon1.2)
     function_keyword := next_token(source, colon2.2)
     parameters_open := next_token(source, function_keyword.2)
-    if !struct_method_starts(source, start) || parameters_open.0 != 40 { return mimi_buffer_empty() as *StructMethodNode }
+    if !struct_method_starts(source, start) || parameters_open.0 != '(' { return mimi_buffer_empty() as *StructMethodNode }
     cursor := parameters_open.2
     depth : u64 = 1
     parameters_end := source.len
@@ -2583,8 +2624,8 @@ parse_struct_method :: fn (source : []u8, start : u64, storage : *ExpressionAren
         token := next_token(source, cursor)
         if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *StructMethodNode }
         cursor = token.2
-        if token.0 == 40 { depth = depth + 1 } else {
-            if token.0 == 41 {
+        if token.0 == '(' { depth = depth + 1 } else {
+            if token.0 == ')' {
                 depth = depth - 1
                 if depth == 0 {
                     parameters_end = token.1
@@ -2597,15 +2638,15 @@ parse_struct_method :: fn (source : []u8, start : u64, storage : *ExpressionAren
     body_open := next_token(source, parameters_close)
     return_end := source.len
     scan := parameters_close
-    while scan < source.len && body_open.0 != 123 {
+    while scan < source.len && body_open.0 != '{' {
         token := next_token(source, scan)
         if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *StructMethodNode }
-        if token.0 == 123 {
+        if token.0 == '{' {
             body_open = token
             return_end = token.1
         } else { scan = token.2 }
     }
-    if body_open.0 != 123 { return mimi_buffer_empty() as *StructMethodNode }
+    if body_open.0 != '{' { return mimi_buffer_empty() as *StructMethodNode }
     return_type := parse_type(source[parameters_close:return_end], storage)
     if expression_is_null(return_type) { return mimi_buffer_empty() as *StructMethodNode }
     shift_expression_tree(return_type, parameters_close)
@@ -2646,14 +2687,14 @@ pub parse_struct_literal :: fn (source : []u8, storage : *ExpressionArena) *Stru
     cursor := type_name.2
     type_end := type_name.2
     suffix := next_token(source, cursor)
-    while suffix.0 == 46 {
+    while suffix.0 == '.' {
         member := next_token(source, suffix.2)
         if member.0 != 1 { return mimi_buffer_empty() as *StructLiteralNode }
         cursor = member.2
         type_end = member.2
         suffix = next_token(source, cursor)
     }
-    if suffix.0 == 60 {
+    if suffix.0 == '<' {
         cursor = suffix.2
         angle_depth : u64 = 1
         found_generic_end := false
@@ -2661,8 +2702,8 @@ pub parse_struct_literal :: fn (source : []u8, storage : *ExpressionArena) *Stru
             token := next_token(source, cursor)
             if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *StructLiteralNode }
             cursor = token.2
-            if token.0 == 60 { angle_depth = angle_depth + 1 } else {
-                if token.0 == 62 {
+            if token.0 == '<' { angle_depth = angle_depth + 1 } else {
+                if token.0 == '>' {
                     angle_depth = angle_depth - 1
                     if angle_depth == 0 {
                         type_end = token.2
@@ -2674,14 +2715,14 @@ pub parse_struct_literal :: fn (source : []u8, storage : *ExpressionArena) *Stru
         if !found_generic_end { return mimi_buffer_empty() as *StructLiteralNode }
     }
     opening := next_token(source, cursor)
-    if opening.0 != 123 { return mimi_buffer_empty() as *StructLiteralNode }
+    if opening.0 != '{' { return mimi_buffer_empty() as *StructLiteralNode }
     cursor = opening.2
     first : *StructLiteralFieldNode = mimi_buffer_empty() as *StructLiteralFieldNode
     last : *StructLiteralFieldNode = mimi_buffer_empty() as *StructLiteralFieldNode
     count : u64 = 0
     close_end : u64 = 0
     while cursor < source.len {
-        if next_token(source, cursor).0 == 125 {
+        if next_token(source, cursor).0 == '}' {
             close := next_token(source, cursor)
             close_end = close.2
             break
@@ -2696,18 +2737,18 @@ pub parse_struct_literal :: fn (source : []u8, storage : *ExpressionArena) *Stru
             token := next_token(source, cursor)
             if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *StructLiteralNode }
             cursor = token.2
-            if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-                if token.0 == 41 {
+            if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+                if token.0 == ')' {
                     if paren_depth == 0 { return mimi_buffer_empty() as *StructLiteralNode }
                     paren_depth = paren_depth - 1
                 } else {
-                    if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-                        if token.0 == 93 {
+                    if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+                        if token.0 == ']' {
                             if bracket_depth == 0 { return mimi_buffer_empty() as *StructLiteralNode }
                             bracket_depth = bracket_depth - 1
                         } else {
-                            if token.0 == 123 { brace_depth = brace_depth + 1 } else {
-                                if token.0 == 125 {
+                            if token.0 == '{' { brace_depth = brace_depth + 1 } else {
+                                if token.0 == '}' {
                                     if brace_depth > 0 { brace_depth = brace_depth - 1 } else {
                                         if paren_depth == 0 && bracket_depth == 0 {
                                             segment_end = token.1
@@ -2716,7 +2757,7 @@ pub parse_struct_literal :: fn (source : []u8, storage : *ExpressionArena) *Stru
                                         }
                                     }
                                 } else {
-                                    if token.0 == 44 && paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
+                                    if token.0 == ',' && paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
                                         segment_end = token.1
                                         found_separator = true
                                     }
@@ -2731,7 +2772,7 @@ pub parse_struct_literal :: fn (source : []u8, storage : *ExpressionArena) *Stru
         field_source := source[segment_start:segment_end]
         name := next_token(field_source, 0)
         equal := next_token(field_source, name.2)
-        if name.0 != 1 || equal.0 != 61 { return mimi_buffer_empty() as *StructLiteralNode }
+        if name.0 != 1 || equal.0 != '=' { return mimi_buffer_empty() as *StructLiteralNode }
         existing := first
         while existing != (mimi_buffer_empty() as *StructLiteralFieldNode) {
             if source_names_equal(source, existing.name_start, existing.name_end, name.1 + segment_start, name.2 + segment_start) { return mimi_buffer_empty() as *StructLiteralNode }
@@ -2752,11 +2793,11 @@ pub parse_struct_literal :: fn (source : []u8, storage : *ExpressionArena) *Stru
         last = field
         count = count + 1
         separator := next_token(source, segment_end)
-        if separator.0 == 125 {
+        if separator.0 == '}' {
             close_end = separator.2
             break
         }
-        if separator.0 != 44 { return mimi_buffer_empty() as *StructLiteralNode }
+        if separator.0 != ',' { return mimi_buffer_empty() as *StructLiteralNode }
         cursor = separator.2
     }
     if close_end == 0 || next_token(source, close_end).0 != 0 { return mimi_buffer_empty() as *StructLiteralNode }
@@ -2782,10 +2823,10 @@ parse_cast_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNod
         if token.0 == 255 { return mimi_buffer_empty() as *ExprNode }
         if token.0 == 0 { break }
         cursor = token.2
-        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-            if token.0 == 41 && paren_depth > 0 { paren_depth = paren_depth - 1 } else {
-                if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-                    if token.0 == 93 && bracket_depth > 0 { bracket_depth = bracket_depth - 1 } else {
+        if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+            if token.0 == ')' && paren_depth > 0 { paren_depth = paren_depth - 1 } else {
+                if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+                    if token.0 == ']' && bracket_depth > 0 { bracket_depth = bracket_depth - 1 } else {
                         if token.0 == 174 && paren_depth == 0 && bracket_depth == 0 {
                             if cast_start != source.len { return mimi_buffer_empty() as *ExprNode }
                             cast_start = token.1
@@ -2801,7 +2842,7 @@ parse_cast_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNod
     first := next_token(left_source, 0)
     left := parse_expression(left_source, storage)
     if expression_is_null(left) { return left }
-    if expression_precedence(left.kind as u8) != 0 && first.0 != 40 { return mimi_buffer_empty() as *ExprNode }
+    if expression_precedence(left.kind as u8) != 0 && first.0 != '(' { return mimi_buffer_empty() as *ExprNode }
     data_type := parse_type(source[cast_end:source.len], storage)
     if expression_is_null(data_type) { return data_type }
     shift_expression_tree(data_type, cast_end)
@@ -2869,8 +2910,8 @@ pub parse_module_with_issue :: fn (source : []u8, storage : *ExpressionArena, is
         }
         cursor = token.2
         previous_kind = token.0
-        if token.0 == 123 { brace_depth = brace_depth + 1 } else {
-            if token.0 == 125 {
+        if token.0 == '{' { brace_depth = brace_depth + 1 } else {
+            if token.0 == '}' {
                 if brace_depth == 0 {
                     issue.start = token.1
                     issue.end = token.2
@@ -2878,10 +2919,10 @@ pub parse_module_with_issue :: fn (source : []u8, storage : *ExpressionArena, is
                 }
                 brace_depth = brace_depth - 1
             } else {
-                if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-                    if token.0 == 41 && paren_depth > 0 { paren_depth = paren_depth - 1 } else {
-                        if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-                            if token.0 == 93 && bracket_depth > 0 { bracket_depth = bracket_depth - 1 }
+                if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+                    if token.0 == ')' && paren_depth > 0 { paren_depth = paren_depth - 1 } else {
+                        if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+                            if token.0 == ']' && bracket_depth > 0 { bracket_depth = bracket_depth - 1 }
                         }
                     }
                 }
@@ -2930,13 +2971,13 @@ module_declaration_starts :: fn (source : []u8, token : (u8, u64, u64)) bool {
         name := next_token(source, token.2)
         colon1 := next_token(source, name.2)
         colon2 := next_token(source, colon1.2)
-        return name.0 == 1 && colon1.0 == 58 && colon2.0 == 58
+        return name.0 == 1 && colon1.0 == ':' && colon2.0 == ':'
     }
     if token.0 != 1 { return false }
     colon1 := next_token(source, token.2)
     colon2 := next_token(source, colon1.2)
-    if colon1.0 != 58 { return false }
-    if colon2.0 == 58 || colon2.0 == 61 { return true }
+    if colon1.0 != ':' { return false }
+    if colon2.0 == ':' || colon2.0 == '=' { return true }
     scan := colon2.2
     parens : u64 = 0
     brackets : u64 = 0
@@ -2944,19 +2985,19 @@ module_declaration_starts :: fn (source : []u8, token : (u8, u64, u64)) bool {
     while scan < source.len {
         part := next_token(source, scan)
         if part.0 == 0 || part.0 == 255 { return false }
-        if part.0 == 123 || part.0 == 125 { return false }
-        if part.0 == 40 { parens = parens + 1 } else {
-            if part.0 == 41 && parens > 0 { parens = parens - 1 } else {
-                if part.0 == 91 { brackets = brackets + 1 } else {
-                    if part.0 == 93 && brackets > 0 { brackets = brackets - 1 } else {
-                        if part.0 == 60 { angles = angles + 1 } else {
-                            if part.0 == 62 && angles > 0 { angles = angles - 1 }
+        if part.0 == '{' || part.0 == '}' { return false }
+        if part.0 == '(' { parens = parens + 1 } else {
+            if part.0 == ')' && parens > 0 { parens = parens - 1 } else {
+                if part.0 == '[' { brackets = brackets + 1 } else {
+                    if part.0 == ']' && brackets > 0 { brackets = brackets - 1 } else {
+                        if part.0 == '<' { angles = angles + 1 } else {
+                            if part.0 == '>' && angles > 0 { angles = angles - 1 }
                         }
                     }
                 }
             }
         }
-        if part.0 == 61 && parens == 0 && brackets == 0 && angles == 0 { return true }
+        if part.0 == '=' && parens == 0 && brackets == 0 && angles == 0 { return true }
         scan = part.2
     }
     false
@@ -2971,7 +3012,7 @@ parse_module_declaration :: fn (source : []u8, offset : u64, storage : *Expressi
     if is_external { name = next_token(source, first.2) }
     colon1 := next_token(source, name.2)
     colon2 := next_token(source, colon1.2)
-    if name.0 != 1 || colon1.0 != 58 { return mimi_buffer_empty() as *ModuleDeclarationNode }
+    if name.0 != 1 || colon1.0 != ':' { return mimi_buffer_empty() as *ModuleDeclarationNode }
     declaration := next_token(source, if is_external { colon1.2 } else { colon2.2 })
     kind : u64 = 0
     binding : *BindingNode = mimi_buffer_empty() as *BindingNode
@@ -3014,13 +3055,13 @@ parse_module_declaration :: fn (source : []u8, offset : u64, storage : *Expressi
                 end = declaration.1 + enum_node.end
                 shift_enum_declaration(enum_node, offset + declaration.1)
             } else {
-                if declaration.0 == 64 {
+                if declaration.0 == '@' {
                     at := declaration
                     import_name := next_token(source, at.2)
                     open := next_token(source, import_name.2)
                     path := next_token(source, open.2)
                     close := next_token(source, path.2)
-                    if at.0 != 64 || import_name.0 != 1 || open.0 != 40 { return mimi_buffer_empty() as *ModuleDeclarationNode }
+                    if at.0 != '@' || import_name.0 != 1 || open.0 != '(' { return mimi_buffer_empty() as *ModuleDeclarationNode }
                     is_import := source_name_equals(source, import_name.1, import_name.2, "import")
                     is_cimport := source_name_equals(source, import_name.1, import_name.2, "cimport")
                     is_define := source_name_equals(source, import_name.1, import_name.2, "cDefine")
@@ -3029,7 +3070,7 @@ parse_module_declaration :: fn (source : []u8, offset : u64, storage : *Expressi
                         comma := next_token(source, path.2)
                         value := next_token(source, comma.2)
                         close := next_token(source, value.2)
-                        if comma.0 != 44 || (value.0 != 3 && value.0 != 2) || close.0 != 41 || next_token(source, close.2).0 != 0 { return mimi_buffer_empty() as *ModuleDeclarationNode }
+                        if comma.0 != ',' || (value.0 != 3 && value.0 != 2) || close.0 != ')' || next_token(source, close.2).0 != 0 { return mimi_buffer_empty() as *ModuleDeclarationNode }
                         kind = 8
                         path_start = path.1 + offset
                         path_end = path.2 + offset
@@ -3037,7 +3078,7 @@ parse_module_declaration :: fn (source : []u8, offset : u64, storage : *Expressi
                         value_end = value.2 + offset
                     } else {
                         close := next_token(source, path.2)
-                        if (!is_import && !is_cimport) || close.0 != 41 || next_token(source, close.2).0 != 0 { return mimi_buffer_empty() as *ModuleDeclarationNode }
+                        if (!is_import && !is_cimport) || close.0 != ')' || next_token(source, close.2).0 != 0 { return mimi_buffer_empty() as *ModuleDeclarationNode }
                         kind = 4
                         if is_cimport { kind = 6 }
                         path_start = path.1 + offset
@@ -3077,7 +3118,7 @@ parse_module_declaration :: fn (source : []u8, offset : u64, storage : *Expressi
 
 parse_external_function_node :: fn (source : []u8, name : (u8, u64, u64), keyword : (u8, u64, u64), offset : u64, storage : *ExpressionArena) *FunctionNode {
     opening := next_token(source, keyword.2)
-    if opening.0 != 40 { return mimi_buffer_empty() as *FunctionNode }
+    if opening.0 != '(' { return mimi_buffer_empty() as *FunctionNode }
     cursor := opening.2
     depth : u64 = 1
     parameters_end := cursor
@@ -3086,8 +3127,8 @@ parse_external_function_node :: fn (source : []u8, name : (u8, u64, u64), keywor
         token := next_token(source, cursor)
         if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *FunctionNode }
         cursor = token.2
-        if token.0 == 40 { depth = depth + 1 } else {
-            if token.0 == 41 {
+        if token.0 == '(' { depth = depth + 1 } else {
+            if token.0 == ')' {
                 depth = depth - 1
                 if depth == 0 {
                     parameters_end = token.1
@@ -3252,16 +3293,16 @@ pub parse_parameters :: fn (source : []u8, header : *FunctionHeader, storage : *
         token := next_token(source, cursor)
         if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *ParameterNode }
         cursor = token.2
-        if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-            if token.0 == 93 && bracket_depth > 0 { bracket_depth = bracket_depth - 1 }
+        if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+            if token.0 == ']' && bracket_depth > 0 { bracket_depth = bracket_depth - 1 }
         }
-        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-            if token.0 == 41 && paren_depth > 0 { paren_depth = paren_depth - 1 }
+        if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+            if token.0 == ')' && paren_depth > 0 { paren_depth = paren_depth - 1 }
         }
-        if token.0 == 60 { angle_depth = angle_depth + 1 } else {
-            if token.0 == 62 && angle_depth > 0 { angle_depth = angle_depth - 1 }
+        if token.0 == '<' { angle_depth = angle_depth + 1 } else {
+            if token.0 == '>' && angle_depth > 0 { angle_depth = angle_depth - 1 }
         }
-        if (token.0 == 44 && bracket_depth == 0 && paren_depth == 0 && angle_depth == 0) || token.2 > header.parameters_end {
+        if (token.0 == ',' && bracket_depth == 0 && paren_depth == 0 && angle_depth == 0) || token.2 > header.parameters_end {
             segment_end := token.1
             if token.2 > header.parameters_end { segment_end = header.parameters_end }
             parameter := parse_parameter(source[segment_start:segment_end], segment_start, storage)
@@ -3292,12 +3333,12 @@ pub parse_parameters :: fn (source : []u8, header : *FunctionHeader, storage : *
 
 pub parse_tuple_literal :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     opening := next_token(source, 0)
-    if opening.0 != 40 { return mimi_buffer_empty() as *ExprNode }
+    if opening.0 != '(' { return mimi_buffer_empty() as *ExprNode }
     cursor := opening.2
     items : *ExprNode = mimi_buffer_empty() as *ExprNode
     count : u64 = 0
     while true {
-        if next_token(source, cursor).0 == 41 { return mimi_buffer_empty() as *ExprNode }
+        if next_token(source, cursor).0 == ')' { return mimi_buffer_empty() as *ExprNode }
         segment_start := cursor
         segment_end := source.len
         paren_depth : u64 = 0
@@ -3307,8 +3348,8 @@ pub parse_tuple_literal :: fn (source : []u8, storage : *ExpressionArena) *ExprN
             token := next_token(source, cursor)
             if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *ExprNode }
             cursor = token.2
-            if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-                if token.0 == 41 {
+            if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+                if token.0 == ')' {
                     if paren_depth > 0 { paren_depth = paren_depth - 1 } else {
                         if bracket_depth == 0 {
                             segment_end = token.1
@@ -3316,12 +3357,12 @@ pub parse_tuple_literal :: fn (source : []u8, storage : *ExpressionArena) *ExprN
                         }
                     }
                 } else {
-                    if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-                        if token.0 == 93 {
+                    if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+                        if token.0 == ']' {
                             if bracket_depth == 0 { return mimi_buffer_empty() as *ExprNode }
                             bracket_depth = bracket_depth - 1
                         } else {
-                            if token.0 == 44 && paren_depth == 0 && bracket_depth == 0 {
+                            if token.0 == ',' && paren_depth == 0 && bracket_depth == 0 {
                                 segment_end = token.1
                                 found_separator = true
                             }
@@ -3340,14 +3381,14 @@ pub parse_tuple_literal :: fn (source : []u8, storage : *ExpressionArena) *ExprN
         }
         count = count + 1
         separator := next_token(source, segment_end)
-        if separator.0 == 41 {
+        if separator.0 == ')' {
             if count < 2 || next_token(source, separator.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
             return allocate_expr(storage, 268, opening.1, separator.2, items, mimi_buffer_empty() as *ExprNode)
         }
-        if separator.0 != 44 { return mimi_buffer_empty() as *ExprNode }
+        if separator.0 != ',' { return mimi_buffer_empty() as *ExprNode }
         cursor = separator.2
         trailing_close := next_token(source, cursor)
-        if trailing_close.0 == 41 {
+        if trailing_close.0 == ')' {
             if next_token(source, trailing_close.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
             return allocate_expr(storage, 268, opening.1, trailing_close.2, items, mimi_buffer_empty() as *ExprNode)
         }
@@ -3357,13 +3398,13 @@ pub parse_tuple_literal :: fn (source : []u8, storage : *ExpressionArena) *ExprN
 
 pub parse_array_literal :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     opening := next_token(source, 0)
-    if opening.0 != 91 { return mimi_buffer_empty() as *ExprNode }
+    if opening.0 != '[' { return mimi_buffer_empty() as *ExprNode }
     cursor := opening.2
     items : *ExprNode = mimi_buffer_empty() as *ExprNode
     count : u64 = 0
     while true {
         token := next_token(source, cursor)
-        if token.0 == 93 {
+        if token.0 == ']' {
             if next_token(source, token.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
             return allocate_expr(storage, 267, opening.1, token.2, items, mimi_buffer_empty() as *ExprNode)
         }
@@ -3376,17 +3417,17 @@ pub parse_array_literal :: fn (source : []u8, storage : *ExpressionArena) *ExprN
             token = next_token(source, cursor)
             if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *ExprNode }
             cursor = token.2
-            if token.0 == 91 { depth = depth + 1 }
-            if token.0 == 93 {
+            if token.0 == '[' { depth = depth + 1 }
+            if token.0 == ']' {
                 if depth > 0 { depth = depth - 1 } else {
                     if paren_depth == 0 && brace_depth == 0 { segment_end = token.1 break }
                 }
             }
-            if token.0 == 40 { paren_depth = paren_depth + 1 }
-            if token.0 == 41 { if paren_depth == 0 { return mimi_buffer_empty() as *ExprNode } paren_depth = paren_depth - 1 }
-            if token.0 == 123 { brace_depth = brace_depth + 1 }
-            if token.0 == 125 { if brace_depth == 0 { return mimi_buffer_empty() as *ExprNode } brace_depth = brace_depth - 1 }
-            if token.0 == 44 && depth == 0 && paren_depth == 0 && brace_depth == 0 { segment_end = token.1 break }
+            if token.0 == '(' { paren_depth = paren_depth + 1 }
+            if token.0 == ')' { if paren_depth == 0 { return mimi_buffer_empty() as *ExprNode } paren_depth = paren_depth - 1 }
+            if token.0 == '{' { brace_depth = brace_depth + 1 }
+            if token.0 == '}' { if brace_depth == 0 { return mimi_buffer_empty() as *ExprNode } brace_depth = brace_depth - 1 }
+            if token.0 == ',' && depth == 0 && paren_depth == 0 && brace_depth == 0 { segment_end = token.1 break }
         }
         if segment_end == source.len { return mimi_buffer_empty() as *ExprNode }
         item := parse_expression(source[segment_start:segment_end], storage)
@@ -3398,11 +3439,11 @@ pub parse_array_literal :: fn (source : []u8, storage : *ExpressionArena) *ExprN
         }
         count = count + 1
         separator := next_token(source, segment_end)
-        if separator.0 == 93 {
+        if separator.0 == ']' {
             if next_token(source, separator.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
             return allocate_expr(storage, 267, opening.1, separator.2, items, mimi_buffer_empty() as *ExprNode)
         }
-        if separator.0 != 44 { return mimi_buffer_empty() as *ExprNode }
+        if separator.0 != ',' { return mimi_buffer_empty() as *ExprNode }
         cursor = separator.2
     }
     mimi_buffer_empty() as *ExprNode
@@ -3411,7 +3452,7 @@ pub parse_array_literal :: fn (source : []u8, storage : *ExpressionArena) *ExprN
 parse_parameter :: fn (source : []u8, offset : u64, storage : *ExpressionArena) *ParameterNode {
     name := next_token(source, 0)
     colon := next_token(source, name.2)
-    if name.0 != 1 || colon.0 != 58 { return mimi_buffer_empty() as *ParameterNode }
+    if name.0 != 1 || colon.0 != ':' { return mimi_buffer_empty() as *ParameterNode }
     type_start := colon.2
     data_type := parse_type(source[type_start:source.len], storage)
     if expression_is_null(data_type) { return mimi_buffer_empty() as *ParameterNode }
@@ -3428,28 +3469,28 @@ parse_parameter :: fn (source : []u8, offset : u64, storage : *ExpressionArena) 
 pub parse_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     if source.len > 500000000000000000 { return mimi_buffer_empty() as *ExprNode }
     first := next_token(source, 0)
-    if first.0 == 40 { return parse_tuple_type(source, storage) }
+    if first.0 == '(' { return parse_tuple_type(source, storage) }
     if first.0 == 160 { return parse_function_type(source, storage) }
     if mimi_arena_allocate(storage, source.len * 32 + 32, 8) == 0 { return mimi_buffer_empty() as *ExprNode }
     prefixes := storage.last as *ExprOperator
     prefix_count : u64 = 0
     cursor : u64 = 0
     token := next_token(source, cursor)
-    if token.0 == 42 {
+    if token.0 == '*' {
         prefixes[prefix_count] = ExprOperator { kind = 271, start = token.1, base_count = 0, argument_count = 0 }
         prefix_count = prefix_count + 1
         cursor = token.2
     } else {
-        if token.0 == 91 {
+        if token.0 == '[' {
             next := next_token(source, token.2)
-            if next.0 == 93 {
+            if next.0 == ']' {
                 prefixes[prefix_count] = ExprOperator { kind = 272, start = token.1, base_count = 0, argument_count = 0 }
                 prefix_count = prefix_count + 1
                 cursor = next.2
             } else {
                 if next.0 != 2 { return mimi_buffer_empty() as *ExprNode }
                 close := next_token(source, next.2)
-                if close.0 != 93 { return mimi_buffer_empty() as *ExprNode }
+                if close.0 != ']' { return mimi_buffer_empty() as *ExprNode }
                 count_node := allocate_expr(storage, 2, next.1, next.2, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
                 if expression_is_null(count_node) { return count_node }
                 prefixes[prefix_count] = ExprOperator { kind = 273, start = token.1, base_count = count_node.start, argument_count = count_node.end }
@@ -3460,21 +3501,21 @@ pub parse_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     }
     while true {
         token = next_token(source, cursor)
-        if token.0 == 42 {
+        if token.0 == '*' {
             prefixes[prefix_count] = ExprOperator { kind = 271, start = token.1, base_count = 0, argument_count = 0 }
             prefix_count = prefix_count + 1
             cursor = token.2
         } else {
-            if token.0 == 91 {
+            if token.0 == '[' {
                 next := next_token(source, token.2)
-                if next.0 == 93 {
+                if next.0 == ']' {
                     prefixes[prefix_count] = ExprOperator { kind = 272, start = token.1, base_count = 0, argument_count = 0 }
                     prefix_count = prefix_count + 1
                     cursor = next.2
                 } else {
                     if next.0 != 2 { return mimi_buffer_empty() as *ExprNode }
                     close := next_token(source, next.2)
-                    if close.0 != 93 { return mimi_buffer_empty() as *ExprNode }
+                    if close.0 != ']' { return mimi_buffer_empty() as *ExprNode }
                     prefixes[prefix_count] = ExprOperator { kind = 273, start = token.1, base_count = next.1, argument_count = next.2 }
                     prefix_count = prefix_count + 1
                     cursor = close.2
@@ -3487,7 +3528,7 @@ pub parse_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     node := allocate_expr(storage, 270, name.1, name.2, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
     if expression_is_null(node) { return node }
     suffix := next_token(source, name.2)
-    while suffix.0 == 46 {
+    while suffix.0 == '.' {
         member := next_token(source, suffix.2)
         if member.0 != 1 { return mimi_buffer_empty() as *ExprNode }
         member_node := allocate_expr(storage, 270, member.1, member.2, mimi_buffer_empty() as *ExprNode, mimi_buffer_empty() as *ExprNode)
@@ -3496,7 +3537,7 @@ pub parse_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
         if expression_is_null(node) { return node }
         suffix = next_token(source, member.2)
     }
-    if suffix.0 == 60 {
+    if suffix.0 == '<' {
         node = parse_generic_type(source, node, suffix, storage)
     } else {
         if suffix.0 != 0 { return mimi_buffer_empty() as *ExprNode }
@@ -3522,7 +3563,7 @@ parse_generic_type :: fn (source : []u8, base : *ExprNode, opening : (u8, u64, u
     arguments : *ExprNode = mimi_buffer_empty() as *ExprNode
     count : u64 = 0
     while true {
-        if next_token(source, cursor).0 == 62 { return mimi_buffer_empty() as *ExprNode }
+        if next_token(source, cursor).0 == '>' { return mimi_buffer_empty() as *ExprNode }
         segment_start := cursor
         segment_end := source.len
         angle_depth : u64 = 0
@@ -3533,8 +3574,8 @@ parse_generic_type :: fn (source : []u8, base : *ExprNode, opening : (u8, u64, u
             token := next_token(source, cursor)
             if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *ExprNode }
             cursor = token.2
-            if token.0 == 60 { angle_depth = angle_depth + 1 } else {
-                if token.0 == 62 {
+            if token.0 == '<' { angle_depth = angle_depth + 1 } else {
+                if token.0 == '>' {
                     if angle_depth > 0 { angle_depth = angle_depth - 1 } else {
                         if paren_depth == 0 && bracket_depth == 0 {
                             segment_end = token.1
@@ -3542,17 +3583,17 @@ parse_generic_type :: fn (source : []u8, base : *ExprNode, opening : (u8, u64, u
                         }
                     }
                 } else {
-                    if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-                        if token.0 == 41 {
+                    if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+                        if token.0 == ')' {
                             if paren_depth == 0 { return mimi_buffer_empty() as *ExprNode }
                             paren_depth = paren_depth - 1
                         } else {
-                            if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-                                if token.0 == 93 {
+                            if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+                                if token.0 == ']' {
                                     if bracket_depth == 0 { return mimi_buffer_empty() as *ExprNode }
                                     bracket_depth = bracket_depth - 1
                                 } else {
-                                    if token.0 == 44 && angle_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
+                                    if token.0 == ',' && angle_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
                                         segment_end = token.1
                                         found_separator = true
                                     }
@@ -3574,26 +3615,26 @@ parse_generic_type :: fn (source : []u8, base : *ExprNode, opening : (u8, u64, u
         }
         count = count + 1
         separator := next_token(source, segment_end)
-        if separator.0 == 62 {
+        if separator.0 == '>' {
             if next_token(source, separator.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
             return allocate_expr(storage, 278, base.start, separator.2, base, arguments)
         }
-        if separator.0 != 44 { return mimi_buffer_empty() as *ExprNode }
+        if separator.0 != ',' { return mimi_buffer_empty() as *ExprNode }
         cursor = separator.2
-        if next_token(source, cursor).0 == 62 { return mimi_buffer_empty() as *ExprNode }
+        if next_token(source, cursor).0 == '>' { return mimi_buffer_empty() as *ExprNode }
     }
     mimi_buffer_empty() as *ExprNode
 }
 
 pub parse_tuple_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     opening := next_token(source, 0)
-    if opening.0 != 40 { return mimi_buffer_empty() as *ExprNode }
+    if opening.0 != '(' { return mimi_buffer_empty() as *ExprNode }
     cursor := opening.2
     elements : *ExprNode = mimi_buffer_empty() as *ExprNode
     count : u64 = 0
     while true {
         token := next_token(source, cursor)
-        if token.0 == 41 || token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *ExprNode }
+        if token.0 == ')' || token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *ExprNode }
         segment_start := cursor
         bracket_depth : u64 = 0
         paren_depth : u64 = 0
@@ -3603,13 +3644,13 @@ pub parse_tuple_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
             token = next_token(source, cursor)
             if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *ExprNode }
             cursor = token.2
-            if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-                if token.0 == 93 {
+            if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+                if token.0 == ']' {
                     if bracket_depth == 0 { return mimi_buffer_empty() as *ExprNode }
                     bracket_depth = bracket_depth - 1
                 } else {
-                    if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-                        if token.0 == 41 {
+                    if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+                        if token.0 == ')' {
                             if paren_depth > 0 { paren_depth = paren_depth - 1 } else {
                                 if bracket_depth == 0 {
                                     segment_end = token.1
@@ -3617,7 +3658,7 @@ pub parse_tuple_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                                 }
                             }
                         } else {
-                            if bracket_depth == 0 && paren_depth == 0 && token.0 == 44 {
+                            if bracket_depth == 0 && paren_depth == 0 && token.0 == ',' {
                                 segment_end = token.1
                                 found_separator = true
                             }
@@ -3636,14 +3677,14 @@ pub parse_tuple_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
         }
         count = count + 1
         separator := next_token(source, segment_end)
-        if separator.0 == 41 {
+        if separator.0 == ')' {
             if next_token(source, separator.2).0 != 0 || count < 2 { return mimi_buffer_empty() as *ExprNode }
             return allocate_expr(storage, 275, opening.1, separator.2, elements, mimi_buffer_empty() as *ExprNode)
         }
-        if separator.0 != 44 { return mimi_buffer_empty() as *ExprNode }
+        if separator.0 != ',' { return mimi_buffer_empty() as *ExprNode }
         cursor = separator.2
         trailing_close := next_token(source, cursor)
-        if trailing_close.0 == 41 {
+        if trailing_close.0 == ')' {
             if count == 0 || next_token(source, trailing_close.2).0 != 0 { return mimi_buffer_empty() as *ExprNode }
             return allocate_expr(storage, 275, opening.1, trailing_close.2, elements, mimi_buffer_empty() as *ExprNode)
         }
@@ -3654,13 +3695,13 @@ pub parse_tuple_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
 pub parse_function_type :: fn (source : []u8, storage : *ExpressionArena) *ExprNode {
     keyword := next_token(source, 0)
     opening := next_token(source, keyword.2)
-    if keyword.0 != 160 || opening.0 != 40 { return mimi_buffer_empty() as *ExprNode }
+    if keyword.0 != 160 || opening.0 != '(' { return mimi_buffer_empty() as *ExprNode }
     cursor := opening.2
     parameters : *ExprNode = mimi_buffer_empty() as *ExprNode
     count : u64 = 0
     close_start : u64 = 0
     close_end : u64 = 0
-    if next_token(source, cursor).0 == 41 {
+    if next_token(source, cursor).0 == ')' {
         close := next_token(source, cursor)
         close_start = close.1
         close_end = close.2
@@ -3675,8 +3716,8 @@ pub parse_function_type :: fn (source : []u8, storage : *ExpressionArena) *ExprN
                 token := next_token(source, cursor)
                 if token.0 == 0 || token.0 == 255 { return mimi_buffer_empty() as *ExprNode }
                 cursor = token.2
-                if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-                    if token.0 == 41 {
+                if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+                    if token.0 == ')' {
                         if paren_depth > 0 { paren_depth = paren_depth - 1 } else {
                             if bracket_depth == 0 {
                                 segment_end = token.1
@@ -3686,12 +3727,12 @@ pub parse_function_type :: fn (source : []u8, storage : *ExpressionArena) *ExprN
                             }
                         }
                     } else {
-                        if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-                            if token.0 == 93 {
+                        if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+                            if token.0 == ']' {
                                 if bracket_depth == 0 { return mimi_buffer_empty() as *ExprNode }
                                 bracket_depth = bracket_depth - 1
                             } else {
-                                if token.0 == 44 && paren_depth == 0 && bracket_depth == 0 {
+                                if token.0 == ',' && paren_depth == 0 && bracket_depth == 0 {
                                     segment_end = token.1
                                     found_separator = true
                                 }
@@ -3710,10 +3751,10 @@ pub parse_function_type :: fn (source : []u8, storage : *ExpressionArena) *ExprN
             }
             count = count + 1
             separator := next_token(source, segment_end)
-            if separator.0 == 41 { break }
-            if separator.0 != 44 { return mimi_buffer_empty() as *ExprNode }
+            if separator.0 == ')' { break }
+            if separator.0 != ',' { return mimi_buffer_empty() as *ExprNode }
             cursor = separator.2
-            if next_token(source, cursor).0 == 41 { return mimi_buffer_empty() as *ExprNode }
+            if next_token(source, cursor).0 == ')' { return mimi_buffer_empty() as *ExprNode }
         }
     }
     if close_end == 0 { return mimi_buffer_empty() as *ExprNode }
@@ -3731,11 +3772,11 @@ if_expression_end :: fn (source : []u8, start : u64) u64 {
         token := next_token(source, cursor)
         if token.0 == 0 || token.0 == 255 { return start }
         cursor = token.2
-        if token.0 == 123 {
+        if token.0 == '{' {
             depth = depth + 1
             saw_block = true
         } else {
-            if token.0 == 125 {
+            if token.0 == '}' {
                 if depth == 0 { return start }
                 depth = depth - 1
                 if saw_block && depth == 0 {
@@ -3755,8 +3796,8 @@ parenthesized_end :: fn (source : []u8, start : u64) u64 {
         token := next_token(source, cursor)
         if token.0 == 0 || token.0 == 255 { return start }
         cursor = token.2
-        if token.0 == 40 { depth = depth + 1 }
-        if token.0 == 41 {
+        if token.0 == '(' { depth = depth + 1 }
+        if token.0 == ')' {
             if depth == 0 { return start }
             depth = depth - 1
             if depth == 0 { return cursor }
@@ -3772,8 +3813,8 @@ bracketed_end :: fn (source : []u8, start : u64) u64 {
         token := next_token(source, cursor)
         if token.0 == 0 || token.0 == 255 { return start }
         cursor = token.2
-        if token.0 == 91 { depth = depth + 1 }
-        if token.0 == 93 {
+        if token.0 == '[' { depth = depth + 1 }
+        if token.0 == ']' {
             if depth == 0 { return start }
             depth = depth - 1
             if depth == 0 { return cursor }
@@ -3786,11 +3827,11 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
     // Bound the stack-size calculations below before multiplying source.len.
     if source.len > 500000000000000000 { return mimi_buffer_empty() as *ExprNode }
     first_cast := next_token(source, 0)
-    if first_cast.0 == 1 || first_cast.0 == 2 || first_cast.0 == 3 || first_cast.0 == 40 || first_cast.0 == 42 || first_cast.0 == 91 || first_cast.0 == 38 || first_cast.0 == 45 || first_cast.0 == 33 {
+    if first_cast.0 == 1 || first_cast.0 == 2 || first_cast.0 == 3 || first_cast.0 == '(' || first_cast.0 == '*' || first_cast.0 == '[' || first_cast.0 == '&' || first_cast.0 == '-' || first_cast.0 == '!' {
         cast := parse_cast_expression(source, storage)
         if !expression_is_null(cast) { return cast }
     }
-    if first_cast.0 == 40 {
+    if first_cast.0 == '(' {
         tuple := parse_tuple_literal(source, storage)
         if !expression_is_null(tuple) { return tuple }
     }
@@ -3802,7 +3843,7 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
         if !expression_is_null(expression) { expression.match_node = match_node }
         return expression
     }
-    if first.0 == 1 && (next_token(source, first.2).0 == 123 || next_token(source, first.2).0 == 60 || next_token(source, first.2).0 == 46) {
+    if first.0 == 1 && (next_token(source, first.2).0 == '{' || next_token(source, first.2).0 == '<' || next_token(source, first.2).0 == '.') {
         literal := parse_struct_literal(source, storage)
         if struct_literal_is_null(literal) { } else {
         type_node := parse_type(source[literal.type_start:literal.type_end], storage)
@@ -3843,7 +3884,7 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
         if token.0 == 255 { return mimi_buffer_empty() as *ExprNode }
         cursor = token.2
 
-        if token.0 == 91 && expecting_operand {
+        if token.0 == '[' && expecting_operand {
             close_end := bracketed_end(source, token.1)
             if close_end == token.1 { return mimi_buffer_empty() as *ExprNode }
             array := parse_array_literal(source[token.1:close_end], storage)
@@ -3882,7 +3923,7 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
             stacks.node_count = stacks.node_count + 1
             expecting_operand = false
         } else {
-            if token.0 == 46 && !expecting_operand {
+            if token.0 == '.' && !expecting_operand {
                 if stacks.node_count == 0 { return mimi_buffer_empty() as *ExprNode }
                 member := next_token(source, cursor)
                 if member.0 != 1 && member.0 != 2 { return mimi_buffer_empty() as *ExprNode }
@@ -3894,7 +3935,7 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                 if expression_is_null(access) { return access }
                 stacks.nodes[stacks.node_count - 1] = access
             } else {
-                if token.0 == 40 && expecting_operand {
+                if token.0 == '(' && expecting_operand {
                     close_end := parenthesized_end(source, token.1)
                     if close_end > token.1 {
                         tuple := parse_tuple_literal(source[token.1:close_end], storage)
@@ -3910,26 +3951,26 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                     stacks.operators[stacks.operator_count] = ExprOperator { kind = 40, start = token.1, base_count = 0, argument_count = 0 }
                     stacks.operator_count = stacks.operator_count + 1
                 } else {
-                    if token.0 == 40 && !expecting_operand {
+                    if token.0 == '(' && !expecting_operand {
                         if stacks.node_count == 0 { return mimi_buffer_empty() as *ExprNode }
                         stacks.operators[stacks.operator_count] = ExprOperator { kind = 300, start = token.1, base_count = stacks.node_count, argument_count = 0 }
                         stacks.operator_count = stacks.operator_count + 1
                         expecting_operand = true
                     } else {
-                    if token.0 == 91 && !expecting_operand {
+                    if token.0 == '[' && !expecting_operand {
                         if stacks.node_count == 0 { return mimi_buffer_empty() as *ExprNode }
                         stacks.operators[stacks.operator_count] = ExprOperator { kind = 91, start = token.1, base_count = stacks.node_count, argument_count = 0 }
                         stacks.operator_count = stacks.operator_count + 1
                         expecting_operand = true
                     } else {
-                        if token.0 == 58 || token.0 == 135 {
+                        if token.0 == ':' || token.0 == 135 {
                             found_index := false
                             while stacks.operator_count > 0 && !found_index {
                                 top := stacks.operators[stacks.operator_count - 1]
-                                if top.kind == 91 {
+                                if top.kind == '[' {
                                     found_index = true
                                 } else {
-                                    if top.kind == 40 || top.kind == 300 || !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
+                                    if top.kind == '(' || top.kind == 300 || !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
                                 }
                             }
                             if !found_index || stacks.operators[stacks.operator_count - 1].argument_count != 0 { return mimi_buffer_empty() as *ExprNode }
@@ -3944,11 +3985,11 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                             stacks.operators[stacks.operator_count - 1] = marker
                             expecting_operand = true
                         } else {
-                        if token.0 == 44 {
+                        if token.0 == ',' {
                             if expecting_operand || stacks.operator_count == 0 { return mimi_buffer_empty() as *ExprNode }
                             while stacks.operator_count > 0 && stacks.operators[stacks.operator_count - 1].kind != 300 {
                                 top := stacks.operators[stacks.operator_count - 1]
-                                if top.kind == 40 || top.kind == 91 || !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
+                                if top.kind == '(' || top.kind == '[' || !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
                             }
                             if stacks.operator_count == 0 { return mimi_buffer_empty() as *ExprNode }
                             marker := stacks.operators[stacks.operator_count - 1]
@@ -3969,17 +4010,17 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                             stacks.operators[stacks.operator_count - 1] = marker
                             expecting_operand = true
                         } else {
-                        if token.0 == 93 {
+                        if token.0 == ']' {
                             found_index := false
                             marker := ExprOperator { kind = 0, start = 0, base_count = 0, argument_count = 0 }
                             while stacks.operator_count > 0 && !found_index {
                                 top := stacks.operators[stacks.operator_count - 1]
-                                if top.kind == 91 {
+                                if top.kind == '[' {
                                     marker = top
                                     stacks.operator_count = stacks.operator_count - 1
                                     found_index = true
                                 } else {
-                                    if top.kind == 40 || top.kind == 300 || !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
+                                    if top.kind == '(' || top.kind == 300 || !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
                                 }
                             }
                             if !found_index || marker.base_count == 0 { return mimi_buffer_empty() as *ExprNode }
@@ -4017,14 +4058,14 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                             }
                             expecting_operand = false
                         } else {
-                            if token.0 == 41 {
+                            if token.0 == ')' {
                                 while stacks.operator_count > 0 {
                                     top := stacks.operators[stacks.operator_count - 1]
-                                    if top.kind == 40 || top.kind == 300 { break }
-                                    if top.kind == 91 || !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
+                                    if top.kind == '(' || top.kind == 300 { break }
+                                    if top.kind == '[' || !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
                                 }
                             }
-                            if token.0 == 41 && stacks.operator_count > 0 && stacks.operators[stacks.operator_count - 1].kind == 300 {
+                            if token.0 == ')' && stacks.operator_count > 0 && stacks.operators[stacks.operator_count - 1].kind == 300 {
                                 marker := stacks.operators[stacks.operator_count - 1]
                                 if marker.argument_count == 0 {
                                     if stacks.node_count != marker.base_count && stacks.node_count != marker.base_count + 1 { return mimi_buffer_empty() as *ExprNode }
@@ -4052,16 +4093,16 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                                 stacks.node_count = stacks.node_count + 1
                                 expecting_operand = false
                             } else {
-                            if token.0 == 41 {
+                            if token.0 == ')' {
                                 if expecting_operand { return mimi_buffer_empty() as *ExprNode }
                                 found_open := false
                                 while stacks.operator_count > 0 && !found_open {
                                     top := stacks.operators[stacks.operator_count - 1]
-                                    if top.kind == 40 {
+                                    if top.kind == '(' {
                                         stacks.operator_count = stacks.operator_count - 1
                                         found_open = true
                                     } else {
-                                        if top.kind == 91 || top.kind == 300 || !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
+                                        if top.kind == '[' || top.kind == 300 || !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
                                     }
                                 }
                                 if !found_open { return mimi_buffer_empty() as *ExprNode }
@@ -4084,10 +4125,10 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                                     cursor = type_end
                                 } else {
                                 if expecting_operand {
-                                    if token.0 != 45 && token.0 != 33 && token.0 != 38 && token.0 != 42 { return mimi_buffer_empty() as *ExprNode }
+                                    if token.0 != '-' && token.0 != '!' && token.0 != '&' && token.0 != '*' { return mimi_buffer_empty() as *ExprNode }
                                     prefix_kind : u64 = 250 + token.0 as u64
-                                    if token.0 == 38 { prefix_kind = 296 }
-                                    if token.0 == 42 { prefix_kind = 297 }
+                                    if token.0 == '&' { prefix_kind = 296 }
+                                    if token.0 == '*' { prefix_kind = 297 }
                                     stacks.operators[stacks.operator_count] = ExprOperator { kind = prefix_kind, start = token.1, base_count = 0, argument_count = 0 }
                                     stacks.operator_count = stacks.operator_count + 1
                                 } else {
@@ -4095,7 +4136,7 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
                                     if precedence == 0 { return mimi_buffer_empty() as *ExprNode }
                                     while stacks.operator_count > 0 {
                                         top := stacks.operators[stacks.operator_count - 1]
-                                        if top.kind == 40 || top.kind == 91 || top.kind == 300 { break }
+                                        if top.kind == '(' || top.kind == '[' || top.kind == 300 { break }
                                         top_precedence := expression_operator_precedence(top.kind)
                                         if top_precedence < precedence { break }
                                         if !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
@@ -4119,7 +4160,7 @@ pub parse_expression :: fn (source : []u8, storage : *ExpressionArena) *ExprNode
     }
     if expecting_operand || stacks.node_count == 0 { return mimi_buffer_empty() as *ExprNode }
     while stacks.operator_count > 0 {
-        if stacks.operators[stacks.operator_count - 1].kind == 40 || stacks.operators[stacks.operator_count - 1].kind == 91 || stacks.operators[stacks.operator_count - 1].kind == 300 { return mimi_buffer_empty() as *ExprNode }
+        if stacks.operators[stacks.operator_count - 1].kind == '(' || stacks.operators[stacks.operator_count - 1].kind == '[' || stacks.operators[stacks.operator_count - 1].kind == 300 { return mimi_buffer_empty() as *ExprNode }
         if !reduce_expression(&stacks) { return mimi_buffer_empty() as *ExprNode }
     }
     if stacks.node_count != 1 { return mimi_buffer_empty() as *ExprNode }
@@ -4136,23 +4177,23 @@ cast_type_end :: fn (source : []u8, start : u64) u64 {
         token := next_token(source, cursor)
         if token.0 == 0 || token.0 == 255 { break }
         if paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 {
-            if token.0 == 174 || token.0 == 43 || token.0 == 45 || token.0 == 47 || token.0 == 37 || token.0 == 128 || token.0 == 129 || token.0 == 130 || token.0 == 131 || token.0 == 132 || token.0 == 133 || token.0 == 44 || token.0 == 41 || token.0 == 93 { break }
-            if token.0 == 42 && saw_name { break }
+            if token.0 == 174 || token.0 == '+' || token.0 == '-' || token.0 == '/' || token.0 == '%' || token.0 == 128 || token.0 == 129 || token.0 == 130 || token.0 == 131 || token.0 == 132 || token.0 == 133 || token.0 == ',' || token.0 == ')' || token.0 == ']' { break }
+            if token.0 == '*' && saw_name { break }
         }
         cursor = token.2
         if token.0 == 1 || token.0 == 4 || token.0 == 5 { saw_name = true }
-        if token.0 == 40 { paren_depth = paren_depth + 1 } else {
-            if token.0 == 41 {
+        if token.0 == '(' { paren_depth = paren_depth + 1 } else {
+            if token.0 == ')' {
                 if paren_depth == 0 { return start }
                 paren_depth = paren_depth - 1
             } else {
-                if token.0 == 91 { bracket_depth = bracket_depth + 1 } else {
-                    if token.0 == 93 {
+                if token.0 == '[' { bracket_depth = bracket_depth + 1 } else {
+                    if token.0 == ']' {
                         if bracket_depth == 0 { return start }
                         bracket_depth = bracket_depth - 1
                     } else {
-                        if token.0 == 60 { angle_depth = angle_depth + 1 } else {
-                            if token.0 == 62 && angle_depth > 0 { angle_depth = angle_depth - 1 }
+                        if token.0 == '<' { angle_depth = angle_depth + 1 } else {
+                            if token.0 == '>' && angle_depth > 0 { angle_depth = angle_depth - 1 }
                         }
                     }
                 }
@@ -4213,9 +4254,9 @@ expression_precedence :: fn (kind : u8) u8 {
     if kind == 133 { return 1 }
     if kind == 132 { return 2 }
     if kind == 128 || kind == 129 { return 3 }
-    if kind == 60 || kind == 62 || kind == 130 || kind == 131 { return 4 }
-    if kind == 43 || kind == 45 { return 5 }
-    if kind == 42 || kind == 47 || kind == 37 { return 6 }
+    if kind == '<' || kind == '>' || kind == 130 || kind == 131 { return 4 }
+    if kind == '+' || kind == '-' { return 5 }
+    if kind == '*' || kind == '/' || kind == '%' { return 6 }
     0
 }
 
@@ -4532,9 +4573,10 @@ infer_expression_tag :: fn (source : []u8, expression : *ExprNode, locals : *Typ
         return type_symbol_lookup(source, token.1, token.2, locals)
     }
     if expression.kind == 2 {
+        if source[expression.start] == '\'' { return 1 }
         cursor := expression.start
         while cursor < expression.end {
-            if source[cursor] == 46 { return 3 }
+            if source[cursor] == '.' { return 3 }
             cursor = cursor + 1
         }
         return 1
@@ -4567,7 +4609,7 @@ infer_expression_tag :: fn (source : []u8, expression : *ExprNode, locals : *Typ
     left := infer_expression_tag(source, expression.left, locals, issue)
     right := infer_expression_tag(source, expression.right, locals, issue)
     if issue.code != 0 { return 0 }
-    if expression.kind == 43 || expression.kind == 45 || expression.kind == 42 || expression.kind == 47 || expression.kind == 37 {
+    if expression.kind == '+' || expression.kind == '-' || expression.kind == '*' || expression.kind == '/' || expression.kind == '%' {
         if (left != 0 && left != 1 && left != 3) || (right != 0 && right != 1 && right != 3) { return type_fail(issue, 4, expression) }
         if left == 3 || right == 3 { return 3 }
         if left == 1 || right == 1 { return 1 }
@@ -4577,7 +4619,7 @@ infer_expression_tag :: fn (source : []u8, expression : *ExprNode, locals : *Typ
         if (left != 0 && left != 2) || (right != 0 && right != 2) { return type_fail(issue, 4, expression) }
         return 2
     }
-    if expression.kind == 128 || expression.kind == 129 || expression.kind == 130 || expression.kind == 131 || expression.kind == 60 || expression.kind == 62 {
+    if expression.kind == 128 || expression.kind == 129 || expression.kind == 130 || expression.kind == 131 || expression.kind == '<' || expression.kind == '>' {
         if !type_compatible(left, right) { return type_fail(issue, 4, expression) }
         return 2
     }
@@ -5262,7 +5304,7 @@ tuple_member_index :: fn (source : []u8, start : u64, end : u64) u64 {
     result : u64 = 0
     while index < end {
         byte := source[index]
-        if byte < 48 || byte > 57 || result > 1000000 { return 18446744073709551615 }
+        if byte < '0' || byte > '9' || result > 1000000 { return 18446744073709551615 }
         result = result * 10 + (byte - 48) as u64
         index = index + 1
     }
@@ -5686,9 +5728,11 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
     if node.kind == 2 {
         tag : u64 = 1
         index := node.payload_start
-        while index < node.payload_end {
-            if source[index] == 46 { tag = 3 }
-            index = index + 1
+        if source[node.payload_start] != '\'' {
+            while index < node.payload_end {
+                if source[index] == '.' { tag = 3 }
+                index = index + 1
+            }
         }
         return allocate_ir_expr(storage, node, tag, empty, empty)
     }
@@ -5713,7 +5757,7 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
         tag : u64 = if node.kind == 283 { 2 } else { value.type_tag }
         return allocate_ir_expr(storage, node, tag, value, empty)
     }
-    if node.kind == 43 || node.kind == 45 || node.kind == 42 || node.kind == 47 || node.kind == 37 || node.kind == 128 || node.kind == 129 || node.kind == 130 || node.kind == 131 || node.kind == 60 || node.kind == 62 || node.kind == 132 || node.kind == 133 {
+    if node.kind == '+' || node.kind == '-' || node.kind == '*' || node.kind == '/' || node.kind == '%' || node.kind == 128 || node.kind == 129 || node.kind == 130 || node.kind == 131 || node.kind == '<' || node.kind == '>' || node.kind == 132 || node.kind == 133 {
         left := lower_expr(source, owner, node.left, locals, functions, storage, issue)
         right := lower_expr(source, owner, node.right, locals, functions, storage, issue)
         if expr_is_null(left) || expr_is_null(right) { return empty }
@@ -5726,7 +5770,7 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
             } else {
                 if !numeric(left.type_tag) || !numeric(right.type_tag) { fail(issue, 3, node.start, node.end) return empty }
             }
-            if node.kind == 43 || node.kind == 45 || node.kind == 42 || node.kind == 47 || node.kind == 37 {
+            if node.kind == '+' || node.kind == '-' || node.kind == '*' || node.kind == '/' || node.kind == '%' {
                 tag = if left.type_tag == 3 || right.type_tag == 3 { 3 } else { 1 }
             }
         }
@@ -5788,6 +5832,64 @@ lower_if_node :: fn (source : []u8, owner : *ModuleInput, node : *IfNode, locals
     }
     if issue.code != 0 { return empty }
     item
+}
+
+last_statement :: fn (first : *Statement) *Statement {
+    current := first
+    last := mimi_buffer_empty() as *Statement
+    while !statement_is_null(current) {
+        last = current
+        current = current.next
+    }
+    last
+}
+
+statement_diverges :: fn (item : *Statement) bool {
+    if statement_is_null(item) { return false }
+    if item.kind == 280 { return true }
+    if item.kind == 304 {
+        if statement_is_null(item.else_body) { return false }
+        return statement_diverges(last_statement(item.then_body)) && statement_diverges(last_statement(item.else_body))
+    }
+    false
+}
+
+allocate_conditional_expr :: fn (storage : *Storage, start : u64, end : u64, tag : u64, condition : *Expr, then_value : *Expr, else_value : *Expr) *Expr {
+    if !allocate(storage, 88) { return mimi_buffer_empty() as *Expr }
+    item := storage.last as *Expr
+    item.kind = 288
+    item.type_tag = tag
+    item.start = start
+    item.end = end
+    item.payload_start = start
+    item.payload_end = end
+    item.left = condition
+    item.right = then_value
+    item.otherwise = else_value
+    item.is_external = false
+    item.callee = mimi_buffer_empty() as *Function
+    item
+}
+
+tail_if_value :: fn (storage : *Storage, node : *StatementNode, item : *Statement, expected_return : u64) *Statement {
+    if statement_is_null(item) || item.kind != 304 { return item }
+    then_body := item.then_body
+    else_body := item.else_body
+    if statement_is_null(then_body) || statement_is_null(else_body) { return item }
+    if !statement_is_null(then_body.next) || !statement_is_null(else_body.next) { return item }
+    if then_body.kind != 303 || else_body.kind != 303 { return item }
+    if expr_is_null(then_body.value) || expr_is_null(else_body.value) { return item }
+    tag := then_body.value.type_tag
+    if tag == 0 || tag == 6 { return item }
+    if tag != else_body.value.type_tag { return item }
+    if !type_assignable(expected_return, tag) { return item }
+    expression := allocate_conditional_expr(storage, item.start, item.end, tag, item.value, then_body.value, else_body.value)
+    if expr_is_null(expression) { return item }
+    replacement := allocate_statement(storage, node, expression)
+    if statement_is_null(replacement) { return item }
+    replacement.kind = 303
+    replacement.type_tag = tag
+    replacement
 }
 
 contains_transfer :: fn (first : *Statement) bool {
@@ -5999,14 +6101,19 @@ lower_body :: fn (source : []u8, owner : *ModuleInput, body : *BlockNode, incomi
         }
         }
         if issue.code != 0 { return empty }
+        if check_tail && expected_return != 6 && item.kind == 304 && statement_node_is_null(node.next) {
+            item = tail_if_value(storage, node, item, expected_return)
+        }
         if statement_is_null(item) { fail(issue, 4, node.start, node.end) return empty }
         if statement_is_null(first) { first = item } else { last.next = item }
         last = item
         node = node.next
     }
     if check_tail && expected_return != 6 && (statement_is_null(last) || (last.kind != 280 && last.kind != 303)) {
-        fail(issue, 3, body.start, body.end)
-        return empty
+        if !statement_diverges(last) {
+            fail(issue, 3, body.start, body.end)
+            return empty
+        }
     }
     first
 }
@@ -6297,9 +6404,9 @@ c_uint :: fn (output : *CBuffer, value : u64) bool {
 }
 
 c_function_name :: fn (output : *CBuffer, function : *Function) bool {
-    if !c_text(output, "m_") || !c_uint(output, function.owner.id) || !c_push(output, 95) { return false }
+    if !c_text(output, "m_") || !c_uint(output, function.owner.id) || !c_push(output, '_') { return false }
     if function.method_of != (mimi_buffer_empty() as *StructType) {
-        if !c_push(output, 115) || !c_uint(output, function.method_of.id) || !c_push(output, 95) { return false }
+        if !c_push(output, 's') || !c_uint(output, function.method_of.id) || !c_push(output, '_') { return false }
     }
     c_name(output, function.source, function.name_start, function.name_end, "")
 }
@@ -6308,7 +6415,7 @@ c_type :: fn (output : *CBuffer, tag : u64) bool {
     if tag >= 4000000 && tag < 5000000 { return c_text(output, "m_e") && c_uint(output, tag - 4000000) }
     if tag >= 3000000 && tag < 4000000 { return c_text(output, "m_s") && c_uint(output, tag - 3000000) && c_text(output, "**") }
     if tag >= 2000000 && tag < 3000000 { return c_text(output, "m_t") && c_uint(output, tag - 2000000) }
-    if tag >= 1000000 && tag < 2000000 { return c_text(output, "m_s") && c_uint(output, tag - 1000000) && c_push(output, 42) }
+    if tag >= 1000000 && tag < 2000000 { return c_text(output, "m_s") && c_uint(output, tag - 1000000) && c_push(output, '*') }
     if tag >= 1000 && tag < 1000000 { return c_text(output, "m_s") && c_uint(output, tag - 1000) }
     if tag == 1 { return c_text(output, "int64_t") }
     if tag == 2 { return c_text(output, "_Bool") }
@@ -6332,7 +6439,7 @@ c_operator :: fn (output : *CBuffer, kind : u64) bool {
     if kind == 131 { return c_text(output, ">=") }
     if kind == 132 { return c_text(output, "&&") }
     if kind == 133 { return c_text(output, "||") }
-    if kind == 43 || kind == 45 || kind == 42 || kind == 47 || kind == 37 || kind == 60 || kind == 62 {
+    if kind == '+' || kind == '-' || kind == '*' || kind == '/' || kind == '%' || kind == '<' || kind == '>' {
         return c_push(output, kind as u8)
     }
     false
@@ -6342,7 +6449,7 @@ c_parameters :: fn (output : *CBuffer, source : []u8, first : *Parameter) bool {
     if first == (mimi_buffer_empty() as *Parameter) { return c_text(output, "void") }
     current := first
     while current != (mimi_buffer_empty() as *Parameter) {
-        if !c_type(output, current.type_tag) || !c_push(output, 32) { return false }
+        if !c_type(output, current.type_tag) || !c_push(output, ' ') { return false }
         if !c_name(output, source, current.name_start, current.name_end, "v_") { return false }
         current = current.next
         if current != (mimi_buffer_empty() as *Parameter) && !c_text(output, ", ") { return false }
@@ -6354,7 +6461,7 @@ c_external_parameters :: fn (output : *CBuffer, source : []u8, first : *Paramete
     if first == (mimi_buffer_empty() as *Parameter) { return c_text(output, "void") }
     current := first
     while current != (mimi_buffer_empty() as *Parameter) {
-        if !c_external_type(output, current.type_tag) || !c_push(output, 32) { return false }
+        if !c_external_type(output, current.type_tag) || !c_push(output, ' ') { return false }
         if !c_name(output, source, current.name_start, current.name_end, "v_") { return false }
         current = current.next
         if current != (mimi_buffer_empty() as *Parameter) && !c_text(output, ", ") { return false }
@@ -6394,7 +6501,7 @@ c_match_arms :: fn (output : *CBuffer, source : []u8, value : *Expr, arm : *Expr
     if expr_is_null(arm) { return false }
     if expr_is_null(arm.right) { return c_expr(output, source, arm.left) }
     if !c_text(output, "((") || !c_expr(output, source, value) || !c_text(output, ").tag == ") || !c_uint(output, arm.payload_start) || !c_text(output, " ? ") || !c_expr(output, source, arm.left) || !c_text(output, " : ") { return false }
-    c_match_arms(output, source, value, arm.right) && c_push(output, 41)
+    c_match_arms(output, source, value, arm.right) && c_push(output, ')')
 }
 
 c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
@@ -6403,18 +6510,18 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
     if value.kind == 310 {
         if !c_text(output, "((") || !c_type(output, value.type_tag) || !c_text(output, "){.tag=") || !c_uint(output, value.payload_start) { return false }
         if !expr_is_null(value.right) {
-            if !c_text(output, ",.payload.v") || !c_uint(output, value.payload_start) || !c_push(output, 61) || !c_expr(output, source, value.right) { return false }
+            if !c_text(output, ",.payload.v") || !c_uint(output, value.payload_start) || !c_push(output, '=') || !c_expr(output, source, value.right) { return false }
         }
         return c_text(output, "})")
     }
     if value.kind == 312 {
-        if !c_push(output, 40) || !c_expr(output, source, value.left) || !c_text(output, ").payload.v") { return false }
+        if !c_push(output, '(') || !c_expr(output, source, value.left) || !c_text(output, ").payload.v") { return false }
         return c_uint(output, value.payload_start)
     }
     if value.kind == 288 {
-        if !c_push(output, 40) || !c_expr(output, source, value.left) || !c_text(output, " ? ") || !c_expr(output, source, value.right) || !c_text(output, " : ") { return false }
+        if !c_push(output, '(') || !c_expr(output, source, value.left) || !c_text(output, " ? ") || !c_expr(output, source, value.right) || !c_text(output, " : ") { return false }
         if !c_expr(output, source, value.otherwise) { return false }
-        return c_push(output, 41)
+        return c_push(output, ')')
     }
     if value.kind == 263 {
         if value.callee == (mimi_buffer_empty() as *Function) { return false }
@@ -6427,27 +6534,27 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
                 if !c_function_name(output, value.callee) { return false }
             }
         }
-        if !c_push(output, 40) { return false }
+        if !c_push(output, '(') { return false }
         if !expr_is_null(value.left) {
             if !c_expr(output, source, value.left) { return false }
             if !expr_is_null(value.right) && !c_text(output, ", ") { return false }
         }
         if !c_arguments(output, source, value.right) { return false }
-        return c_push(output, 41)
+        return c_push(output, ')')
     }
     if value.kind == 1 {
         if name_is(source, value.payload_start, value.payload_end, "null") { return c_text(output, "((void*)0)") }
         return c_name(output, source, value.payload_start, value.payload_end, "v_")
     }
     if value.kind == 3 {
-        if !c_text(output, "((m_slice){(uint8_t*)") || !c_span(output, source, value.payload_start, value.payload_end) || !c_push(output, 44) { return false }
+        if !c_text(output, "((m_slice){(uint8_t*)") || !c_span(output, source, value.payload_start, value.payload_end) || !c_push(output, ',') { return false }
         if !c_uint(output, decoded_string_len(source, value.payload_start, value.payload_end)) { return false }
         return c_text(output, "})")
     }
     if value.kind == 267 {
         if !c_text(output, "((m_slice){(uint8_t[]){") { return false }
         if expr_is_null(value.right) {
-            if !c_push(output, 48) { return false }
+            if !c_push(output, '0') { return false }
         } else {
             if !c_tuple_items(output, source, value.right) { return false }
         }
@@ -6464,8 +6571,8 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
         return c_text(output, "})")
     }
     if value.kind == 260 {
-        if !c_push(output, 40) || !c_expr(output, source, value.left) || !c_text(output, if value.left.type_tag >= 1000000 && value.left.type_tag < 2000000 { ")->" } else { ")." }) { return false }
-        if value.left.type_tag >= 2000000 && value.left.type_tag < 3000000 { return c_push(output, 102) && c_span(output, source, value.payload_start, value.payload_end) }
+        if !c_push(output, '(') || !c_expr(output, source, value.left) || !c_text(output, if value.left.type_tag >= 1000000 && value.left.type_tag < 2000000 { ")->" } else { ")." }) { return false }
+        if value.left.type_tag >= 2000000 && value.left.type_tag < 3000000 { return c_push(output, 'f') && c_span(output, source, value.payload_start, value.payload_end) }
         if value.left.type_tag >= 1000 { return c_name(output, source, value.payload_start, value.payload_end, "f_") }
         if value.type_tag == 7 { return c_text(output, "ptr") }
         if value.type_tag == 1 { return c_text(output, "len") }
@@ -6476,7 +6583,7 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
             if !c_text(output, "((") || !c_expr(output, source, value.left) || !c_text(output, ").ptr[") { return false }
         } else {
             if (value.left.type_tag >= 1000000 && value.left.type_tag < 2000000) || (value.left.type_tag >= 3000000 && value.left.type_tag < 4000000) {
-                if !c_text(output, "(((") || !c_type(output, value.left.type_tag) || !c_push(output, 41) { return false }
+                if !c_text(output, "(((") || !c_type(output, value.left.type_tag) || !c_push(output, ')') { return false }
             } else {
                 prefix : []u8 = "(((uint8_t*)"
                 if value.left.type_tag == 9 { prefix = "(((void**)" }
@@ -6491,13 +6598,13 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
     if value.kind == 264 {
         if !c_text(output, "m_slice_sub(") || !c_expr(output, source, value.left) || !c_text(output, ", ") { return false }
         if expr_is_null(value.right.left) {
-            if !c_push(output, 48) { return false }
+            if !c_push(output, '0') { return false }
         } else {
             if !c_expr(output, source, value.right.left) { return false }
         }
         if !c_text(output, ", ") { return false }
         if expr_is_null(value.right.right) {
-            if !c_push(output, 48) { return false }
+            if !c_push(output, '0') { return false }
         } else {
             if !c_expr(output, source, value.right.right) { return false }
         }
@@ -6505,11 +6612,11 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
     }
     if value.kind == 296 {
         if !c_text(output, "((void*)&") || !c_expr(output, source, value.left) { return false }
-        return c_push(output, 41)
+        return c_push(output, ')')
     }
     if value.kind == 297 {
         if (value.left.type_tag >= 1000000 && value.left.type_tag < 2000000) || (value.left.type_tag >= 3000000 && value.left.type_tag < 4000000) {
-            if !c_text(output, "(*((") || !c_type(output, value.left.type_tag) || !c_push(output, 41) || !c_expr(output, source, value.left) { return false }
+            if !c_text(output, "(*((") || !c_type(output, value.left.type_tag) || !c_push(output, ')') || !c_expr(output, source, value.left) { return false }
             return c_text(output, "))")
         }
         prefix : []u8 = "(*((uint8_t*)"
@@ -6528,29 +6635,29 @@ c_expr :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
         return c_text(output, ")")
     }
     if value.kind == 295 || value.kind == 283 {
-        if !c_push(output, 40) { return false }
-        if !c_push(output, if value.kind == 295 { 45 as u8 } else { 33 as u8 }) { return false }
+        if !c_push(output, '(') { return false }
+        if !c_push(output, if value.kind == 295 { '-' } else { '!' }) { return false }
         if !c_expr(output, source, value.left) { return false }
-        return c_push(output, 41)
+        return c_push(output, ')')
     }
-    if !c_push(output, 40) || !c_expr(output, source, value.left) || !c_operator(output, value.kind) || !c_expr(output, source, value.right) {
+    if !c_push(output, '(') || !c_expr(output, source, value.left) || !c_operator(output, value.kind) || !c_expr(output, source, value.right) {
         return false
     }
-    c_push(output, 41)
+    c_push(output, ')')
 }
 
 c_struct_fields :: fn (output : *CBuffer, source : []u8, value : *Expr) bool {
     if value.kind == 262 {
         return c_struct_fields(output, source, value.left) && c_text(output, ", ") && c_struct_fields(output, source, value.right)
     }
-    if value.kind != 292 || !c_push(output, 46) || !c_name(output, source, value.payload_start, value.payload_end, "f_") || !c_text(output, " = ") { return false }
+    if value.kind != 292 || !c_push(output, '.') || !c_name(output, source, value.payload_start, value.payload_end, "f_") || !c_text(output, " = ") { return false }
     c_expr(output, source, value.right)
 }
 
 c_indent :: fn (output : *CBuffer, depth : u64) bool {
     index : u64 = 0
     while index < depth * 2 {
-        if !c_push(output, 32) { return false }
+        if !c_push(output, ' ') { return false }
         index = index + 1
     }
     true
@@ -6594,14 +6701,14 @@ c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_t
         part := item.then_body
         index : u64 = 0
         while !statement_is_null(part) {
-            if !c_indent(output, depth) || !c_type(output, part.type_tag) || !c_push(output, 32) || !c_name(output, source, part.name_start, part.name_end, "v_") || !c_text(output, " = t_") || !c_uint(output, item.start) || !c_text(output, ".f") || !c_uint(output, index) || !c_text(output, ";\n") { return false }
+            if !c_indent(output, depth) || !c_type(output, part.type_tag) || !c_push(output, ' ') || !c_name(output, source, part.name_start, part.name_end, "v_") || !c_text(output, " = t_") || !c_uint(output, item.start) || !c_text(output, ".f") || !c_uint(output, index) || !c_text(output, ";\n") { return false }
             part = part.next
             index = index + 1
         }
         return true
     }
     if item.kind == 285 {
-        if !c_type(output, item.type_tag) || !c_push(output, 32) { return false }
+        if !c_type(output, item.type_tag) || !c_push(output, ' ') { return false }
         if !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, " = ") { return false }
         if !c_expr(output, source, item.value) { return false }
         return c_text(output, ";\n")
@@ -6613,18 +6720,18 @@ c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_t
     }
     if item.kind == 304 {
         if !c_text(output, "if (") || !c_expr(output, source, item.value) || !c_text(output, ") {\n") { return false }
-        if !c_block(output, source, item.then_body, return_tag, depth + 1, false, active, loop_base) || !c_indent(output, depth) || !c_push(output, 125) { return false }
+        if !c_block(output, source, item.then_body, return_tag, depth + 1, false, active, loop_base) || !c_indent(output, depth) || !c_push(output, '}') { return false }
         if !statement_is_null(item.else_body) {
             if !c_text(output, " else {\n") { return false }
-            if !c_block(output, source, item.else_body, return_tag, depth + 1, false, active, loop_base) || !c_indent(output, depth) || !c_push(output, 125) { return false }
+            if !c_block(output, source, item.else_body, return_tag, depth + 1, false, active, loop_base) || !c_indent(output, depth) || !c_push(output, '}') { return false }
         }
         return c_push(output, 10)
     }
     if item.kind == 305 {
         if !c_text(output, "if ((") || !c_expr(output, source, item.value) || !c_text(output, ").tag == ") || !c_uint(output, item.loop_kind) || !c_text(output, ") {\n") { return false }
-        if !c_block(output, source, item.then_body, return_tag, depth + 1, false, active, loop_base) || !c_indent(output, depth) || !c_push(output, 125) { return false }
+        if !c_block(output, source, item.then_body, return_tag, depth + 1, false, active, loop_base) || !c_indent(output, depth) || !c_push(output, '}') { return false }
         if !statement_is_null(item.else_body) {
-            if !c_text(output, " else {\n") || !c_block(output, source, item.else_body, return_tag, depth + 1, false, active, loop_base) || !c_indent(output, depth) || !c_push(output, 125) { return false }
+            if !c_text(output, " else {\n") || !c_block(output, source, item.else_body, return_tag, depth + 1, false, active, loop_base) || !c_indent(output, depth) || !c_push(output, '}') { return false }
         }
         return c_push(output, 10)
     }
@@ -6638,9 +6745,9 @@ c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_t
                 if item.loop_kind != 287 || !c_text(output, "do {\n") { return false }
             }
         }
-        if !c_block(output, source, item.then_body, return_tag, depth + 1, false, active, active) || !c_indent(output, depth) || !c_push(output, 125) { return false }
+        if !c_block(output, source, item.then_body, return_tag, depth + 1, false, active, active) || !c_indent(output, depth) || !c_push(output, '}') { return false }
         if item.loop_kind == 287 {
-            if !c_text(output, " while (") || !c_expr(output, source, item.value) || !c_push(output, 41) || !c_push(output, 59) { return false }
+            if !c_text(output, " while (") || !c_expr(output, source, item.value) || !c_push(output, ')') || !c_push(output, ';') { return false }
         }
         return c_push(output, 10)
     }
@@ -6666,7 +6773,7 @@ c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_t
     if returning {
         if statement_is_null(active) {
             if !c_indent(output, depth) || !c_text(output, "return") { return false }
-            if !expr_is_null(item.value) && (!c_push(output, 32) || !c_expr(output, source, item.value)) { return false }
+            if !expr_is_null(item.value) && (!c_push(output, ' ') || !c_expr(output, source, item.value)) { return false }
             return c_text(output, ";\n")
         }
         if !expr_is_null(item.value) {
@@ -6703,7 +6810,7 @@ emit_struct_definition :: fn (output : *CBuffer, definition : *StructType) bool 
     field = definition.syntax.fields
     while field != (mimi_buffer_empty() as *StructFieldNode) {
         tag := type_tag(definition.owner.source, definition.owner, field.data_type)
-        if !c_text(output, "  ") || !c_type(output, tag) || !c_push(output, 32) || !c_name(output, definition.owner.source, field.name_start, field.name_end, "f_") || !c_text(output, ";\n") { return false }
+        if !c_text(output, "  ") || !c_type(output, tag) || !c_push(output, ' ') || !c_name(output, definition.owner.source, field.name_start, field.name_end, "f_") || !c_text(output, ";\n") { return false }
         field = field.next
     }
     if !c_text(output, "};\n") { return false }
@@ -6786,13 +6893,13 @@ pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
             } else {
                 if !c_type(output, prototype.return_tag) { return false }
             }
-            if !c_push(output, 32) { return false }
+            if !c_push(output, ' ') { return false }
             if prototype.is_external {
                 if !c_span(output, prototype.source, prototype.name_start, prototype.name_end) { return false }
             } else {
                 if !c_function_name(output, prototype) { return false }
             }
-            if !c_push(output, 40) { return false }
+            if !c_push(output, '(') { return false }
             if prototype.is_external {
                 if !c_external_parameters(output, prototype.source, prototype.parameters) { return false }
             } else {
@@ -6816,8 +6923,8 @@ pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
             has_main = true
             if !c_text(output, "int main(") || !c_main_parameters(output, function.source, function.parameters) || !c_text(output, ") {\n") { return false }
         } else {
-            if !c_text(output, "static ") || !c_type(output, function.return_tag) || !c_push(output, 32) { return false }
-            if !c_function_name(output, function) || !c_push(output, 40) { return false }
+            if !c_text(output, "static ") || !c_type(output, function.return_tag) || !c_push(output, ' ') { return false }
+            if !c_function_name(output, function) || !c_push(output, '(') { return false }
             if !c_parameters(output, function.source, function.parameters) || !c_text(output, ") {\n") { return false }
         }
         empty_defer : *Statement = mimi_buffer_empty() as *Statement

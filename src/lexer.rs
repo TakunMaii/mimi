@@ -3,6 +3,7 @@ pub(crate) enum Token {
     Identifier(String),
     LiteralString(String),
     LiteralNumber(String),
+    LiteralChar(u8),
     LiteralBool(bool),
     F8,
     Fn,
@@ -176,6 +177,82 @@ pub(crate) fn tokenize_spanned(source: &str) -> Result<Vec<SpannedToken>, LexErr
             push_spanned(
                 &mut result,
                 Token::LiteralString(value),
+                start,
+                index,
+                &byte_offsets,
+            );
+        } else if ch == '\'' {
+            after_member_dot = false;
+            index += 1;
+            let value = match chars.get(index) {
+                None => {
+                    return Err(LexError {
+                        message: "unterminated character literal".into(),
+                        span: make_span(start, chars.len(), &byte_offsets),
+                    });
+                }
+                Some('\'') => {
+                    return Err(LexError {
+                        message: "empty character literal".into(),
+                        span: make_span(start, index + 1, &byte_offsets),
+                    });
+                }
+                Some('\\') => {
+                    let escape_start = index;
+                    index += 1;
+                    let escape = chars.get(index).copied();
+                    index += 1;
+                    match escape {
+                        Some('n') => 10,
+                        Some('r') => 13,
+                        Some('t') => 9,
+                        Some('\\') => 92,
+                        Some('\'') => 39,
+                        Some('"') => 34,
+                        Some('0') => 0,
+                        Some(other) => {
+                            return Err(LexError {
+                                message: format!("unsupported character escape: \\{other}"),
+                                span: make_span(escape_start, index, &byte_offsets),
+                            });
+                        }
+                        None => {
+                            return Err(LexError {
+                                message: "unterminated character literal".into(),
+                                span: make_span(start, chars.len(), &byte_offsets),
+                            });
+                        }
+                    }
+                }
+                Some(character) => {
+                    if !character.is_ascii() {
+                        return Err(LexError {
+                            message: "character literal must contain a single byte".into(),
+                            span: make_span(start, index + 1, &byte_offsets),
+                        });
+                    }
+                    index += 1;
+                    *character as u8
+                }
+            };
+            match chars.get(index) {
+                Some('\'') => index += 1,
+                None => {
+                    return Err(LexError {
+                        message: "unterminated character literal".into(),
+                        span: make_span(start, chars.len(), &byte_offsets),
+                    });
+                }
+                Some(_) => {
+                    return Err(LexError {
+                        message: "character literal must contain a single byte".into(),
+                        span: make_span(start, index + 1, &byte_offsets),
+                    });
+                }
+            }
+            push_spanned(
+                &mut result,
+                Token::LiteralChar(value),
                 start,
                 index,
                 &byte_offsets,

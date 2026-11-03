@@ -61,6 +61,18 @@ main :: fn () i32 {
     if lexer.decoded_string_byte("\"a\\nb\"", escaped.1, escaped.2, 2) != 98 { return 47 }
     if lexer.next_token([240, 128, 128, 128], 0).0 != 255 { return 48 }
     if lexer.next_token([240, 159, 152, 128], 0).0 != 255 { return 59 }
+    character := lexer.next_token("'a'", 0)
+    if character.0 != 2 || character.1 != 0 || character.2 != 3 { return 80 }
+    escaped_character := lexer.next_token("'\\n'", 0)
+    if escaped_character.0 != 2 || escaped_character.2 != 4 { return 81 }
+    if lexer.token_count("'a' '\\'' '\\\\' ' '") != 4 { return 82 }
+    if lexer.error_code("'ab'", 0) != 6 { return 83 }
+    malformed_character := lexer.lex_next("'ab'", 0)
+    if malformed_character.error_code != 6 || malformed_character.start != 0 || malformed_character.end != 4 { return 84 }
+    if lexer.error_message("'ab'", 0)[0] != 109 { return 85 }
+    if lexer.token_count("'unterminated") != -1 { return 86 }
+    if lexer.token_count("''") != -1 { return 87 }
+    if lexer.token_count("'\\q'") != -1 { return 88 }
     if lexer.token_count("") != 0 { return 1 }
     if lexer.token_count("alpha_2 := 123") != 4 { return 2 }
     if lexer.token_count("f :: fn (x : i32) bool { x >= 1 && x != 2 }") != 19 { return 3 }

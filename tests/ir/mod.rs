@@ -4411,6 +4411,179 @@ fn builds_and_runs_integer_comparison() {
 }
 
 #[test]
+fn marks_unsigned_division_and_comparison_in_ir() {
+    let ast = parse(tokenize(
+        "f :: fn (a : u64, b : u64) bool { a / b > b }".chars(),
+    ));
+    let hir = hir::lower_ast(&ast);
+    let mir = mir::lower_hir(&hir);
+    let instructions = &mir.functions[0].blocks[0].instructions;
+    assert!(instructions.iter().any(|instruction| matches!(
+        instruction,
+        mir::MirInstruction::Div { signed: false, .. }
+    )));
+    assert!(instructions.iter().any(|instruction| matches!(
+        instruction,
+        mir::MirInstruction::Compare {
+            signed: false,
+            ..
+        }
+    )));
+    let lir = lir::lower_mir(&mir, &lir::HostTarget);
+    assert!(lir.functions[0].blocks[0]
+        .instructions
+        .iter()
+        .any(|instruction| matches!(
+            instruction,
+            lir::LirInstruction::Div { signed: false, .. }
+        )));
+}
+
+#[test]
+fn marks_signed_division_and_comparison_in_ir() {
+    let ast = parse(tokenize(
+        "f :: fn (a : i64, b : i64) bool { a / b > b }".chars(),
+    ));
+    let hir = hir::lower_ast(&ast);
+    let mir = mir::lower_hir(&hir);
+    let instructions = &mir.functions[0].blocks[0].instructions;
+    assert!(instructions.iter().any(|instruction| matches!(
+        instruction,
+        mir::MirInstruction::Div { signed: true, .. }
+    )));
+    assert!(instructions.iter().any(|instruction| matches!(
+        instruction,
+        mir::MirInstruction::Compare { signed: true, .. }
+    )));
+}
+
+#[test]
+fn builds_and_runs_unsigned_division_and_comparison() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_u64_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_u64_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { \
+         big : u64 = 10000000000000000000 \
+         two : u64 = 2 \
+         if big < two { return 1 } \
+         half := big / two \
+         if half != 5000000000000000000 { return 2 } \
+         if big % two != 0 { return 3 } \
+         if big <= two { return 4 } \
+         0 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn builds_and_runs_module_level_variables() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_global_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_global_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "answer := 10 limit : i32 = 100 origin :: 0 \
+         bump :: fn () void { answer = answer + 1 } \
+         read :: fn () i32 { answer + limit + origin } \
+         main :: fn () i32 { bump() bump() read() - 112 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn builds_and_runs_trailing_if_values_and_all_paths_returns() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_tail_if_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_tail_if_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "choose :: fn (flag : bool) i32 { if flag { 7 } else { 9 } } \
+         early :: fn (flag : bool) i32 { if flag { return 4 } else { return 6 } } \
+         mixed :: fn (flag : bool) i32 { if flag { return 8 } else { 10 } } \
+         main :: fn () i32 { \
+             choose(true) + choose(false) + early(true) + early(false) \
+             + mixed(true) + mixed(false) - 44 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn builds_and_runs_character_literals() {
+    if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("mimi_char_source_{}.mi", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mimi_char_codegen_{}", std::process::id()));
+    std::fs::write(
+        &source,
+        "main :: fn () i32 { \
+         letter : u8 = 'A' \
+         if letter != 'A' { return 1 } \
+         if '0' != 48 { return 2 } \
+         if '\\n' != 10 { return 3 } \
+         if '\\'' != 39 { return 4 } \
+         'z' - 122 }",
+    )
+    .unwrap();
+    build_file(
+        source.to_str().unwrap(),
+        path.to_str().unwrap(),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let status = std::process::Command::new(&path).status().unwrap();
+    assert_eq!(status.code(), Some(0));
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn builds_and_runs_constant_if_else_expression() {
     if !cfg!(target_os = "macos") || !cfg!(target_arch = "aarch64") {
         return;

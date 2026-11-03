@@ -1430,7 +1430,7 @@ pub(crate) fn check_with_import_paths(
         match node {
             ASTNode::StructDefinition { name, methods, .. } => {
                 for method in methods {
-                    let mut method_scopes = vec![imported_symbols.clone(), HashMap::new()];
+                    let mut method_scopes = vec![scopes[0].clone(), HashMap::new()];
                     for (parameter_name, data_type) in &method.parameters {
                         let resolved_type = resolve_self(*data_type, name);
                         if resolved_type != DataType::Struct(*name)
@@ -1477,7 +1477,7 @@ pub(crate) fn check_with_import_paths(
                 if let Err(err) = validate_generic_type_use(*return_type, &structs) {
                     errors.push(error(format!("function '{name}': {}", err.message)));
                 }
-                let mut function_scopes = vec![imported_symbols.clone(), HashMap::new()];
+                let mut function_scopes = vec![scopes[0].clone(), HashMap::new()];
                 for (parameter_name, data_type) in parameters {
                     if function_scopes[1]
                         .insert(
@@ -2288,6 +2288,26 @@ fn infer_expression(
                             };
                             require_compatible(returned_type, expected)?;
                             result_type = returned_type;
+                        }
+                        // A trailing `if` with an `else` is the block's value when the
+                        // block is used as an expression (function result, binding, ...).
+                        ASTNode::If {
+                            condition,
+                            then_branch,
+                            else_branch,
+                        } if is_last
+                            && else_branch.is_some()
+                            && expected.is_some_and(|ty| ty != DataType::Void) =>
+                        {
+                            let expression = Expression::If {
+                                condition: Box::new(condition.clone()),
+                                then_branch: Box::new(then_branch.clone()),
+                                else_branch: Box::new(
+                                    else_branch.as_ref().expect("checked else branch").clone(),
+                                ),
+                            };
+                            result_type =
+                                infer_expression(&expression, scopes, functions, structs, expected)?;
                         }
                         _ => {
                             check_statement(item, scopes, functions, structs)?;

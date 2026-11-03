@@ -20,6 +20,43 @@ fn infers_numeric_literal_types_by_value() {
 }
 
 #[test]
+fn module_level_variables_and_constants_are_visible_in_functions() {
+    let valid = parse(tokenize(
+        "answer := 42 limit : i32 = 100 origin :: 0 \
+         bump :: fn () void { answer = answer + 1 } \
+         read :: fn () i32 { answer + limit + origin }"
+            .chars(),
+    ));
+    check(&valid).unwrap();
+
+    let unknown = parse(tokenize(
+        "read :: fn () i32 { missing }".chars(),
+    ));
+    assert!(check(&unknown).is_err());
+}
+
+#[test]
+fn treats_a_trailing_if_as_the_block_value() {
+    let valid = parse(tokenize(
+        "choose :: fn (flag : bool) i32 { if flag { 7 } else { 9 } } \
+         early :: fn (flag : bool) i32 { if flag { return 4 } else { return 6 } } \
+         mixed :: fn (flag : bool) i32 { if flag { return 8 } else { 10 } }"
+            .chars(),
+    ));
+    check(&valid).unwrap();
+
+    let missing_else = parse(tokenize(
+        "main :: fn (flag : bool) i32 { if flag { 7 } }".chars(),
+    ));
+    assert!(check(&missing_else).is_err());
+
+    let mismatched_branches = parse(tokenize(
+        "main :: fn (flag : bool) i32 { if flag { 7 } else { true } }".chars(),
+    ));
+    assert!(check(&mismatched_branches).is_err());
+}
+
+#[test]
 fn checks_integer_range_loop_bounds() {
     let valid = parse(tokenize(
         "main :: fn () i32 { total := 0 for index in 0..5 { total = total + index } total }"

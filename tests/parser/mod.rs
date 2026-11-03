@@ -284,6 +284,36 @@ fn lexer_errors_include_the_offending_source_span() {
 }
 
 #[test]
+fn tokenizes_character_literals_and_escapes() {
+    assert_eq!(
+        tokenize("'a' '\\n' '\\'' '\\\\' '\\0' '\\r' '\\t'".chars()),
+        vec![
+            Token::LiteralChar(b'a'),
+            Token::LiteralChar(b'\n'),
+            Token::LiteralChar(b'\''),
+            Token::LiteralChar(b'\\'),
+            Token::LiteralChar(0),
+            Token::LiteralChar(b'\r'),
+            Token::LiteralChar(b'\t'),
+        ]
+    );
+}
+
+#[test]
+fn rejects_malformed_character_literals() {
+    let error = super::lexer::tokenize_spanned("x := 'ab'").unwrap_err();
+    assert!(error.message.contains("single byte"));
+    let error = super::lexer::tokenize_spanned("x := ''").unwrap_err();
+    assert!(error.message.contains("empty character literal"));
+    let error = super::lexer::tokenize_spanned("x := 'a").unwrap_err();
+    assert!(error.message.contains("unterminated character literal"));
+    let error = super::lexer::tokenize_spanned("x := '\\q'").unwrap_err();
+    assert!(error.message.contains("unsupported character escape"));
+    let error = super::lexer::tokenize_spanned("x := '猫'").unwrap_err();
+    assert!(error.message.contains("single byte"));
+}
+
+#[test]
 fn parser_errors_point_to_the_unexpected_token() {
     let source = "main :: fn () i32 {\n  value := }";
     let tokens = super::lexer::tokenize_spanned(source).unwrap();

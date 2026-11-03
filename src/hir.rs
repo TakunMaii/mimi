@@ -115,6 +115,14 @@ pub(crate) struct HirConstant {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HirGlobal {
+    pub(crate) name: String,
+    pub(crate) data_type: HirType,
+    pub(crate) initializer: Option<Expression>,
+    pub(crate) mutable: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct HirEnum {
     pub(crate) name: String,
     pub(crate) variants: Vec<(String, Option<HirType>)>,
@@ -148,6 +156,8 @@ pub(crate) struct HirModule {
     pub(crate) extern_functions: Vec<HirExternalFunction>,
     pub(crate) extern_globals: Vec<HirExternalGlobal>,
     pub(crate) constants: Vec<HirConstant>,
+    pub(crate) globals: Vec<HirGlobal>,
+    pub(crate) has_module_statements: bool,
     pub(crate) enums: Vec<HirEnum>,
     pub(crate) structs: Vec<HirStruct>,
     pub(crate) c_record_layouts: std::collections::HashMap<String, HirCRecordLayout>,
@@ -195,6 +205,24 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
         }
     }
     let mut constant_types = std::collections::HashMap::new();
+    module.has_module_statements = nodes.iter().any(|node| {
+        matches!(
+            node,
+            ASTNode::Assignment { .. }
+                | ASTNode::IndexAssignment { .. }
+                | ASTNode::PointerAssignment { .. }
+                | ASTNode::MemberAssignment { .. }
+                | ASTNode::Expression(_)
+                | ASTNode::If { .. }
+                | ASTNode::IfLet { .. }
+                | ASTNode::While { .. }
+                | ASTNode::DoWhile { .. }
+                | ASTNode::For { .. }
+                | ASTNode::ForRange { .. }
+                | ASTNode::Loop { .. }
+                | ASTNode::Defer { .. }
+        )
+    });
     let enum_variants = nodes
         .iter()
         .flat_map(|node| {
@@ -275,6 +303,29 @@ pub(crate) fn lower_ast(nodes: &[ASTNode]) -> HirModule {
                 data_type: (*data_type).into(),
                 mutable: *mutable,
                 thread_local: *thread_local,
+            });
+        }
+        if let ASTNode::VariableDefinition {
+            name,
+            data_type,
+            value,
+        } = node
+            && !name.contains('.')
+            && !matches!(name.as_str(), "true" | "false" | "null")
+        {
+            let namespace = name.rsplit_once('.').map(|(namespace, _)| namespace);
+            let data_type = data_type.map(Into::into).or_else(|| {
+                infer_constant_type(value, None, &constant_types, namespace, &enum_variants)
+            });
+            let data_type = data_type.unwrap_or_else(|| HirType::Integer {
+                bits: 64,
+                signed: true,
+            });
+            module.globals.push(HirGlobal {
+                name: name.clone(),
+                data_type,
+                initializer: Some(value.clone()),
+                mutable: true,
             });
         }
         if let ASTNode::CompileTimeConstant {

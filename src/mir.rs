@@ -88,11 +88,13 @@ pub(crate) enum MirInstruction {
         result: ValueId,
         lhs: ValueId,
         rhs: ValueId,
+        signed: bool,
     },
     Rem {
         result: ValueId,
         lhs: ValueId,
         rhs: ValueId,
+        signed: bool,
     },
     Neg {
         result: ValueId,
@@ -124,6 +126,7 @@ pub(crate) enum MirInstruction {
         lhs: ValueId,
         rhs: ValueId,
         kind: CompareKind,
+        signed: bool,
     },
     FloatCompare {
         result: ValueId,
@@ -237,6 +240,58 @@ pub(crate) struct MirFunction {
 pub(crate) struct MirModule {
     pub(crate) data_layout: TargetDataLayout,
     pub(crate) functions: Vec<MirFunction>,
+    pub(crate) globals: Vec<MirGlobal>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MirGlobal {
+    pub(crate) name: String,
+    pub(crate) symbol: String,
+    pub(crate) data_type: HirType,
+    pub(crate) bytes: Vec<u8>,
+}
+
+#[derive(Clone, Copy)]
+enum ConstantScalar {
+    Integer(i128),
+    Float(f64),
+}
+
+fn constant_scalar_value(
+    expression: &Expression,
+    data_type: &HirType,
+    constants: &std::collections::HashMap<String, crate::hir::HirConstant>,
+) -> Option<ConstantScalar> {
+    match expression {
+        Expression::LiteralNumber(text) => {
+            if matches!(data_type, HirType::Float { .. }) {
+                text.parse::<f64>().ok().map(ConstantScalar::Float)
+            } else {
+                text.parse::<i128>().ok().map(ConstantScalar::Integer)
+            }
+        }
+        Expression::Negate(inner) => match constant_scalar_value(inner, data_type, constants)? {
+            ConstantScalar::Integer(value) => Some(ConstantScalar::Integer(-value)),
+            ConstantScalar::Float(value) => Some(ConstantScalar::Float(-value)),
+        },
+        Expression::LiteralBool(value) => Some(ConstantScalar::Integer(i128::from(*value))),
+        Expression::Identifier(name) => {
+            let constant = constants.get(name)?;
+            constant_scalar_value(&constant.value, &constant.data_type, constants)
+        }
+        _ => None,
+    }
+}
+
+fn global_initial_bytes(
+    expression: &Expression,
+    data_type: &HirType,
+    constants: &std::collections::HashMap<String, crate::hir::HirConstant>,
+) -> Option<Vec<u8>> {
+    Some(match constant_scalar_value(expression, data_type, constants)? {
+        ConstantScalar::Integer(value) => (value as i64).to_le_bytes().to_vec(),
+        ConstantScalar::Float(value) => value.to_bits().to_le_bytes().to_vec(),
+    })
 }
 
 struct Builder {
@@ -261,6 +316,7 @@ struct Builder {
     external_symbols: std::collections::HashMap<String, String>,
     external_globals: std::collections::HashMap<String, crate::hir::HirExternalGlobal>,
     global_constants: std::collections::HashMap<String, crate::hir::HirConstant>,
+    globals: std::collections::HashMap<String, MirGlobal>,
     function_namespace: Option<String>,
     variable_function_signatures: std::collections::HashMap<String, (Vec<HirType>, HirType)>,
     variable_types: std::collections::HashMap<String, HirType>,
@@ -465,6 +521,13 @@ impl Builder {
                     if let Some(constant) = self.resolve_global_constant_name(name) {
                         return self.lower_global_constant(&constant);
                     }
+                    if let Some(global) = self.globals.get(name).cloned() {
+                        let address = self.global_address(&global);
+                        let value = self.value();
+                        self.emit_load_indirect(value, address, Some(&global.data_type));
+                        self.value_types.insert(value, global.data_type.clone());
+                        return Some(value);
+                    }
                     if let Some(variant) =
                         self.enum_variant_for_type(name, self.expected_type_hint.as_ref())
                     {
@@ -644,6 +707,9 @@ impl Builder {
             Expression::AddressOf(inner) => {
                 let address = match inner.as_ref() {
                     Expression::Identifier(name) => {
+                        if let Some(global) = self.globals.get(name).cloned() {
+                            return Some(self.global_address(&global));
+                        }
                         if self.variable_structs.contains_key(name)
                             || matches!(self.variable_types.get(name), Some(HirType::Array { .. }))
                         {
@@ -1516,6 +1582,7 @@ impl Builder {
                         lhs,
                         rhs,
                         kind,
+                        signed: self.comparison_is_signed(lhs, rhs),
                     });
                 }
                 self.value_types.insert(result, HirType::Bool);
@@ -1534,7 +1601,7 @@ impl Builder {
                 self.defer_scopes.push(Vec::new());
                 let result = (|| {
                     let mut result = None;
-                    for item in items {
+                    for (item_index, item) in items.iter().enumerate() {
                         match item {
                             crate::parser::ASTNode::VariableDefinition {
                                 name,
@@ -1754,7 +1821,12 @@ impl Builder {
                                 let struct_name = self.expression_struct_name(value);
                                 let function_signature =
                                     self.function_signature_for_expression(value);
-                                let expected_type = self.variable_types.get(name).cloned();
+                                let global = self.globals.get(name).cloned();
+                                let expected_type = self
+                                    .variable_types
+                                    .get(name)
+                                    .cloned()
+                                    .or_else(|| global.as_ref().map(|global| global.data_type.clone()));
                                 let slice_length_slot = self.slice_lengths.get(name).copied();
                                 let function_environment_slot =
                                     self.function_environment_slots.get(name).copied();
@@ -1777,7 +1849,17 @@ impl Builder {
                                         self.emit(MirInstruction::StoreSlot { slot, value });
                                     }
                                     _ => {
-                                        self.variables.insert(name.clone(), Variable::Value(value));
+                                        if let Some(global) = global.as_ref() {
+                                            let address = self.global_address(global);
+                                            self.emit_store_indirect(
+                                                address,
+                                                value,
+                                                Some(&global.data_type),
+                                            );
+                                        } else {
+                                            self.variables
+                                                .insert(name.clone(), Variable::Value(value));
+                                        }
                                     }
                                 }
                                 if let Some((length, scale)) = slice_view {
@@ -1965,7 +2047,10 @@ impl Builder {
                                             .unwrap_or_else(|| Expression::Block(Vec::new())),
                                     ),
                                 };
-                                self.expression(&expression);
+                                let value = self.expression(&expression);
+                                if item_index + 1 == items.len() {
+                                    result = value;
+                                }
                             }
                             crate::parser::ASTNode::IfLet {
                                 variant,
@@ -2259,6 +2344,7 @@ impl Builder {
                 self.value_types.insert(scale_value, integer_type.clone());
                 let element_difference = self.value();
                 self.emit(MirInstruction::Div {
+                    signed: true,
                     result: element_difference,
                     lhs: byte_difference,
                     rhs: scale_value,
@@ -2329,12 +2415,23 @@ impl Builder {
                 .insert(result, HirType::Float { bits: width });
             return Some(result);
         }
+        let signed = !self.value_is_unsigned_integer(lhs);
         let instruction = match kind {
             0 => MirInstruction::Add { result, lhs, rhs },
             1 => MirInstruction::Sub { result, lhs, rhs },
             2 => MirInstruction::Mul { result, lhs, rhs },
-            3 => MirInstruction::Div { result, lhs, rhs },
-            _ => MirInstruction::Rem { result, lhs, rhs },
+            3 => MirInstruction::Div {
+                result,
+                lhs,
+                rhs,
+                signed,
+            },
+            _ => MirInstruction::Rem {
+                result,
+                lhs,
+                rhs,
+                signed,
+            },
         };
         self.emit(instruction);
         if let Some(data_type) = self.value_type(lhs) {
@@ -2374,6 +2471,17 @@ impl Builder {
 
     fn value_type(&self, value: ValueId) -> Option<HirType> {
         self.value_types.get(&value).cloned()
+    }
+
+    fn value_is_unsigned_integer(&self, value: ValueId) -> bool {
+        matches!(
+            self.value_type(value),
+            Some(HirType::Integer { signed: false, .. })
+        )
+    }
+
+    fn comparison_is_signed(&self, lhs: ValueId, rhs: ValueId) -> bool {
+        !(self.value_is_unsigned_integer(lhs) || self.value_is_unsigned_integer(rhs))
     }
 
     fn emit_load_indirect(
@@ -2430,6 +2538,7 @@ impl Builder {
             let divisor = self.bit_field_constant(1i128 << bit_offset, &storage_type);
             let value = self.value();
             self.emit(MirInstruction::Div {
+                signed: false,
                 result: value,
                 lhs: raw,
                 rhs: divisor,
@@ -2447,6 +2556,7 @@ impl Builder {
             let modulus = self.bit_field_constant(1i128 << bit_width, &storage_type);
             let value = self.value();
             self.emit(MirInstruction::Rem {
+                signed: false,
                 result: value,
                 lhs: shifted,
                 rhs: modulus,
@@ -2475,6 +2585,7 @@ impl Builder {
         let modulus = self.bit_field_constant(1i128 << bit_width, &storage_type);
         let remainder = self.value();
         self.emit(MirInstruction::Rem {
+            signed: false,
             result: remainder,
             lhs: new_value,
             rhs: modulus,
@@ -2489,6 +2600,7 @@ impl Builder {
         self.value_types.insert(normalized, storage_type.clone());
         let bounded = self.value();
         self.emit(MirInstruction::Rem {
+            signed: false,
             result: bounded,
             lhs: normalized,
             rhs: modulus,
@@ -2558,6 +2670,7 @@ impl Builder {
             let divisor = self.bit_field_constant(1i128 << bit_in_byte, &byte_type);
             let shifted = self.value();
             self.emit(MirInstruction::Div {
+                signed: false,
                 result: shifted,
                 lhs: loaded,
                 rhs: divisor,
@@ -2566,6 +2679,7 @@ impl Builder {
             let two = self.bit_field_constant(2, &byte_type);
             let bit = self.value();
             self.emit(MirInstruction::Rem {
+                signed: false,
                 result: bit,
                 lhs: shifted,
                 rhs: two,
@@ -2592,6 +2706,7 @@ impl Builder {
         }
         let bounded = self.value();
         self.emit(MirInstruction::Rem {
+            signed: false,
             result: bounded,
             lhs: result,
             rhs: modulus,
@@ -2620,6 +2735,7 @@ impl Builder {
             self.bit_field_constant(1i128.checked_shl(u32::from(bit_width))?, &unsigned_type);
         let rem = self.value();
         self.emit(MirInstruction::Rem {
+            signed: false,
             result: rem,
             lhs: new_value,
             rhs: modulus,
@@ -2634,6 +2750,7 @@ impl Builder {
         self.value_types.insert(normalized, unsigned_type.clone());
         let bounded = self.value();
         self.emit(MirInstruction::Rem {
+            signed: false,
             result: bounded,
             lhs: normalized,
             rhs: modulus,
@@ -2650,6 +2767,7 @@ impl Builder {
             let divisor = self.bit_field_constant(1i128 << u32::from(index), &unsigned_type);
             let shifted = self.value();
             self.emit(MirInstruction::Div {
+                signed: false,
                 result: shifted,
                 lhs: bounded,
                 rhs: divisor,
@@ -2658,6 +2776,7 @@ impl Builder {
             let two = self.bit_field_constant(2, &unsigned_type);
             let bit = self.value();
             self.emit(MirInstruction::Rem {
+                signed: false,
                 result: bit,
                 lhs: shifted,
                 rhs: two,
@@ -2665,6 +2784,7 @@ impl Builder {
             self.value_types.insert(bit, byte_type.clone());
             let old_shifted = self.value();
             self.emit(MirInstruction::Div {
+                signed: false,
                 result: old_shifted,
                 lhs: old_byte,
                 rhs: mask,
@@ -2673,6 +2793,7 @@ impl Builder {
             let two = self.bit_field_constant(2, &byte_type);
             let old_bit = self.value();
             self.emit(MirInstruction::Rem {
+                signed: false,
                 result: old_bit,
                 lhs: old_shifted,
                 rhs: two,
@@ -2718,6 +2839,20 @@ impl Builder {
         result
     }
 
+    fn global_address(&mut self, global: &MirGlobal) -> ValueId {
+        let address = self.value();
+        self.emit(MirInstruction::LoadFunctionAddress {
+            result: address,
+            symbol: global.symbol.clone(),
+            external: false,
+        });
+        self.value_types.insert(
+            address,
+            HirType::Pointer(Box::new(global.data_type.clone())),
+        );
+        address
+    }
+
     fn external_global_address(&mut self, global: &crate::hir::HirExternalGlobal) -> ValueId {
         if global.thread_local {
             let callee = self.value();
@@ -2761,6 +2896,7 @@ impl Builder {
         let sign = self.bit_field_constant(1i128 << (bit_width - 1), &byte_type);
         let condition = self.value();
         self.emit(MirInstruction::Compare {
+            signed: false,
             result: condition,
             lhs: value,
             rhs: sign,
@@ -3310,6 +3446,7 @@ impl Builder {
         });
         let condition = self.value();
         self.emit(MirInstruction::Compare {
+            signed: false,
             result: condition,
             lhs: index,
             rhs: length,
@@ -3462,6 +3599,7 @@ impl Builder {
         });
         let condition = self.value();
         self.emit(MirInstruction::Compare {
+            signed: true,
             result: condition,
             lhs: index,
             rhs: end,
@@ -3861,6 +3999,7 @@ impl Builder {
                 });
                 let condition = self.value();
                 self.emit(MirInstruction::Compare {
+                    signed: true,
                     result: condition,
                     lhs: discriminant,
                     rhs: expected,
@@ -3943,6 +4082,7 @@ impl Builder {
         });
         let condition = self.value();
         self.emit(MirInstruction::Compare {
+            signed: true,
             result: condition,
             lhs: discriminant,
             rhs: expected,
@@ -4765,6 +4905,7 @@ fn lower_function(
     external_symbols: &std::collections::HashMap<String, String>,
     external_globals: &std::collections::HashMap<String, crate::hir::HirExternalGlobal>,
     global_constants: &std::collections::HashMap<String, crate::hir::HirConstant>,
+    globals: &std::collections::HashMap<String, MirGlobal>,
     type_layouts: &TypeLayouts,
     layout: TargetDataLayout,
 ) -> Option<(MirFunction, Vec<(String, Vec<(String, HirType)>)>)> {
@@ -4794,6 +4935,7 @@ fn lower_function(
         external_symbols: external_symbols.clone(),
         external_globals: external_globals.clone(),
         global_constants: global_constants.clone(),
+        globals: globals.clone(),
         function_namespace: function
             .name
             .rsplit_once('.')
@@ -4938,6 +5080,9 @@ fn lower_function(
         }
     }
     let result = builder.expression_expected(&function.body, &function.result);
+    if function.result != HirType::Void && result.is_none() && builder.is_open(builder.current) {
+        return None;
+    }
     let result = if function.result == HirType::Void {
         None
     } else {
@@ -5046,6 +5191,9 @@ pub(crate) fn lower_hir(module: &HirModule) -> MirModule {
 }
 
 pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout) -> MirModule {
+    if module.has_module_statements {
+        panic!("module-level statements are not supported; move this statement into a function");
+    }
     let enum_variants = module
         .enums
         .iter()
@@ -5232,6 +5380,42 @@ pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout
         .filter(|function| !function.captures.is_empty())
         .map(|function| (function.name.clone(), function.captures.clone()))
         .collect::<std::collections::HashMap<_, _>>();
+    let mut module_globals = Vec::with_capacity(module.globals.len());
+    for (index, global) in module.globals.iter().enumerate() {
+        if !matches!(
+            global.data_type,
+            HirType::Integer { .. } | HirType::Float { .. } | HirType::Bool
+        ) {
+            panic!(
+                "module-level variable '{}' must be a numeric or boolean scalar",
+                global.name
+            );
+        }
+        let bytes = match global.initializer.as_ref() {
+            Some(initializer) => global_initial_bytes(
+                initializer,
+                &global.data_type,
+                &global_constants,
+            )
+            .unwrap_or_else(|| {
+                panic!(
+                    "module-level variable '{}' requires a constant initializer",
+                    global.name
+                )
+            }),
+            None => vec![0u8; 8],
+        };
+        module_globals.push(MirGlobal {
+            name: global.name.clone(),
+            symbol: native_symbol(&format!("mimi_global_{index}")),
+            data_type: global.data_type.clone(),
+            bytes,
+        });
+    }
+    let globals = module_globals
+        .iter()
+        .map(|global| (global.name.clone(), global.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
     let mut capture_types = std::collections::HashMap::<String, Vec<(String, HirType)>>::new();
     let mut functions = Vec::with_capacity(module.functions.len());
     for function in &module.functions {
@@ -5253,16 +5437,23 @@ pub(crate) fn lower_hir_with_layout(module: &HirModule, layout: TargetDataLayout
             &external_symbols,
             &external_globals,
             &global_constants,
+            &globals,
             &type_layouts,
             layout,
         )
-        .expect("MIR lowering failed for a type-checked function");
+        .unwrap_or_else(|| {
+            panic!(
+                "MIR lowering failed for function '{}'",
+                module.functions[functions.len()].name
+            )
+        });
         functions.push(lowered);
         capture_types.extend(discovered);
     }
     MirModule {
         data_layout: layout,
         functions,
+        globals: module_globals,
     }
 }
 

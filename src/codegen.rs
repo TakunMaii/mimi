@@ -467,6 +467,14 @@ fn encode_module(
         });
         data.extend_from_slice(bytes);
     }
+    for (name, bytes) in &module.globals {
+        symbols.push(ObjectSymbol {
+            name: name.clone(),
+            section: 2,
+            value: data.len() as u64,
+        });
+        data.extend_from_slice(bytes);
+    }
     for relocation in &relocations {
         if !symbols
             .iter()
@@ -1019,7 +1027,11 @@ fn encode_function(
                     destination,
                     lhs,
                     rhs,
-                } => 0x9ac0_0c00 | (rhs.0 << 16) | (lhs.0 << 5) | destination.0,
+                    signed,
+                } => {
+                    let base = if *signed { 0x9ac0_0c00 } else { 0x9ac0_0800 };
+                    base | (rhs.0 << 16) | (lhs.0 << 5) | destination.0
+                }
                 LirInstruction::Not { destination, value } => {
                     push_word(bytes, 0xf100_001f | (value.0 << 5));
                     push_word(bytes, 0x9a9f_17e0 | destination.0);
@@ -1125,8 +1137,10 @@ fn encode_function(
                     destination,
                     lhs,
                     rhs,
+                    signed,
                 } => {
-                    push_word(bytes, 0x9ac0_0c10 | (rhs.0 << 16) | (lhs.0 << 5));
+                    let divide = if *signed { 0x9ac0_0c10 } else { 0x9ac0_0810 };
+                    push_word(bytes, divide | (rhs.0 << 16) | (lhs.0 << 5));
                     push_word(
                         bytes,
                         0x9b00_8000 | (rhs.0 << 16) | (lhs.0 << 10) | (16 << 5) | destination.0,
@@ -1138,16 +1152,10 @@ fn encode_function(
                     lhs,
                     rhs,
                     kind,
+                    signed,
                 } => {
                     push_word(bytes, 0xeb00_001f | (rhs.0 << 16) | (lhs.0 << 5));
-                    let condition = match kind {
-                        CompareKind::Equal => 0,
-                        CompareKind::NotEqual => 1,
-                        CompareKind::GreaterEqual => 10,
-                        CompareKind::Less => 11,
-                        CompareKind::Greater => 12,
-                        CompareKind::LessEqual => 13,
-                    };
+                    let condition = integer_condition(*kind, *signed);
                     push_word(
                         bytes,
                         0x9a9f_07e0 | (((condition ^ 1) as u32) << 12) | destination.0,
@@ -1535,6 +1543,7 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
             destination,
             lhs,
             rhs,
+            ..
         }
         | LirInstruction::FloatBinary {
             destination,
@@ -1546,6 +1555,7 @@ fn instruction_registers(instruction: &LirInstruction) -> Vec<ValueId> {
             destination,
             lhs,
             rhs,
+            ..
         }
         | LirInstruction::Compare {
             destination,
@@ -2005,6 +2015,23 @@ fn encode_float_neg(
     encode_fp_to_gpr(bytes, destination.0, 16, width)
 }
 
+/// ARM64 condition code for an integer comparison; unsigned kinds map to the
+/// carry-based conditions (HS/LO/HI/LS) instead of the overflow-based ones.
+fn integer_condition(kind: CompareKind, signed: bool) -> u32 {
+    match (kind, signed) {
+        (CompareKind::Equal, _) => 0,
+        (CompareKind::NotEqual, _) => 1,
+        (CompareKind::GreaterEqual, true) => 10,
+        (CompareKind::GreaterEqual, false) => 2,
+        (CompareKind::Less, true) => 11,
+        (CompareKind::Less, false) => 3,
+        (CompareKind::Greater, true) => 12,
+        (CompareKind::Greater, false) => 8,
+        (CompareKind::LessEqual, true) => 13,
+        (CompareKind::LessEqual, false) => 9,
+    }
+}
+
 fn encode_float_compare(
     destination: ValueId,
     lhs: ValueId,
@@ -2160,7 +2187,7 @@ fn write_macho_object(
     }
 
     write_name(&mut output, "__data");
-    write_name(&mut output, "__TEXT");
+    write_name(&mut output, "__DATA");
     output.extend_from_slice(&(text.len() as u64).to_le_bytes());
     output.extend_from_slice(&(data.len() as u64).to_le_bytes());
     for value in [data_offset as u32, 0, 0, 0, 0u32, 0, 0, 0] {
@@ -2222,6 +2249,30 @@ fn emit_aarch64(module: &LirModule) -> Result<String, String> {
     for function in &module.functions {
         let function = allocate_registers(function)?;
         emit_function(&function, &mut assembly)?;
+    }
+    if !module.globals.is_empty() {
+        if cfg!(target_os = "macos") {
+            assembly.push_str(".section __DATA,__data\n.p2align 3\n");
+        } else {
+            assembly.push_str(".data\n.p2align 3\n");
+        }
+        for (symbol, bytes) in &module.globals {
+            assembly.push_str(&format!("{symbol}:\n"));
+            if bytes.is_empty() {
+                assembly.push_str("    .byte 0\n");
+            } else {
+                for chunk in bytes.chunks(16) {
+                    assembly.push_str("    .byte ");
+                    for (index, byte) in chunk.iter().enumerate() {
+                        if index != 0 {
+                            assembly.push_str(", ");
+                        }
+                        assembly.push_str(&byte.to_string());
+                    }
+                    assembly.push('\n');
+                }
+            }
+        }
     }
     if !module.strings.is_empty() {
         if cfg!(target_os = "macos") {
@@ -2382,17 +2433,27 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     destination,
                     lhs,
                     rhs,
+                    signed,
                 } => assembly.push_str(&format!(
-                    "    sdiv x{}, x{}, x{}\n",
-                    destination.0, lhs.0, rhs.0
+                    "    {} x{}, x{}, x{}\n",
+                    if *signed { "sdiv" } else { "udiv" },
+                    destination.0,
+                    lhs.0,
+                    rhs.0
                 )),
                 LirInstruction::Rem {
                     destination,
                     lhs,
                     rhs,
+                    signed,
                 } => assembly.push_str(&format!(
-                    "    sdiv x16, x{}, x{}\n    msub x{}, x16, x{}, x{}\n",
-                    lhs.0, rhs.0, destination.0, rhs.0, lhs.0
+                    "    {} x16, x{}, x{}\n    msub x{}, x16, x{}, x{}\n",
+                    if *signed { "sdiv" } else { "udiv" },
+                    lhs.0,
+                    rhs.0,
+                    destination.0,
+                    rhs.0,
+                    lhs.0
                 )),
                 LirInstruction::Neg { destination, value } => {
                     assembly.push_str(&format!("    neg x{}, x{}\n", destination.0, value.0))
@@ -2429,14 +2490,19 @@ fn emit_function(function: &LirFunction, assembly: &mut String) -> Result<(), St
                     lhs,
                     rhs,
                     kind,
+                    signed,
                 } => {
-                    let condition = match kind {
-                        CompareKind::Equal => "eq",
-                        CompareKind::NotEqual => "ne",
-                        CompareKind::GreaterEqual => "ge",
-                        CompareKind::Less => "lt",
-                        CompareKind::Greater => "gt",
-                        CompareKind::LessEqual => "le",
+                    let condition = match (*kind, *signed) {
+                        (CompareKind::Equal, _) => "eq",
+                        (CompareKind::NotEqual, _) => "ne",
+                        (CompareKind::GreaterEqual, true) => "ge",
+                        (CompareKind::GreaterEqual, false) => "hs",
+                        (CompareKind::Less, true) => "lt",
+                        (CompareKind::Less, false) => "lo",
+                        (CompareKind::Greater, true) => "gt",
+                        (CompareKind::Greater, false) => "hi",
+                        (CompareKind::LessEqual, true) => "le",
+                        (CompareKind::LessEqual, false) => "ls",
                     };
                     assembly.push_str(&format!(
                         "    cmp x{}, x{}\n    cset x{}, {condition}\n",

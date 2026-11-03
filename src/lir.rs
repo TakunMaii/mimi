@@ -134,11 +134,13 @@ pub(crate) enum LirInstruction {
         destination: ValueId,
         lhs: ValueId,
         rhs: ValueId,
+        signed: bool,
     },
     Rem {
         destination: ValueId,
         lhs: ValueId,
         rhs: ValueId,
+        signed: bool,
     },
     Neg {
         destination: ValueId,
@@ -170,6 +172,7 @@ pub(crate) enum LirInstruction {
         lhs: ValueId,
         rhs: ValueId,
         kind: CompareKind,
+        signed: bool,
     },
     FloatCompare {
         destination: ValueId,
@@ -261,11 +264,17 @@ pub(crate) struct LirModule {
     pub(crate) data_layout: TargetDataLayout,
     pub(crate) functions: Vec<LirFunction>,
     pub(crate) strings: Vec<(String, Vec<u8>)>,
+    pub(crate) globals: Vec<(String, Vec<u8>)>,
 }
 
 pub(crate) fn lower_mir<T: Target>(module: &MirModule, target: &T) -> LirModule {
     debug_assert_eq!(module.data_layout, target.data_layout());
     let mut strings = Vec::new();
+    let globals = module
+        .globals
+        .iter()
+        .map(|global| (global.symbol.clone(), global.bytes.clone()))
+        .collect::<Vec<_>>();
     LirModule {
         target: target.arch(),
         data_layout: module.data_layout,
@@ -275,6 +284,7 @@ pub(crate) fn lower_mir<T: Target>(module: &MirModule, target: &T) -> LirModule 
             .map(|function| lower_function(function, target.arch(), &mut strings))
             .collect(),
         strings,
+        globals,
     }
 }
 
@@ -352,15 +362,27 @@ fn lower_function(
                             lhs: *lhs,
                             rhs: *rhs,
                         },
-                        MirInstruction::Div { result, lhs, rhs } => LirInstruction::Div {
+                        MirInstruction::Div {
+                            result,
+                            lhs,
+                            rhs,
+                            signed,
+                        } => LirInstruction::Div {
                             destination: *result,
                             lhs: *lhs,
                             rhs: *rhs,
+                            signed: *signed,
                         },
-                        MirInstruction::Rem { result, lhs, rhs } => LirInstruction::Rem {
+                        MirInstruction::Rem {
+                            result,
+                            lhs,
+                            rhs,
+                            signed,
+                        } => LirInstruction::Rem {
                             destination: *result,
                             lhs: *lhs,
                             rhs: *rhs,
+                            signed: *signed,
                         },
                         MirInstruction::Neg { result, value } => LirInstruction::Neg {
                             destination: *result,
@@ -420,11 +442,13 @@ fn lower_function(
                             lhs,
                             rhs,
                             kind,
+                            signed,
                         } => LirInstruction::Compare {
                             destination: *result,
                             lhs: *lhs,
                             rhs: *rhs,
                             kind: *kind,
+                            signed: *signed,
                         },
                         MirInstruction::FloatCompare {
                             result,

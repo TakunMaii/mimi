@@ -286,6 +286,7 @@ fn instruction_uses_defs(instruction: &LirInstruction) -> (Vec<ValueId>, Vec<Val
             destination,
             lhs,
             rhs,
+            ..
         }
         | LirInstruction::FloatBinary {
             destination,
@@ -303,6 +304,7 @@ fn instruction_uses_defs(instruction: &LirInstruction) -> (Vec<ValueId>, Vec<Val
             destination,
             lhs,
             rhs,
+            ..
         }
         | LirInstruction::Compare {
             destination,
@@ -425,11 +427,13 @@ fn rewrite_function(
                     destination,
                     lhs,
                     rhs,
+                    ..
                 }
                 | LirInstruction::Rem {
                     destination,
                     lhs,
                     rhs,
+                    ..
                 }
                 | LirInstruction::Compare {
                     destination,

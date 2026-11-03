@@ -9,8 +9,11 @@ are not statement terminators. Braces delimit blocks and declarations.
 ```mimi
 answer := 42
 limit : i32 = 100
-answer = answer + 1
 origin :: 0
+
+bump :: fn () void {
+    answer = answer + 1
+}
 
 add :: fn (left : i32, right : i32) i32 {
     left + right
@@ -31,6 +34,13 @@ Option :: enum {
 to an existing mutable local, and `::` defines a compile-time constant or
 top-level declaration. Public declarations use the `pub` prefix. Imports use
 `alias :: @import("path")` and C headers use `alias :: @cimport("header.h")`.
+
+At module scope the same spellings declare globals: `name := value` and
+`name : Type = value` define a mutable global with a constant initializer, and
+`name :: value` defines a compile-time constant that is inlined at each use.
+Globals currently support numeric and boolean scalars, may be read and assigned
+from function bodies, and are initialized before `main` runs. Executable
+statements are not allowed at module scope; wrap them in a function.
 
 ## Types
 
@@ -95,4 +105,9 @@ else { ... }`.
 Identifiers may contain Unicode alphabetic/numeric characters and underscores.
 Numbers begin with a decimal digit; decimal fractions use a dot. Strings use
 double quotes and currently support `\"`, `\\`, `\n`, `\r`, and `\t` escapes.
+Character literals use single quotes and denote exactly one byte, either a
+literal ASCII character (`'a'`) or an escape (`'\n'`, `'\r'`, `'\t'`, `'\\'`,
+`'\''`, `'\"'`, `'\0'`). A character literal is an integer literal with the
+byte's value, so it can be compared with `u8` values or assigned to any integer
+type.
 Line comments begin with `//`; block comments use `/* ... */`.

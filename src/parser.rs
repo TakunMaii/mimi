@@ -1530,6 +1530,7 @@ where
         }
         Token::Identifier(name) => Expression::Identifier(name),
         Token::LiteralNumber(value) => Expression::LiteralNumber(value),
+        Token::LiteralChar(value) => Expression::LiteralNumber(value.to_string()),
         Token::LiteralString(value) => Expression::LiteralString(value),
         Token::LiteralBool(value) => Expression::LiteralBool(value),
         Token::Minus => Expression::Negate(Box::new(parse_expression_from_mode(

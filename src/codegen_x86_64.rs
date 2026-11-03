@@ -10,6 +10,30 @@ pub(crate) fn emit_assembly(module: &LirModule) -> Result<String, String> {
     for function in &module.functions {
         emit_function(module, function, &mut assembly)?;
     }
+    if !module.globals.is_empty() {
+        if cfg!(target_os = "macos") {
+            assembly.push_str(".section __DATA,__data\n.p2align 3\n");
+        } else {
+            assembly.push_str(".data\n.p2align 3\n");
+        }
+        for (name, bytes) in &module.globals {
+            assembly.push_str(&format!("{}:\n", symbol(name)));
+            if bytes.is_empty() {
+                assembly.push_str("    .byte 0\n");
+            } else {
+                for chunk in bytes.chunks(16) {
+                    assembly.push_str("    .byte ");
+                    for (index, byte) in chunk.iter().enumerate() {
+                        if index != 0 {
+                            assembly.push_str(", ");
+                        }
+                        assembly.push_str(&byte.to_string());
+                    }
+                    assembly.push('\n');
+                }
+            }
+        }
+    }
     if !module.strings.is_empty() {
         if cfg!(target_os = "macos") {
             assembly.push_str(".section __TEXT,__const\n.p2align 3\n");
@@ -233,11 +257,13 @@ fn emit_instruction(
             destination,
             lhs,
             rhs,
+            ..
         }
         | LirInstruction::Rem {
             destination,
             lhs,
             rhs,
+            ..
         } => {
             load_value(assembly, function, *lhs, "rax")?;
             load_value(assembly, function, *rhs, "rcx")?;
@@ -245,11 +271,19 @@ fn emit_instruction(
                 LirInstruction::Add { .. } => assembly.push_str("    add rax, rcx\n"),
                 LirInstruction::Sub { .. } => assembly.push_str("    sub rax, rcx\n"),
                 LirInstruction::Mul { .. } => assembly.push_str("    imul rax, rcx\n"),
-                LirInstruction::Div { .. } => {
-                    assembly.push_str("    cqo\n    idiv rcx\n");
+                LirInstruction::Div { signed, .. } => {
+                    assembly.push_str(if *signed {
+                        "    cqo\n    idiv rcx\n"
+                    } else {
+                        "    xor edx, edx\n    div rcx\n"
+                    });
                 }
-                LirInstruction::Rem { .. } => {
-                    assembly.push_str("    cqo\n    idiv rcx\n    mov rax, rdx\n");
+                LirInstruction::Rem { signed, .. } => {
+                    assembly.push_str(if *signed {
+                        "    cqo\n    idiv rcx\n    mov rax, rdx\n"
+                    } else {
+                        "    xor edx, edx\n    div rcx\n    mov rax, rdx\n"
+                    });
                 }
                 _ => unreachable!(),
             }
@@ -270,17 +304,22 @@ fn emit_instruction(
             lhs,
             rhs,
             kind,
+            signed,
         } => {
             load_value(assembly, function, *lhs, "rax")?;
             load_value(assembly, function, *rhs, "rcx")?;
             assembly.push_str("    cmp rax, rcx\n");
-            let condition = match kind {
-                CompareKind::Equal => "e",
-                CompareKind::NotEqual => "ne",
-                CompareKind::Less => "l",
-                CompareKind::LessEqual => "le",
-                CompareKind::Greater => "g",
-                CompareKind::GreaterEqual => "ge",
+            let condition = match (kind, signed) {
+                (CompareKind::Equal, _) => "e",
+                (CompareKind::NotEqual, _) => "ne",
+                (CompareKind::Less, true) => "l",
+                (CompareKind::Less, false) => "b",
+                (CompareKind::LessEqual, true) => "le",
+                (CompareKind::LessEqual, false) => "be",
+                (CompareKind::Greater, true) => "g",
+                (CompareKind::Greater, false) => "a",
+                (CompareKind::GreaterEqual, true) => "ge",
+                (CompareKind::GreaterEqual, false) => "ae",
             };
             assembly.push_str(&format!("    set{condition} al\n    movzx eax, al\n"));
             store_value(assembly, function, *destination, "rax")?;
@@ -778,11 +817,13 @@ fn instruction_values(instruction: &LirInstruction, values: &mut Vec<ValueId>) {
             destination,
             lhs,
             rhs,
+            ..
         }
         | LirInstruction::Rem {
             destination,
             lhs,
             rhs,
+            ..
         }
         | LirInstruction::Compare {
             destination,
