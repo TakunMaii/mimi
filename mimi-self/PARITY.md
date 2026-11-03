@@ -17,10 +17,14 @@ written to the same path.
 - Character literals, scoped `defer`, trailing `if`/`else` block values, and
   function bodies in which every branch returns are lowered to C.
 - Stage1 and stage2 produce byte-identical artifacts when they build the same
-  source to the same output path. Building to a different name still changes
-  the Mach-O `LC_UUID` and the ad-hoc signature identifier, which Apple's
-  linker derives from the output path; disabling them is not viable because
-  arm64 executables must stay signed.
+  source to the same output path.
+- Artifacts built for different output names differ only in the Mach-O
+  `LC_UUID` load command and the ad-hoc code signature, which Apple's linker
+  derives from the output path. `bootstrap.py` zeroes exactly those load-command
+  regions and verifies that the remaining bytes are identical, so compiler
+  output is reproducible even though the linker stamps per-output metadata.
+  Disabling the metadata is not an option: arm64 executables must stay signed
+  and dyld requires `LC_UUID`.
 
 ## Remaining differences
 

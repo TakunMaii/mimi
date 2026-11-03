@@ -4,6 +4,7 @@
 from pathlib import Path
 import argparse
 import hashlib
+import struct
 import subprocess
 
 
@@ -20,6 +21,39 @@ def run(command: list[str], *, cwd: Path = ROOT) -> None:
 
 def artifact_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+LC_UUID = 0x1B
+LC_CODE_SIGNATURE = 0x1D
+
+
+def macho_metadata_ranges(path: Path) -> list[tuple[int, int]]:
+    """Byte ranges the Mach-O linker fills with output-dependent metadata."""
+    data = path.read_bytes()
+    if len(data) < 32 or struct.unpack_from("<I", data, 0)[0] != 0xFEEDFACF:
+        return []
+    command_count = struct.unpack_from("<8I", data, 0)[4]
+    offset = 32
+    ranges: list[tuple[int, int]] = []
+    for _ in range(command_count):
+        if offset + 8 > len(data):
+            break
+        command, size = struct.unpack_from("<II", data, offset)
+        if command == LC_UUID:
+            ranges.append((offset + 8, offset + 24))
+        elif command == LC_CODE_SIGNATURE:
+            data_offset, data_size = struct.unpack_from("<II", data, offset + 8)
+            ranges.append((data_offset, data_offset + data_size))
+        offset += size
+    return ranges
+
+
+def normalized_artifact(path: Path) -> bytes:
+    data = bytearray(path.read_bytes())
+    for start, end in macho_metadata_ranges(path):
+        end = min(end, len(data))
+        data[start:end] = bytes(end - start)
+    return bytes(data)
 
 
 def artifact_record(path: Path) -> str:
@@ -78,6 +112,15 @@ def main() -> None:
         print("Stage1 and stage2 produce byte-identical output at the same path.")
     else:
         print("Stage1 and stage2 output differs at the same path; review reproducibility.")
+
+    ignored = len(macho_metadata_ranges(stage2)) + len(macho_metadata_ranges(stage3))
+    if normalized_artifact(stage2) == normalized_artifact(stage3):
+        print(
+            "Stage2 and stage3 output is identical apart from the Mach-O load-command "
+            f"UUID and ad-hoc signature ({ignored} metadata regions)."
+        )
+    else:
+        print("Stage2 and stage3 output differs beyond linker metadata; review reproducibility.")
 
 
 if __name__ == "__main__":
