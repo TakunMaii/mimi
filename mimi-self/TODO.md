@@ -161,6 +161,8 @@ two consecutive stages.
 - [x] Lower statement-form `match`, including trailing function results.
 - [x] Preserve specialized enum return types across imported function calls
   and caller-side matching.
+- [x] Lower expression and block `defer` in LIFO scope order on normal exit,
+  return, break, and continue; reject transfers from deferred blocks.
 - [ ] Resolve imported function/type references into module-owned typed IR.
 - [ ] Extend typed IR and C generation to control flow, aggregates, generics,
   imports, C ABI calls, and the remaining language features.
@@ -232,8 +234,10 @@ bodies.
 
 The stage1 compiler lowers supported expressions and control flow through typed
 IR and a C backend, then invokes `cc`. `main` accepts either no parameters or
-`(argc: i32, argv: **u8)`. Collection `for`, match, defer, enums, generic
-specialization, and several aggregate and C ABI cases remain unsupported.
+`(argc: i32, argv: **u8)`. Byte-slice collection `for`, identifier-based enum
+match and `if` tests, and scoped `defer` now lower. General collection types,
+expression scrutinees, generic structs, and several aggregate and C ABI cases
+remain unsupported.
 Stage1 still collapses integer widths and signedness, so exact range-bound type
 parity remains open. Embedded scalar `if` expressions also remain open.
 The stage1 front end now parses `compiler.mi` itself. The import graph retains
@@ -242,7 +246,7 @@ function and type lookup. Scalar imported calls now lower to module-owned IR.
 The C backend now lowers plain struct signatures, literals, field reads and
 writes, struct pointers, public imported struct types, struct methods, tuple
 values and members, tuple destructuring, byte-slice ranges, byte-slice collection
-loops, enum `if` variant tests, byte-array literals,
+loops, enum `if` variant tests, scoped `defer`, byte-array literals,
 indexed pointer assignments, and specialized generic enums with scalar payloads.
 Stage1 builds stage2, and both stages run the Python behavior suite. The suite
 checks precise self-hosted diagnostic spans while allowing its error-code

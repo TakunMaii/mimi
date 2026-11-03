@@ -4788,6 +4788,7 @@ pub Statement :: struct {
     loop_kind : u64,
     range_end : *Expr,
     target : *Expr,
+    defer_prev : *Statement,
 }
 
 pub Parameter :: struct {
@@ -5736,7 +5737,7 @@ lower_expr :: fn (source : []u8, owner : *ModuleInput, node : *ExprNode, locals 
 }
 
 allocate_statement :: fn (storage : *Storage, node : *StatementNode, value : *Expr) *Statement {
-    if !allocate(storage, 104) { return mimi_buffer_empty() as *Statement }
+    if !allocate(storage, 112) { return mimi_buffer_empty() as *Statement }
     item := storage.last as *Statement
     item.kind = node.kind
     item.type_tag = 0
@@ -5751,6 +5752,7 @@ allocate_statement :: fn (storage : *Storage, node : *StatementNode, value : *Ex
     item.loop_kind = 0
     item.range_end = mimi_buffer_empty() as *Expr
     item.target = mimi_buffer_empty() as *Expr
+    item.defer_prev = mimi_buffer_empty() as *Statement
     item
 }
 
@@ -5761,7 +5763,7 @@ lower_if_node :: fn (source : []u8, owner : *ModuleInput, node : *IfNode, locals
     condition := lower_expr(source, owner, node.condition, locals, functions, storage, issue)
     if expr_is_null(condition) { return empty }
     if condition.type_tag != 2 { fail(issue, 3, node.condition.start, node.condition.end) return empty }
-    if !allocate(storage, 104) { fail(issue, 4, node.start, node.end) return empty }
+    if !allocate(storage, 112) { fail(issue, 4, node.start, node.end) return empty }
     item := storage.last as *Statement
     item.kind = 304
     item.type_tag = 0
@@ -5776,6 +5778,7 @@ lower_if_node :: fn (source : []u8, owner : *ModuleInput, node : *IfNode, locals
     item.loop_kind = 0
     item.range_end = mimi_buffer_empty() as *Expr
     item.target = mimi_buffer_empty() as *Expr
+    item.defer_prev = mimi_buffer_empty() as *Statement
     if issue.code != 0 { return empty }
     if !block_node_is_null(node.else_branch) {
         item.else_body = lower_body(source, owner, node.else_branch, locals, functions, storage, expected_return, false, in_loop, issue)
@@ -5787,6 +5790,16 @@ lower_if_node :: fn (source : []u8, owner : *ModuleInput, node : *IfNode, locals
     item
 }
 
+contains_transfer :: fn (first : *Statement) bool {
+    current := first
+    while !statement_is_null(current) {
+        if current.kind == 280 || current.kind == 281 || current.kind == 282 { return true }
+        if contains_transfer(current.then_body) || contains_transfer(current.else_body) { return true }
+        current = current.next
+    }
+    false
+}
+
 lower_body :: fn (source : []u8, owner : *ModuleInput, body : *BlockNode, incoming : *Symbol, functions : *Function, storage : *Storage, expected_return : u64, check_tail : bool, in_loop : bool, issue : *LowerIssue) *Statement {
     empty : *Statement = mimi_buffer_empty() as *Statement
     if block_node_is_null(body) { fail(issue, 5, 0, 0) return empty }
@@ -5796,6 +5809,20 @@ lower_body :: fn (source : []u8, owner : *ModuleInput, body : *BlockNode, incomi
     node := body.statements
     while !statement_node_is_null(node) {
         item : *Statement = empty
+        if node.kind == 283 || node.kind == 290 {
+            value : *Expr = mimi_buffer_empty() as *Expr
+            if node.kind == 283 {
+                value = lower_expr(source, owner, node.value, locals, functions, storage, issue)
+                if expr_is_null(value) { return empty }
+            }
+            item = allocate_statement(storage, node, value)
+            if statement_is_null(item) { fail(issue, 4, node.start, node.end) return empty }
+            if node.kind == 290 {
+                item.then_body = lower_body(source, owner, node.body, locals, functions, storage, expected_return, false, false, issue)
+                if issue.code != 0 { return empty }
+                if contains_transfer(item.then_body) { fail(issue, 5, node.start, node.end) return empty }
+            }
+        } else {
         if node.kind == 308 {
             syntax := node.match_statement
             fake := ExprNode { kind = 290, start = syntax.start, end = syntax.end, left = mimi_buffer_empty() as *ExprNode, right = mimi_buffer_empty() as *ExprNode, payload_start = syntax.start, payload_end = syntax.end, match_node = syntax }
@@ -5966,6 +5993,7 @@ lower_body :: fn (source : []u8, owner : *ModuleInput, body : *BlockNode, incomi
                 }
             }
             }
+        }
         }
         }
         }
@@ -6528,17 +6556,39 @@ c_indent :: fn (output : *CBuffer, depth : u64) bool {
     true
 }
 
-c_block :: fn (output : *CBuffer, source : []u8, first : *Statement, return_tag : u64, depth : u64, tail_returns : bool) bool {
-    current := first
-    while !statement_is_null(current) {
-        if !c_statement(output, source, current, return_tag, depth, tail_returns) { return false }
-        current = current.next
+c_emit_defers :: fn (output : *CBuffer, source : []u8, active : *Statement, stop : *Statement, return_tag : u64, depth : u64) bool {
+    current := active
+    while current != stop && !statement_is_null(current) {
+        if current.kind == 283 {
+            if !c_indent(output, depth) || !c_expr(output, source, current.value) || !c_text(output, ";\n") { return false }
+        } else {
+            if current.kind != 290 || !c_indent(output, depth) || !c_text(output, "{\n") { return false }
+            empty : *Statement = mimi_buffer_empty() as *Statement
+            if !c_block(output, source, current.then_body, return_tag, depth + 1, false, empty, empty) || !c_indent(output, depth) || !c_text(output, "}\n") { return false }
+        }
+        current = current.defer_prev
     }
     true
 }
 
-c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_tag : u64, depth : u64, tail_returns : bool) bool {
-    if !c_indent(output, depth) { return false }
+c_block :: fn (output : *CBuffer, source : []u8, first : *Statement, return_tag : u64, depth : u64, tail_returns : bool, inherited : *Statement, loop_base : *Statement) bool {
+    current := first
+    active := inherited
+    while !statement_is_null(current) {
+        if current.kind == 283 || current.kind == 290 {
+            current.defer_prev = active
+            active = current
+        } else {
+            if !c_statement(output, source, current, return_tag, depth, tail_returns, active, loop_base) { return false }
+        }
+        current = current.next
+    }
+    c_emit_defers(output, source, active, inherited, return_tag, depth)
+}
+
+c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_tag : u64, depth : u64, tail_returns : bool, active : *Statement, loop_base : *Statement) bool {
+    returning := item.kind == 280 || (item.kind == 303 && tail_returns && statement_is_null(item.next) && return_tag != 6)
+    if item.kind != 281 && item.kind != 282 && !returning && !c_indent(output, depth) { return false }
     if item.kind == 309 {
         if !c_type(output, item.value.type_tag) || !c_text(output, " t_") || !c_uint(output, item.start) || !c_text(output, " = ") || !c_expr(output, source, item.value) || !c_text(output, ";\n") { return false }
         part := item.then_body
@@ -6563,18 +6613,18 @@ c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_t
     }
     if item.kind == 304 {
         if !c_text(output, "if (") || !c_expr(output, source, item.value) || !c_text(output, ") {\n") { return false }
-        if !c_block(output, source, item.then_body, return_tag, depth + 1, false) || !c_indent(output, depth) || !c_push(output, 125) { return false }
+        if !c_block(output, source, item.then_body, return_tag, depth + 1, false, active, loop_base) || !c_indent(output, depth) || !c_push(output, 125) { return false }
         if !statement_is_null(item.else_body) {
             if !c_text(output, " else {\n") { return false }
-            if !c_block(output, source, item.else_body, return_tag, depth + 1, false) || !c_indent(output, depth) || !c_push(output, 125) { return false }
+            if !c_block(output, source, item.else_body, return_tag, depth + 1, false, active, loop_base) || !c_indent(output, depth) || !c_push(output, 125) { return false }
         }
         return c_push(output, 10)
     }
     if item.kind == 305 {
         if !c_text(output, "if ((") || !c_expr(output, source, item.value) || !c_text(output, ").tag == ") || !c_uint(output, item.loop_kind) || !c_text(output, ") {\n") { return false }
-        if !c_block(output, source, item.then_body, return_tag, depth + 1, false) || !c_indent(output, depth) || !c_push(output, 125) { return false }
+        if !c_block(output, source, item.then_body, return_tag, depth + 1, false, active, loop_base) || !c_indent(output, depth) || !c_push(output, 125) { return false }
         if !statement_is_null(item.else_body) {
-            if !c_text(output, " else {\n") || !c_block(output, source, item.else_body, return_tag, depth + 1, false) || !c_indent(output, depth) || !c_push(output, 125) { return false }
+            if !c_text(output, " else {\n") || !c_block(output, source, item.else_body, return_tag, depth + 1, false, active, loop_base) || !c_indent(output, depth) || !c_push(output, 125) { return false }
         }
         return c_push(output, 10)
     }
@@ -6588,7 +6638,7 @@ c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_t
                 if item.loop_kind != 287 || !c_text(output, "do {\n") { return false }
             }
         }
-        if !c_block(output, source, item.then_body, return_tag, depth + 1, false) || !c_indent(output, depth) || !c_push(output, 125) { return false }
+        if !c_block(output, source, item.then_body, return_tag, depth + 1, false, active, active) || !c_indent(output, depth) || !c_push(output, 125) { return false }
         if item.loop_kind == 287 {
             if !c_text(output, " while (") || !c_expr(output, source, item.value) || !c_push(output, 41) || !c_push(output, 59) { return false }
         }
@@ -6599,22 +6649,32 @@ c_statement :: fn (output : *CBuffer, source : []u8, item : *Statement, return_t
             if !c_text(output, "m_slice t_") || !c_uint(output, item.start) || !c_text(output, " = ") || !c_expr(output, source, item.value) || !c_text(output, ";\n") { return false }
             if !c_indent(output, depth) || !c_text(output, "for (uint64_t i_") || !c_uint(output, item.start) || !c_text(output, " = 0; i_") || !c_uint(output, item.start) || !c_text(output, " < t_") || !c_uint(output, item.start) || !c_text(output, ".len; ++i_") || !c_uint(output, item.start) || !c_text(output, ") {\n") { return false }
             if !c_indent(output, depth + 1) || !c_text(output, "int64_t ") || !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, " = t_") || !c_uint(output, item.start) || !c_text(output, ".ptr[i_") || !c_uint(output, item.start) || !c_text(output, "];\n") { return false }
-            if !c_block(output, source, item.then_body, return_tag, depth + 1, false) || !c_indent(output, depth) || !c_text(output, "}\n") { return false }
+            if !c_block(output, source, item.then_body, return_tag, depth + 1, false, active, active) || !c_indent(output, depth) || !c_text(output, "}\n") { return false }
             return true
         }
         if !c_text(output, "for (int64_t ") || !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, " = ") { return false }
         if !c_expr(output, source, item.value) || !c_text(output, ", ") || !c_name(output, source, item.name_start, item.name_end, "e_") || !c_text(output, " = ") { return false }
         if !c_expr(output, source, item.range_end) || !c_text(output, "; ") || !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, " < ") { return false }
         if !c_name(output, source, item.name_start, item.name_end, "e_") || !c_text(output, "; ++") || !c_name(output, source, item.name_start, item.name_end, "v_") || !c_text(output, ") {\n") { return false }
-        if !c_block(output, source, item.then_body, return_tag, depth + 1, false) || !c_indent(output, depth) || !c_text(output, "}\n") { return false }
+        if !c_block(output, source, item.then_body, return_tag, depth + 1, false, active, active) || !c_indent(output, depth) || !c_text(output, "}\n") { return false }
         return true
     }
-    if item.kind == 281 { return c_text(output, "break;\n") }
-    if item.kind == 282 { return c_text(output, "continue;\n") }
-    if item.kind == 280 || (item.kind == 303 && tail_returns && statement_is_null(item.next) && return_tag != 6) {
-        if !c_text(output, "return") { return false }
+    if item.kind == 281 || item.kind == 282 {
+        if !c_emit_defers(output, source, active, loop_base, return_tag, depth) || !c_indent(output, depth) { return false }
+        return c_text(output, if item.kind == 281 { "break;\n" } else { "continue;\n" })
+    }
+    if returning {
+        if statement_is_null(active) {
+            if !c_indent(output, depth) || !c_text(output, "return") { return false }
+            if !expr_is_null(item.value) && (!c_push(output, 32) || !c_expr(output, source, item.value)) { return false }
+            return c_text(output, ";\n")
+        }
         if !expr_is_null(item.value) {
-            if !c_push(output, 32) || !c_expr(output, source, item.value) { return false }
+            if !c_indent(output, depth) || !c_type(output, return_tag) || !c_text(output, " r_") || !c_uint(output, item.start) || !c_text(output, " = ") || !c_expr(output, source, item.value) || !c_text(output, ";\n") { return false }
+        }
+        if !c_emit_defers(output, source, active, mimi_buffer_empty() as *Statement, return_tag, depth) || !c_indent(output, depth) || !c_text(output, "return") { return false }
+        if !expr_is_null(item.value) {
+            if !c_text(output, " r_") || !c_uint(output, item.start) { return false }
         }
         return c_text(output, ";\n")
     }
@@ -6760,7 +6820,8 @@ pub emit_c :: fn (source : []u8, module : *Module, output : *CBuffer) bool {
             if !c_function_name(output, function) || !c_push(output, 40) { return false }
             if !c_parameters(output, function.source, function.parameters) || !c_text(output, ") {\n") { return false }
         }
-        if !c_block(output, function.source, function.body, function.return_tag, 1, true) { return false }
+        empty_defer : *Statement = mimi_buffer_empty() as *Statement
+        if !c_block(output, function.source, function.body, function.return_tag, 1, true, empty_defer, empty_defer) { return false }
         if !c_text(output, "}\n\n") { return false }
         function = function.next
     }

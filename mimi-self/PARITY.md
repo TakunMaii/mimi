@@ -30,8 +30,8 @@ by the output filename.
   types are not yet lowered.
 - Match and enum `if` lowering require identifier scrutinees. General
   expression scrutinees need single-evaluation temporary storage.
-- `defer`, struct defaults, generic structs, callbacks, and broad C ABI/C
-  import coverage remain incomplete.
+- Transfers from a deferred block are rejected. Struct defaults, generic
+  structs, callbacks, and broad C ABI/C import coverage remain incomplete.
 - The self-hosted diagnostics use `E_*` codes and often point at the exact
   identifier, while Rust stage0 uses lowercase categories and sometimes points
   at the declaration. The behavior suite checks each compiler's expected span

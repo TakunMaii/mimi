@@ -518,7 +518,7 @@ def test_partial_compiler_bootstrap(stage0: Path) -> None:
         rejected = [
             ("name", "main :: fn () i32 { missing }", "error[E_NAME]"),
             ("type", "main :: fn () i32 { true }", "error[E_TYPE]"),
-            ("lower", "main :: fn () i32 { defer 1 0 }", "error[E_LOWER]"),
+            ("lower", "main :: fn () i32 { defer { return 1 } 0 }", "error[E_LOWER]"),
             ("arity", "add :: fn (left : i32, right : i32) i32 { left + right } main :: fn () i32 { add(20) }", "error[E_LOWER]"),
             ("range-readonly", "main :: fn () i32 { for index in 0..3 { index = 2 } 0 }", "error[E_LOWER]"),
             ("integer-pointer-cast", "main :: fn () i32 { pointer := 0 as *u8 0 }", "error[E_LOWER]"),
