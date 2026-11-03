@@ -116,6 +116,92 @@ def test_compiler_parity(reference: Path, candidate: Path, *, self_hosted: bool 
         ("accepted-cast", "main :: fn () i32 { value := 41 as i32 value + 1 - 42 }", 0, None),
         ("accepted-tuple-destructure", "main :: fn () i32 { first, second := (20, 22) first + second - 42 }", 0, None),
         ("accepted-struct-method", "point :: struct { x : i32, get() :: fn (self : Self) i32 { self.x } } main :: fn () i32 { value := point { x = 42 } value.get() - 42 }", 0, None),
+        ("accepted-character", "main :: fn () i32 { letter : u8 = 'A' if letter != 'A' { return 1 } 'z' - 122 }", 0, None),
+        (
+            "accepted-character-escape",
+            r"main :: fn () i32 { if '\n' != 10 { return 1 } if '\'' != 39 { return 2 } 0 }",
+            0,
+            None,
+        ),
+        (
+            "accepted-if-value",
+            "choose :: fn (flag : bool) i32 { if flag { 7 } else { 9 } } main :: fn () i32 { choose(true) - 7 }",
+            0,
+            None,
+        ),
+        (
+            "accepted-all-paths-return",
+            "early :: fn (flag : bool) i32 { if flag { return 4 } else { return 6 } } main :: fn () i32 { early(false) - 6 }",
+            0,
+            None,
+        ),
+        (
+            "accepted-float",
+            "main :: fn () i32 { total : f64 = 1.5 + 2.5 if total != 4.0 { return 1 } 0 }",
+            0,
+            None,
+        ),
+        (
+            "accepted-defer",
+            "main :: fn () i32 { value := 0 if true { defer { value = 7 } } value - 7 }",
+            0,
+            None,
+        ),
+        (
+            "accepted-enum-match",
+            "choice :: enum { first, second(i32) } pick :: fn (value : choice) i32 { match value { first => 1, second(number) => number } } main :: fn () i32 { value : choice = second(41) pick(value) - 41 }",
+            0,
+            None,
+        ),
+        (
+            "accepted-if-let",
+            "option :: enum { some(i32), none } main :: fn () i32 { value : option = some(5) result := 0 if some(number) := value { result = number } result - 5 }",
+            0,
+            None,
+        ),
+        (
+            "accepted-slice-loop",
+            'total :: fn (data : []u8) i32 { sum := 0 for byte in data { sum = sum + byte as i32 } sum } main :: fn () i32 { total("abc") - 294 }',
+            0,
+            None,
+        ),
+        (
+            "accepted-slice-index",
+            'main :: fn () i32 { data : []u8 = "abc" if data[1] != 98 { return 1 } 0 }',
+            0,
+            None,
+        ),
+        (
+            "accepted-range-for",
+            "main :: fn () i32 { total := 0 for index in 0..4 { total = total + index } total - 6 }",
+            0,
+            None,
+        ),
+        (
+            "accepted-struct-tuple",
+            "point :: struct { x : i32, y : i32 } main :: fn () i32 { p := point { x = 20, y = 22 } first, second := (p.x, p.y) first + second - 42 }",
+            0,
+            None,
+        ),
+        (
+            "accepted-pointer-param",
+            "set :: fn (value : *i32) void { value[0] = 42 } main :: fn () i32 { number := 0 set(&number) number - 42 }",
+            0,
+            None,
+        ),
+        (
+            "accepted-bool-logic",
+            "main :: fn () i32 { if true && !false { 0 } else { 1 } }",
+            0,
+            None,
+        ),
+        (
+            "accepted-cast-truncate",
+            "main :: fn () i32 { value : u8 = 300 as u8 value as i32 - 44 }",
+            0,
+            None,
+        ),
+        ("character-error", "main :: fn () i32 { 'ab' }", 1, "error[lex]"),
         ("parse-error", "main :: fn () i32 { 1 + }", 1, "error[parse]"),
         ("lex-error", "main :: fn () i32 { 1 | 2 }", 1, "error[lex]"),
         (
@@ -130,7 +216,9 @@ def test_compiler_parity(reference: Path, candidate: Path, *, self_hosted: bool 
         for name, source, expected_status, expected_diagnostic in cases:
             source_path = directory / f"{name}.mi"
             source_path.write_text(source, encoding="utf-8")
-            observations: list[tuple[bool, int | None, str | None]] = []
+            observations: list[
+                tuple[bool, int | None, str | None, tuple[str, str] | None]
+            ] = []
             for label, compiler in (("stage0", reference), ("candidate", candidate)):
                 output_path = directory / f"{name}-{label}"
                 result = subprocess.run(
@@ -151,9 +239,11 @@ def test_compiler_parity(reference: Path, candidate: Path, *, self_hosted: bool 
                 program_status = None
                 diagnostic = None
                 location = None
+                program_output = None
                 if accepted:
                     program = run([str(output_path)])
                     program_status = program.returncode
+                    program_output = (program.stdout, program.stderr)
                 else:
                     diagnostic = next(
                         (line for line in result.stderr.splitlines() if line.startswith("error[")),
@@ -180,7 +270,12 @@ def test_compiler_parity(reference: Path, candidate: Path, *, self_hosted: bool 
                                 f"candidate {name}: expected location {expected_candidate_location!r}, "
                                 f"got {location!r}:\n{result.stderr}"
                             )
-                observations.append((accepted, program_status, diagnostic_category(result.stderr) if not accepted else None))
+                observations.append((
+                    accepted,
+                    program_status,
+                    diagnostic_category(result.stderr) if not accepted else None,
+                    program_output,
+                ))
             if observations[0] != observations[1]:
                 raise AssertionError(
                     f"compiler behavior differs for {name}: "

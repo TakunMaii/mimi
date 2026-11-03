@@ -23,20 +23,25 @@ target/debug/mimi build mimi-self/src/compiler.mi -o /tmp/mimi-stage1 --c-source
 /tmp/mimi-stage1 build scalar.mi -o scalar --no-cache
 ```
 
-Stage1 currently accepts scalar helper functions, parameters, direct calls,
-bindings, assignments, arithmetic, boolean expressions, numeric casts, returns,
-`if`/`else`, `while`, `loop`, `do-while`, integer range `for`, `break`, and `continue`. `main` accepts
-either no parameters or `(argc: i32, argv: **u8)`. It writes temporary C, invokes the host `cc`, and removes
-the C file. Direct scalar `extern` calls can link against host C symbols.
-Imports of public scalar functions support transitive calls and module-local C names.
-Opaque pointer `extern` calls, pointer-to-pointer casts, byte slices, string
-literals, `.ptr`/`.len` access, byte indexing, and `argv` indexing are supported.
-Pointer pointee types and integer widths remain collapsed in this initial backend.
-Collection `for`, match, defer, user-defined aggregates, imported types,
-general pointer arithmetic, and generics
-remain unsupported in stage1.
-Whole-expression scalar `if`/`else` values are also supported; embedded `if`
-expressions remain outside the current stage1 subset.
+Stage1 accepts scalar and floating-point helper functions, parameters, direct
+calls, bindings, assignments, arithmetic, boolean expressions, numeric casts,
+returns, `if`/`else` (including `else if`), `while`, `loop`, `do-while`, integer
+range `for`, collection `for` over byte slices, `match`, `if` variant tests,
+`defer`, and `break`/`continue`. `main` accepts either no parameters or
+`(argc: i32, argv: **u8)`. It writes temporary C, invokes the host `cc`, and
+removes the C file. Direct scalar `extern` calls can link against host C
+symbols. Imports of public functions, plain struct types, and specialized
+generic enum types support transitive calls and module-local C names.
+Opaque pointer `extern` calls, pointer-to-pointer casts, byte slices, string and
+character literals, `.ptr`/`.len` access, byte indexing, `argv` indexing, tuple
+values and destructuring, plain structs with methods, range and byte-slice
+slices, and enum `if` variant tests are supported.
+Pointer pointee types and integer widths remain collapsed in this backend, so
+exact integer range, overflow and ABI behaviour still differ from stage0.
+Generic structs, C imports, closures, and general collection element types
+remain unsupported in stage1, as do module-level variables and the writable
+data such variables need. A trailing `if`/`else` is used as the block value and
+function bodies whose every branch returns are accepted.
 The Python suite checks stage1 against stage0 on supported programs.
 
 Once stage1 can compile its own source, test both bootstrap stages with:
@@ -58,14 +63,15 @@ and return types. Inner blocks may shadow outer bindings. `source.analyze_text`
 passes the current `lexer.mi`, `source.mi`, and `compiler.mi` sources and returns
 a diagnostic for lexical, parse, name, or initial type errors, which
 `source.render` can display with
-source context. Full type checking and code generation are still open; stage0 is
-the Rust compiler. See
+source context. Full type checking is still open, and stage1 now generates C for
+the subset described above; stage0 remains the Rust compiler. See
 [TODO.md](TODO.md) for the parity roadmap and [FEATURES.md](FEATURES.md) for
 the feature matrix.
 
 `lexer.error_code` returns 1 for an unexpected character, 2 for an
 unterminated block comment, 3 for an unterminated string, 4 for an invalid
-escape, and 5 for malformed UTF-8 in an identifier. `lexer.error_span` returns
+escape, 5 for malformed UTF-8 in an identifier, and 6 for a malformed
+character literal. `lexer.error_span` returns
 the corresponding half-open byte range in the source. `lexer.lex_next` combines
 the token kind, span, and error code in one `LexResult`.
 The C runtime's Unicode identifier tables are generated from Rust's Unicode

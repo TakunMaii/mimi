@@ -49,6 +49,8 @@ two consecutive stages.
   properties, including combining marks and all scripts.
 - [x] Port the lexer, including UTF-8 identifiers, exact spans, escape
   validation, and useful lexical errors to the self-hosted compiler API.
+- [x] Lex single-byte character literals with escapes, report malformed ones
+  with a dedicated error code, and treat them as integer literals.
 - [x] Parse the supported declaration, type, expression, statement, import,
   generic, and control-flow syntax into source-aware AST nodes.
 - [x] Parse `extern` functions into module ASTs.
@@ -163,6 +165,14 @@ two consecutive stages.
   and caller-side matching.
 - [x] Lower expression and block `defer` in LIFO scope order on normal exit,
   return, break, and continue; reject transfers from deferred blocks.
+- [x] Lower character literals as integer literals in the C backend.
+- [x] Use a trailing `if`/`else` as the enclosing block's value and accept
+  function bodies in which every branch returns.
+- [ ] Lower module-level variables and constants in stage1.
+- [ ] Specialize generic structs in stage1: intern an instance per
+  declaration and argument tag list (mirroring `enum_intern`), record
+  parameter-to-tag captures on `StructType`, and resolve field tags through
+  those captures in `emit_struct_definition` and member access.
 - [ ] Resolve imported function/type references into module-owned typed IR.
 - [ ] Extend typed IR and C generation to control flow, aggregates, generics,
   imports, C ABI calls, and the remaining language features.
@@ -246,8 +256,10 @@ function and type lookup. Scalar imported calls now lower to module-owned IR.
 The C backend now lowers plain struct signatures, literals, field reads and
 writes, struct pointers, public imported struct types, struct methods, tuple
 values and members, tuple destructuring, byte-slice ranges, byte-slice collection
-loops, enum `if` variant tests, scoped `defer`, byte-array literals,
-indexed pointer assignments, and specialized generic enums with scalar payloads.
+loops, enum `if` variant tests, scoped `defer`, character literals, trailing
+`if`/`else` block values, byte-array literals, indexed pointer assignments, and
+specialized generic enums with scalar payloads. The self-hosted lexer and parser
+use character literals instead of numeric ASCII codes throughout.
 Stage1 builds stage2, and both stages run the Python behavior suite. The suite
 checks precise self-hosted diagnostic spans while allowing its error-code
 wording to differ from stage0. Match lowering currently requires an identifier
